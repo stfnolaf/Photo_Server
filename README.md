@@ -1,8 +1,8 @@
 # Photo Server
 
-Phase 1 of the [system design](self_hosted_photo_organizer_design.md): a Python/FastAPI service that accepts network uploads, queues onboarding in PostgreSQL, and stores originals plus recoverable JSON manifests in S3. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals. There is an interactive API, but no photo-library UI yet.
+Phases 1 and 2 of the [system design](self_hosted_photo_organizer_design.md): a Python/FastAPI photo library that accepts network uploads, queues onboarding in PostgreSQL, and stores originals plus recoverable JSON manifests in S3. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals. The browser UI provides a timeline, metadata, search, filters, ratings, and favorites.
 
-See the [verification report](docs/verification.md) for the earlier storage checks and sample-photo test against the NAS.
+See the [Phase 1](docs/verification.md) and [Phase 2](docs/phase-2-verification.md) verification reports for storage, recovery, API, and browser checks.
 
 ## Start
 
@@ -19,7 +19,8 @@ Set the S3 endpoint and database password in `.env`, then start:
 docker compose up --build -d
 ```
 
-- API and interactive documentation: **http://SERVER_IP:8000/docs**
+- Photo library: **http://SERVER_IP:8000/**
+- Interactive API documentation: **http://SERVER_IP:8000/docs**
 - Health, queue, and asset counts: **http://SERVER_IP:8000/health**
 - S3 endpoint: `PHOTO_S3_ENDPOINT` in `.env`; bucket `photo-library`, unsigned requests by default.
 - PostgreSQL: `localhost:55432`; credentials and database name come from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` in `.env`.
@@ -107,12 +108,26 @@ Use `/docs` for the full schemas.
 | `POST /upload-batches/{batch}/retry` | Requeue failed onboarding jobs |
 | `GET /upload-queue` | Inspect active/waiting transfers and durable job counts |
 | `GET /assets?limit=100&offset=0` | List paginated manifests |
+| `GET /library/assets` | Search/filter the capture-time timeline with cursor pagination |
 | `GET /assets/{id}` | Get a manifest and preview-job status |
+| `PATCH /assets/{id}/user-state` | Set a local rating (0–5) and/or favorite flag |
 | `GET /assets/{id}/original` | Stream the original |
 | `GET /assets/{id}/preview` | Get a JPEG preview, or `202` while pending |
 | `GET /assets/{id}/thumbnail` | Get a JPEG thumbnail, or `202` while pending |
 | `POST /assets/{id}/preview/retry` | Retry preview generation |
 | `POST /maintenance/reconcile?verify=true` | Reconcile S3 manifests and verify originals |
+
+## Browse the library
+
+Open `http://SERVER_IP:8000/`. The responsive browser UI includes:
+
+- A capture-time timeline grouped by month. Photos without a usable capture time use their import time and are identified as such in the API.
+- Incremental loading with stable cursor pagination, newest/oldest sorting, and filters for date, media format, minimum rating, and favorites.
+- Case-insensitive literal search across original filenames, camera make/model, and lens metadata.
+- Lazy, bounded thumbnail loading and explicit pending, unavailable, and failed preview states.
+- A full preview viewer with recorded EXIF metadata, original download, arrow-key navigation, `F` for favorite, and `0`–`5` for ratings.
+
+Ratings and favorites persist in PostgreSQL across normal service restarts and reconciliation. They are intentionally local prototype state in Phase 2: rebuilding PostgreSQL from S3 resets them. Phase 3 will migrate this state to revisioned durable objects before providing database-loss recovery.
 
 A minimal one-file sequence is:
 
@@ -194,7 +209,7 @@ The tests create random `photo-test-*` buckets and `photo_test_*` databases and 
 - One client/user per library is the supported V1 usage.
 - V1 has no API authentication or TLS termination; keep it on a trusted LAN or place it behind a configured reverse proxy.
 - Completed files and queue state survive service restarts. An individual client-to-API PUT is streamed and must restart from byte zero if its network connection fails.
-- Immutable revision-1 manifests and original imports are implemented. Ratings, albums, people, generated XMP, and user-state revisions remain in later phases.
+- Immutable revision-1 manifests and original imports are implemented. Phase 2 ratings/favorites are local PostgreSQL state. Albums, people, generated XMP, and durable user-state revisions remain in later phases.
 - No automatic source-folder watcher or mass migration exists. The network client enumerates only paths explicitly provided by the user.
 - Recovery currently enumerates manifests on explicit reconciliation/startup. Incremental reconciliation can follow measurements on a larger library.
 - No automatic garbage collection or original deletion is implemented.

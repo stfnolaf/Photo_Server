@@ -342,3 +342,230 @@ def test_standalone_heif_import_and_preview(backend):
     manifest = backend.service.catalog.get(result["results"][0]["assetId"])
     assert manifest.primary.role == "ORIGINAL_HEIF"
     assert run_once(backend.service)["status"] == "ready"
+
+
+def catalog_fixture(
+    service,
+    number,
+    capture,
+    *,
+    imported="2025-01-02T12:00:00Z",
+    name=None,
+    media="JPEG",
+    camera="SONY",
+):
+    """Small catalog-only records for query tests; no originals are uploaded."""
+    from uuid import UUID
+
+    from photo_server.models import Blob, Manifest
+
+    asset_id = UUID(int=number)
+    filename = name or f"photo-{number}.{media}"
+    blob = Blob(
+        blob_id=uuid4(),
+        role=f"ORIGINAL_{media}",
+        original_filename=filename,
+        object_key=f"originals/{asset_id}/{filename}",
+        sha256=hashlib.sha256(str(number).encode()).hexdigest(),
+        size_bytes=100,
+        mime_type="image/jpeg",
+    )
+    manifest = Manifest(
+        library_id=service.library_id,
+        asset_id=asset_id,
+        operation_id=uuid4(),
+        primary_blob_id=blob.blob_id,
+        blobs=[blob],
+        imported_at=imported,
+        capture_time=capture,
+        metadata={"Make": camera, "Model": "Camera", "LensModel": "35mm Prime"},
+    )
+    service.catalog.apply(manifest)
+    return manifest
+
+
+def test_browse_timeline_search_filters_and_cursor_stability(backend):
+    from photo_server.api import create_app
+
+    service = backend.service
+    a = catalog_fixture(service, 1, "2024-05-01T00:10:00+13:00", media="RAW")
+    b = catalog_fixture(service, 2, "2024-05-01T00:10:00-08:00", camera="Canon")
+    c = catalog_fixture(service, 3, None, media="HEIF", camera="Apple")
+    d = catalog_fixture(service, 4, "0000:00:00 00:00:00", imported="2023-01-01T00:00:00Z")
+    e = catalog_fixture(service, 5, "2024-04-30T23:59:59", name="100%_done.JPG")
+    service.catalog.update_user_state(str(a.asset_id), {"rating": 5, "favorite": True})
+    service.catalog.update_user_state(str(b.asset_id), {"rating": 3})
+    with TestClient(create_app(service.settings)) as client:
+        page = client.get("/library/assets?limit=2").json()
+        assert page["total"] == 5
+        assert [item["assetId"] for item in page["items"]] == [str(c.asset_id), str(b.asset_id)]
+        assert page["items"][0]["dateSource"] == "import"
+        assert page["items"][1]["timelineTime"] == "2024-05-01T00:10:00"
+        assert page["items"][1]["preview"]["status"] == "pending"
+        # Inserting ahead of the cursor doesn't repeat/skip assets in later pages.
+        catalog_fixture(service, 6, "2026-01-01T00:00:00")
+        next_page = client.get(
+            "/library/assets", params={"cursor": page["nextCursor"], "limit": 2}
+        ).json()
+        assert [item["assetId"] for item in next_page["items"]] == [
+            str(a.asset_id),
+            str(e.asset_id),
+        ]
+        last = client.get("/library/assets", params={"cursor": next_page["nextCursor"]}).json()
+        assert [item["assetId"] for item in last["items"]] == [str(d.asset_id)]
+        assert last["nextCursor"] is None
+        oldest = client.get("/library/assets?sort=oldest&limit=2").json()
+        assert [item["assetId"] for item in oldest["items"]] == [str(d.asset_id), str(e.asset_id)]
+        older_next = client.get(
+            "/library/assets", params={"sort": "oldest", "cursor": oldest["nextCursor"], "limit": 2}
+        ).json()
+        assert [item["assetId"] for item in older_next["items"]] == [
+            str(a.asset_id),
+            str(b.asset_id),
+        ]
+        for params, expected in [
+            ({"date_from": "2024-05-01", "date_to": "2024-05-01"}, 2),
+            ({"q": "sOnY"}, 4),
+            ({"q": "%_"}, 1),
+            ({"q": "35mm"}, 6),
+            ({"q": "no such photo"}, 0),
+            ({"media_type": "RAW"}, 1),
+            ({"rating_min": 4}, 1),
+            ({"favorite": True}, 1),
+            ({"favorite": False}, 5),
+            ({"q": "sony", "rating_min": 5, "favorite": True, "media_type": "RAW"}, 1),
+        ]:
+            result = client.get("/library/assets", params=params)
+            assert result.status_code == 200, result.text
+            assert result.json()["total"] == expected, params
+        for params in [
+            {"limit": 0},
+            {"rating_min": 6},
+            {"media_type": "VIDEO"},
+            {"date_from": "2025-01-02", "date_to": "2025-01-01"},
+        ]:
+            assert client.get("/library/assets", params=params).status_code == 422
+        assert client.get("/library/assets?cursor=garbage").status_code == 400
+        assert (
+            client.get(
+                "/library/assets", params={"cursor": page["nextCursor"], "sort": "oldest"}
+            ).status_code
+            == 400
+        )
+
+
+def test_ratings_favorites_survive_restart_and_reconcile_but_are_local(backend):
+    from photo_server.api import create_app
+
+    service = backend.service
+    result = service.import_batch([photo(backend.root).name], uuid4())
+    asset_id = result["results"][0]["assetId"]
+    before = service.catalog.get(asset_id).document()
+    keys = set(service.storage.keys(""))
+    settings = service.settings.model_copy(update={"cors_origins": "http://library.example"})
+    with TestClient(create_app(settings)) as client:
+        assert client.get(f"/assets/{asset_id}").json()["userState"] == {
+            "rating": 0,
+            "favorite": False,
+        }
+        assert client.patch(f"/assets/{asset_id}/user-state", json={"rating": 5}).json() == {
+            "rating": 5,
+            "favorite": False,
+        }
+        assert client.patch(f"/assets/{asset_id}/user-state", json={"favorite": True}).json() == {
+            "rating": 5,
+            "favorite": True,
+        }
+        assert client.patch(f"/assets/{asset_id}/user-state", json={"favorite": True}).json() == {
+            "rating": 5,
+            "favorite": True,
+        }
+        assert client.patch(f"/assets/{uuid4()}/user-state", json={"rating": 1}).status_code == 404
+        assert (
+            client.patch(f"/assets/{asset_id}/user-state", json={"rating": None}).status_code == 422
+        )
+        preflight = client.options(
+            f"/assets/{asset_id}/user-state",
+            headers={"Origin": "http://library.example", "Access-Control-Request-Method": "PATCH"},
+        )
+        assert (
+            preflight.status_code == 200
+            and "PATCH" in preflight.headers["access-control-allow-methods"]
+        )
+        assert client.post("/maintenance/reconcile").json()["errors"] == []
+    with TestClient(create_app(service.settings)) as client:
+        assert client.get(f"/assets/{asset_id}").json()["userState"] == {
+            "rating": 5,
+            "favorite": True,
+        }
+        assert client.get("/library/assets?favorite=true&rating_min=5").json()["total"] == 1
+    assert service.catalog.get(asset_id).document() == before
+    assert set(service.storage.keys("")) == keys  # Local mutations create no S3 revision.
+    recovered = backend.fresh_catalog()
+    assert recovered.recover()["errors"] == []
+    assert recovered.catalog.user_state(asset_id) == {"rating": 0, "favorite": False}
+
+
+def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend):
+    from sqlalchemy import text
+
+    from photo_server.browsing import BrowseQuery
+
+    service = backend.service
+    a = catalog_fixture(service, 1, "2024-01-01T00:30:00+13:00", media="RAW")
+    b = catalog_fixture(service, 2, None)
+    with service.catalog.engine.begin() as connection:
+        connection.execute(
+            text("""
+            ALTER TABLE assets DROP COLUMN timeline_at, DROP COLUMN media_type,
+              DROP COLUMN search_text, DROP COLUMN rating, DROP COLUMN favorite
+        """)
+        )
+        connection.execute(text("UPDATE library SET schema_version = 1"))
+    service.catalog.initialize(str(service.library_id))
+    page = service.catalog.browse(BrowseQuery())
+    assert page["total"] == 2
+    assert page["items"][0]["assetId"] == str(b.asset_id)
+    assert page["items"][1]["timelineTime"] == "2024-01-01T00:30:00"
+    assert service.catalog.get(str(a.asset_id)).document() == a.document()
+    service.catalog.update_user_state(str(a.asset_id), {"rating": 4, "favorite": True})
+    service.catalog.initialize(str(service.library_id))
+    service.catalog.apply(a)
+    assert service.catalog.user_state(str(a.asset_id)) == {"rating": 4, "favorite": True}
+    assert service.catalog.counts() == {"assets": 2, "blobs": 2}
+
+
+def test_browser_static_files_and_derivative_states(backend):
+    from sqlalchemy import text
+
+    from photo_server.api import create_app
+
+    service = backend.service
+    result = service.import_batch([photo(backend.root).name], uuid4())
+    asset_id = result["results"][0]["assetId"]
+    with TestClient(create_app(service.settings)) as client:
+        assert "Photo Library" in client.get("/").text
+        assert client.get("/static/library.js").status_code == 200
+        assert client.get("/static/library.css").status_code == 200
+        assert client.get("/docs").status_code == 200
+        with service.catalog.engine.begin() as connection:
+            connection.execute(text("DELETE FROM jobs WHERE asset_id = :id"), {"id": asset_id})
+        assert client.get(f"/assets/{asset_id}/thumbnail").status_code == 202
+        assert run_once(service)["status"] == "ready"
+        response = client.get(f"/assets/{asset_id}/preview")
+        assert response.headers["content-type"] == "image/jpeg"
+        assert response.headers["cache-control"] == "private, max-age=3600"
+        for path in cache_paths(service, service.catalog.get(asset_id)).values():
+            path.unlink()
+        # Cache loss queues reconstruction even when the recorded job was ready.
+        assert client.get(f"/assets/{asset_id}/thumbnail").status_code == 202
+        service.catalog.finish_job(asset_id, "unavailable")
+        assert client.get(f"/assets/{asset_id}/preview").status_code == 404
+        service.catalog.finish_job(asset_id, "failed", "Decoder failure")
+        assert client.get(f"/assets/{asset_id}/preview").status_code == 503
+        assert client.get(f"/assets/{asset_id}").json()["preview"]["error"] == "Decoder failure"
+        assert client.post(f"/assets/{asset_id}/preview/retry").json()["status"] == "pending"
+        assert run_once(service)["status"] == "ready"
+        original = client.get(f"/assets/{asset_id}/original")
+        assert original.content == (backend.root / "sample.JPG").read_bytes()
+        assert "attachment;" in original.headers["content-disposition"]

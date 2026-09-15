@@ -1,12 +1,17 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Annotated
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from photo_server.browsing import BrowseQuery, UserStatePatch
 from photo_server.config import LibraryError, Settings
 from photo_server.service import Service
 from photo_server.uploads import (
@@ -49,7 +54,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         service.catalog.engine.dispose()
 
-    app = FastAPI(title="Photo Server", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Photo Server", version="0.2.0", lifespan=lifespan)
+    static = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static), name="static")
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -57,7 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_methods=["GET", "POST", "PUT"],
+            allow_methods=["GET", "POST", "PUT", "PATCH"],
             allow_headers=["Content-Type", "Content-Length"],
         )
 
@@ -71,7 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def root():
-        return RedirectResponse("/docs")
+        return FileResponse(static / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/health")
     def health():
@@ -131,6 +138,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         return service.catalog.list_assets(limit, offset)
 
+    @app.get("/library/assets")
+    def browse_assets(query: Annotated[BrowseQuery, Query()]):
+        try:
+            return service.catalog.browse(query)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+
     def find(asset_id: UUID):
         manifest = service.catalog.get(str(asset_id))
         if manifest is None:
@@ -140,7 +154,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/assets/{asset_id}")
     def get_asset(asset_id: UUID):
         manifest = find(asset_id)
-        return {**manifest.document(), "preview": service.catalog.preview_status(str(asset_id))}
+        return {
+            **manifest.document(),
+            "preview": service.catalog.preview_status(str(asset_id)),
+            "userState": service.catalog.user_state(str(asset_id)),
+        }
+
+    @app.patch("/assets/{asset_id}/user-state")
+    def update_user_state(asset_id: UUID, body: UserStatePatch):
+        state = service.catalog.update_user_state(
+            str(asset_id), body.model_dump(exclude_unset=True)
+        )
+        if state is None:
+            raise HTTPException(404, "Asset not found")
+        return state
 
     @app.get("/assets/{asset_id}/original")
     def original(asset_id: UUID):
@@ -150,7 +177,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(
             service.storage.chunks(manifest.primary.object_key),
             media_type=manifest.primary.mime_type,
-            headers={"Content-Length": str(manifest.primary.size_bytes)},
+            headers={
+                "Content-Length": str(manifest.primary.size_bytes),
+                "Content-Disposition": "attachment; filename*=UTF-8''"
+                + quote(manifest.primary.original_filename, safe=""),
+            },
         )
 
     def derivative(asset_id: UUID, kind: str):
@@ -166,7 +197,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=202, content={"status": "pending"}, headers={"Retry-After": "2"}
             )
-        return FileResponse(path, media_type="image/jpeg")
+        return FileResponse(
+            path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"}
+        )
 
     @app.get("/assets/{asset_id}/preview")
     def preview(asset_id: UUID):

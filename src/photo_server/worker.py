@@ -46,10 +46,12 @@ def generate(service: Service, manifest: Manifest) -> bool:
                 if result.returncode == 0 and result.stdout:
                     try:
                         with Image.open(io.BytesIO(result.stdout)) as candidate:
-                            candidate.verify()
+                            # JPEG.verify() only checks the header. Decode pixels so
+                            # a corrupt large preview can fall back to a usable tag.
+                            candidate.load()
                         preview = result.stdout
                         break
-                    except (OSError, ValueError):
+                    except (OSError, ValueError, Image.DecompressionBombError):
                         continue
             if preview is None:
                 return False

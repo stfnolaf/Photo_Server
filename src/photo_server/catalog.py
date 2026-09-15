@@ -1,10 +1,15 @@
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import time as day_time
 from time import time
 from uuid import UUID, uuid5
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
+    CheckConstraint,
     Column,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -17,9 +22,11 @@ from sqlalchemy import (
     func,
     select,
     text,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 
+from photo_server.browsing import BrowseQuery, asset_summary, browse_fields
 from photo_server.config import LibraryError
 from photo_server.models import Manifest
 
@@ -39,6 +46,12 @@ assets = Table(
     Column("sha256", String(64), nullable=False, unique=True),
     Column("state_revision", Integer, nullable=False),
     Column("manifest", JSONB, nullable=False),
+    Column("timeline_at", DateTime, nullable=False),
+    Column("media_type", String, nullable=False),
+    Column("search_text", Text, nullable=False),
+    Column("rating", Integer, nullable=False, server_default="0"),
+    Column("favorite", Boolean, nullable=False, server_default="false"),
+    CheckConstraint("rating BETWEEN 0 AND 5", name="ck_assets_rating"),
 )
 blobs = Table(
     "blobs",
@@ -143,17 +156,81 @@ class Catalog:
                 connection.commit()
 
     def initialize(self, library_id: str):
-        schema.create_all(self.engine)
-        onboarding_claim_index.create(self.engine, checkfirst=True)
         with self.engine.begin() as connection:
+            # API and worker can start together; DDL/backfill must commit atomically.
+            connection.execute(text("SELECT pg_advisory_xact_lock(7046868302)"))
+            schema.create_all(connection)
+            onboarding_claim_index.create(connection, checkfirst=True)
             connection.execute(
                 insert(library)
                 .values(singleton=1, library_id=library_id, schema_version=1)
                 .on_conflict_do_nothing()
             )
             row = connection.execute(select(library)).mappings().one()
-            if row["library_id"] != library_id or row["schema_version"] != 1:
+            if row["library_id"] != library_id or row["schema_version"] not in {1, 2}:
                 raise LibraryError("Database belongs to a different library or schema version")
+            if row["schema_version"] == 1:
+                self._upgrade_browsing(connection)
+
+    @staticmethod
+    def _upgrade_browsing(connection):
+        # create_all handles new catalogs; these additive changes upgrade Phase 1.
+        connection.execute(
+            text("""
+            ALTER TABLE assets
+              ADD COLUMN IF NOT EXISTS timeline_at TIMESTAMP,
+              ADD COLUMN IF NOT EXISTS media_type VARCHAR,
+              ADD COLUMN IF NOT EXISTS search_text TEXT,
+              ADD COLUMN IF NOT EXISTS rating INTEGER NOT NULL DEFAULT 0,
+              ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT false
+        """)
+        )
+        while True:
+            rows = (
+                connection.execute(
+                    select(assets.c.id, assets.c.manifest)
+                    .where(assets.c.timeline_at.is_(None))
+                    .limit(500)
+                )
+                .mappings()
+                .all()
+            )
+            if not rows:
+                break
+            for row in rows:
+                connection.execute(
+                    assets.update()
+                    .where(assets.c.id == row["id"])
+                    .values(**browse_fields(Manifest.model_validate(row["manifest"])))
+                )
+        connection.execute(
+            text("""
+            ALTER TABLE assets
+              ALTER COLUMN timeline_at SET NOT NULL,
+              ALTER COLUMN media_type SET NOT NULL,
+              ALTER COLUMN search_text SET NOT NULL
+        """)
+        )
+        if not connection.scalar(
+            text("""
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'assets'::regclass AND conname = 'ck_assets_rating'
+        """)
+        ):
+            connection.execute(
+                text(
+                    "ALTER TABLE assets ADD CONSTRAINT ck_assets_rating CHECK (rating BETWEEN 0 AND 5)"
+                )
+            )
+        connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_assets_timeline ON assets (timeline_at, id)")
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_assets_favorites ON assets (timeline_at, id) WHERE favorite"
+            )
+        )
+        connection.execute(library.update().values(schema_version=2))
 
     def apply(self, manifest: Manifest):
         with self.engine.begin() as connection:
@@ -171,6 +248,7 @@ class Catalog:
                         sha256=manifest.primary.sha256,
                         state_revision=manifest.revision,
                         manifest=manifest.document(),
+                        **browse_fields(manifest),
                     )
                 )
                 for blob in manifest.blobs:
@@ -226,6 +304,78 @@ class Catalog:
                 "blobs": connection.scalar(select(func.count()).select_from(blobs)),
             }
 
+    def browse(self, query: BrowseQuery) -> dict:
+        filters = []
+        if query.q:
+            # Literal substring search: '%' and '_' in filenames are not wildcards.
+            filters.append(assets.c.search_text.icontains(query.q, autoescape=True))
+        if query.date_from:
+            filters.append(assets.c.timeline_at >= datetime.combine(query.date_from, day_time.min))
+        if query.date_to:
+            filters.append(assets.c.timeline_at <= datetime.combine(query.date_to, day_time.max))
+        if query.media_type:
+            filters.append(assets.c.media_type == query.media_type)
+        if query.rating_min:
+            filters.append(assets.c.rating >= query.rating_min)
+        if query.favorite is not None:
+            filters.append(assets.c.favorite == query.favorite)
+        statement = select(
+            assets, jobs.c.status.label("preview_status"), jobs.c.error.label("preview_error")
+        ).outerjoin(jobs, (jobs.c.asset_id == assets.c.id) & (jobs.c.job_type == "preview-v1"))
+        statement = statement.where(*filters)
+        cursor = query.decode_cursor()
+        position = tuple_(assets.c.timeline_at, assets.c.id)
+        if cursor:
+            statement = statement.where(
+                position < cursor if query.sort == "newest" else position > cursor
+            )
+        ordering = (assets.c.timeline_at, assets.c.id)
+        if query.sort == "newest":
+            ordering = tuple(column.desc() for column in ordering)
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ"
+        ) as connection:
+            total = connection.scalar(select(func.count()).select_from(assets).where(*filters))
+            rows = (
+                connection.execute(statement.order_by(*ordering).limit(query.limit + 1))
+                .mappings()
+                .all()
+            )
+        has_more = len(rows) > query.limit
+        rows = rows[: query.limit]
+        return {
+            "items": [asset_summary(row) for row in rows],
+            "total": total,
+            "nextCursor": query.encode_cursor(rows[-1]) if has_more else None,
+        }
+
+    def user_state(self, asset_id: str) -> dict | None:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(assets.c.rating, assets.c.favorite).where(assets.c.id == asset_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row is not None else None
+
+    def update_user_state(self, asset_id: str, changes: dict) -> dict | None:
+        # Only explicitly supplied fields are updated, so independent mutations don't
+        # clobber each other. Replaying a PATCH sets the same values again.
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(
+                    assets.update()
+                    .where(assets.c.id == asset_id)
+                    .values(**changes)
+                    .returning(assets.c.rating, assets.c.favorite)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row is not None else None
+
     def claim_job(self) -> str | None:
         with self.engine.begin() as connection:
             row = connection.execute(
@@ -252,7 +402,7 @@ class Catalog:
         with self.engine.begin() as connection:
             connection.execute(
                 jobs.update()
-                .where(jobs.c.asset_id == asset_id)
+                .where(jobs.c.asset_id == asset_id, jobs.c.job_type == "preview-v1")
                 .values(status=status, error=error, lease_until=None)
             )
 
@@ -260,7 +410,9 @@ class Catalog:
         with self.engine.connect() as connection:
             row = (
                 connection.execute(
-                    select(jobs.c.status, jobs.c.error).where(jobs.c.asset_id == asset_id)
+                    select(jobs.c.status, jobs.c.error).where(
+                        jobs.c.asset_id == asset_id, jobs.c.job_type == "preview-v1"
+                    )
                 )
                 .mappings()
                 .one_or_none()
@@ -270,9 +422,13 @@ class Catalog:
     def queue_preview(self, asset_id: str):
         with self.engine.begin() as connection:
             connection.execute(
-                jobs.update()
-                .where(jobs.c.asset_id == asset_id, jobs.c.status != "running")
-                .values(status="pending", error=None)
+                insert(jobs)
+                .values(asset_id=asset_id, job_type="preview-v1", status="pending", attempts=0)
+                .on_conflict_do_update(
+                    index_elements=[jobs.c.asset_id, jobs.c.job_type],
+                    set_={"status": "pending", "error": None},
+                    where=jobs.c.status != "running",
+                )
             )
 
     def create_upload_batch(self, batch_id: UUID, files: list[dict]):
