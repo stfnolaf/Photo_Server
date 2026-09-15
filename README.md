@@ -1,12 +1,24 @@
 # Photo Server
 
-Phases 1 and 2 of the [system design](self_hosted_photo_organizer_design.md): a Python/FastAPI photo library that accepts network uploads, queues onboarding in PostgreSQL, and stores originals plus recoverable JSON manifests in S3. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals. The browser UI provides a timeline, metadata, search, filters, ratings, and favorites.
+Phases 1 and 2 of the [system design](self_hosted_photo_organizer_design.md): a Python/FastAPI backend that accepts network uploads, queues onboarding in PostgreSQL, and stores originals plus recoverable JSON manifests in S3. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals. The independently deployed web frontend provides a timeline, metadata, search, filters, ratings, and favorites.
 
 See the [Phase 1](docs/verification.md) and [Phase 2](docs/phase-2-verification.md) verification reports for storage, recovery, API, and browser checks.
 
+## Project structure
+
+```text
+backend/             Python package, API, worker, upload client, and tests
+frontend/
+└── web/             Current static browser application and nginx runtime
+docs/                Verification reports
+compose.yaml         Development/deployment composition
+```
+
+The backend has no dependency on a frontend build. Each frontend owns its source and runtime and communicates through the published API. The web frontend uses an nginx `/api` proxy to the backend, keeping browser requests on one origin. See the [backend](backend/README.md) and [frontend](frontend/README.md) notes for their individual boundaries.
+
 ## Start
 
-Docker and Docker Compose are sufficient; ExifTool and Python dependencies are installed in the application image.
+Docker and Docker Compose are sufficient; ExifTool and Python dependencies are installed in the backend image, and nginx serves the web image.
 
 ```bash
 cp -n .env.example .env
@@ -19,14 +31,14 @@ Set the S3 endpoint and database password in `.env`, then start:
 docker compose up --build -d
 ```
 
-- Photo library: **http://SERVER_IP:8000/**
+- Photo library: **http://SERVER_IP:3000/**
 - Interactive API documentation: **http://SERVER_IP:8000/docs**
 - Health, queue, and asset counts: **http://SERVER_IP:8000/health**
 - S3 endpoint: `PHOTO_S3_ENDPOINT` in `.env`; bucket `photo-library`, unsigned requests by default.
 - PostgreSQL: `localhost:55432`; credentials and database name come from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` in `.env`.
 - PostgreSQL and preview caches use separate named Docker volumes. S3 holds originals, manifests, upload declarations, staged uploads, and onboarding receipts.
 
-The API binds to all interfaces by default so another LAN machine can upload. V1 has no API authentication, so expose port 8000 only on a trusted network. Set `PHOTO_API_BIND=127.0.0.1` if a reverse proxy will be the only entry point.
+The API and web frontend bind to all interfaces by default. V1 has no API authentication, so expose ports 8000 and 3000 only on a trusted network. Set `PHOTO_API_BIND=127.0.0.1` and/or `PHOTO_WEB_BIND=127.0.0.1` when a configured reverse proxy is the only entry point.
 
 `docker compose down` stops services while retaining the volumes. Avoid `down -v` unless intentionally discarding the local catalog and cache.
 
@@ -44,8 +56,12 @@ The relevant queue settings are:
 | `PHOTO_WORKER_THREADS` | 4 | Concurrent onboarding/preview jobs in the worker process |
 | `PHOTO_UPLOAD_PART_BYTES` | 8 MiB | Memory and S3 multipart chunk size per active upload |
 | `PHOTO_CORS_ORIGINS` | empty | Comma-separated browser origins allowed to call the API |
+| `PHOTO_WEB_BIND` | `0.0.0.0` | Host interface for the web frontend |
+| `PHOTO_WEB_PORT` | `3000` | Host port for the web frontend |
 
 Python builds the database URL from the PostgreSQL settings, including proper password encoding. Compose supplies the internal database host/port; host-side administration commands use `PHOTO_POSTGRES_HOST` and `PHOTO_POSTGRES_PORT`. `PHOTO_DATABASE_URL` can override the assembled URL.
+
+The bundled web frontend reaches the API through its same-origin proxy, so it does not need a CORS entry. Set `PHOTO_CORS_ORIGINS` for other browser frontends that call port 8000 directly.
 
 For authenticated S3, set `PHOTO_S3_ANONYMOUS=false` and provide AWS credentials in `.env` or through the standard AWS credential chain. Session tokens are supported.
 
@@ -55,7 +71,7 @@ Install this repository on the client machine, then upload explicit files or an 
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install .
+.venv/bin/pip install ./backend
 
 .venv/bin/photo-upload \
   --root /home/me/Pictures \
@@ -119,7 +135,7 @@ Use `/docs` for the full schemas.
 
 ## Browse the library
 
-Open `http://SERVER_IP:8000/`. The responsive browser UI includes:
+Open `http://SERVER_IP:3000/`. The responsive browser UI includes:
 
 - A capture-time timeline grouped by month. Photos without a usable capture time use their import time and are identified as such in the API.
 - Incremental loading with stable cursor pagination, newest/oldest sorting, and filters for date, media format, minimum rating, and favorites.
@@ -186,10 +202,11 @@ docker compose run --rm api photo-server worker --once
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.lock
-.venv/bin/pip install --no-deps -e .
-.venv/bin/ruff check src tests
-.venv/bin/pytest -q
+.venv/bin/pip install -r backend/requirements.lock
+.venv/bin/pip install --no-deps -e backend
+.venv/bin/ruff check backend/src backend/tests
+.venv/bin/pytest -q backend/tests
+node --check frontend/web/src/library.js
 ```
 
 Run the integration suite against the configured S3 service and local PostgreSQL:
@@ -197,7 +214,7 @@ Run the integration suite against the configured S3 service and local PostgreSQL
 ```bash
 docker compose up -d postgres
 docker compose run --rm --no-deps \
-  -v "$PWD/tests:/app/tests:ro" -v "$PWD/src:/app/src:ro" \
+  -v "$PWD/backend/tests:/app/tests:ro" -v "$PWD/backend/src:/app/src:ro" \
   -e PYTHONPATH=/app/src -e PHOTO_RUN_INTEGRATION=1 \
   api python -m pytest -q tests -p no:cacheprovider
 ```

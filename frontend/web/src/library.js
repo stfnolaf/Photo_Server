@@ -1,6 +1,8 @@
 "use strict";
 
 const $ = (selector) => document.querySelector(selector);
+const API_ROOT = "/api";
+const apiUrl = (path) => `${API_ROOT}${path.startsWith("/") ? path : `/${path}`}`;
 const state = {
   items: [], cards: new Map(), nextCursor: null, total: 0, loading: false,
   generation: 0, request: null, previews: null, favorites: false,
@@ -16,7 +18,7 @@ function element(tag, className, text) {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(apiUrl(url), options);
   if (!response.ok) {
     let message = `Request failed (${response.status}).`;
     try {
@@ -140,7 +142,7 @@ class PreviewLoader {
   async load(task) {
     const signal = this.controller.signal;
     try {
-      const response = await fetch(task.url, { signal });
+      const response = await fetch(apiUrl(task.url), { signal });
       if (response.status === 202) {
         task.label.textContent = task.attempts > 10 ? "Waiting for preview worker…" : "Preparing preview…";
         const wait = Math.min(30000, 2000 + task.attempts++ * 1000);
@@ -374,7 +376,7 @@ async function openViewer(assetId, replace = false, fromURL = false) {
     $("#viewer-title").textContent = primary.originalFilename;
     $("#viewer-format").textContent = primary.role.replace("ORIGINAL_", "");
     $("#save-status").textContent = "";
-    $("#download-original").href = `/assets/${assetId}/original`;
+    $("#download-original").href = apiUrl(`/assets/${assetId}/original`);
     $("#download-original").hidden = false;
     state.viewerPreviews.add($("#viewer-image"), `/assets/${assetId}/preview`, detail.preview.status, primary.originalFilename, true);
     renderMetadata(detail, primary);

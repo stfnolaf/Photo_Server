@@ -1,6 +1,6 @@
 name: photo-server
-x-app: &app
-  build: .
+x-backend: &backend
+  build: ./backend
   environment:
     PHOTO_S3_ENDPOINT: ${PHOTO_S3_ENDPOINT:?Set PHOTO_S3_ENDPOINT in .env}
     PHOTO_S3_BUCKET: ${PHOTO_S3_BUCKET:-photo-library}
@@ -42,12 +42,19 @@ services:
       timeout: 3s
       retries: 30
   api:
-    <<: *app
+    <<: *backend
     ports:
       - "${PHOTO_API_BIND:-0.0.0.0}:${PHOTO_API_PORT:-8000}:8000"
   worker:
-    <<: *app
+    <<: *backend
     command: ["photo-server", "worker"]
+  web:
+    build: ./frontend/web
+    ports:
+      - "${PHOTO_WEB_BIND:-0.0.0.0}:${PHOTO_WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_started
 volumes:
   postgres-data:
   app-data:

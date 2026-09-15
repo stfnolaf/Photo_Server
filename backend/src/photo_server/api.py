@@ -1,13 +1,11 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
@@ -55,8 +53,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         service.catalog.engine.dispose()
 
     app = FastAPI(title="Photo Server", version="0.2.0", lifespan=lifespan)
-    static = Path(__file__).parent / "static"
-    app.mount("/static", StaticFiles(directory=static), name="static")
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -78,7 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def root():
-        return FileResponse(static / "index.html", headers={"Cache-Control": "no-cache"})
+        return RedirectResponse("/docs")
 
     @app.get("/health")
     def health():

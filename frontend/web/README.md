@@ -1,0 +1,13 @@
+# Web frontend
+
+The web frontend is a standalone static application served by nginx. It sends API and media requests through nginx's `/api` proxy to the Compose `api` service, so browser requests stay on one origin and do not require CORS configuration.
+
+From the repository root:
+
+```bash
+docker compose up --build -d web
+```
+
+Open `http://SERVER_IP:3000/`. The backend remains independently available at `http://SERVER_IP:8000/`.
+
+The source files are in `src/`; there is no generated bundle or checked-in dependency tree.

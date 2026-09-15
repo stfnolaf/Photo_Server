@@ -535,7 +535,7 @@ def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend)
     assert service.catalog.counts() == {"assets": 2, "blobs": 2}
 
 
-def test_browser_static_files_and_derivative_states(backend):
+def test_derivative_api_states(backend):
     from sqlalchemy import text
 
     from photo_server.api import create_app
@@ -544,9 +544,9 @@ def test_browser_static_files_and_derivative_states(backend):
     result = service.import_batch([photo(backend.root).name], uuid4())
     asset_id = result["results"][0]["assetId"]
     with TestClient(create_app(service.settings)) as client:
-        assert "Photo Library" in client.get("/").text
-        assert client.get("/static/library.js").status_code == 200
-        assert client.get("/static/library.css").status_code == 200
+        root = client.get("/", follow_redirects=False)
+        assert root.status_code == 307 and root.headers["location"] == "/docs"
+        assert client.get("/library.js").status_code == 404
         assert client.get("/docs").status_code == 200
         with service.catalog.engine.begin() as connection:
             connection.execute(text("DELETE FROM jobs WHERE asset_id = :id"), {"id": asset_id})
