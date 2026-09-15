@@ -1,0 +1,102 @@
+import io
+import os
+import subprocess
+import time
+from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+
+import pillow_heif
+from PIL import Image, ImageOps
+
+from photo_server.models import Manifest
+from photo_server.service import Service
+
+pillow_heif.register_heif_opener()
+
+
+def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
+    directory = (
+        service.settings.data_dir / "cache" / f"{manifest.asset_id}-{manifest.primary.sha256}-v1"
+    )
+    return {"preview": directory / "preview.jpg", "thumbnail": directory / "thumbnail.jpg"}
+
+
+def generate(service: Service, manifest: Manifest) -> bool:
+    targets = cache_paths(service, manifest)
+    if all(path.exists() for path in targets.values()):
+        return True
+    with TemporaryDirectory(dir=service.scratch) as directory:
+        original = Path(directory) / manifest.primary.original_filename
+        with original.open("wb") as stream:
+            for chunk in service.storage.chunks(manifest.primary.object_key):
+                stream.write(chunk)
+        source = original
+        if manifest.primary.role == "ORIGINAL_RAW":
+            preview = None
+            for tag in ("JpgFromRaw", "PreviewImage", "ThumbnailImage"):
+                result = subprocess.run(
+                    [service.settings.exiftool, "-b", f"-{tag}", str(original)],
+                    capture_output=True,
+                    timeout=90,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout:
+                    try:
+                        with Image.open(io.BytesIO(result.stdout)) as candidate:
+                            candidate.verify()
+                        preview = result.stdout
+                        break
+                    except (OSError, ValueError):
+                        continue
+            if preview is None:
+                return False
+            source = io.BytesIO(preview)
+        with Image.open(source) as image:
+            if not image.getexif().get(274) and manifest.metadata.get("Orientation"):
+                image.getexif()[274] = int(manifest.metadata["Orientation"])
+            oriented = ImageOps.exif_transpose(image).convert("RGB")
+            for kind, path in targets.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                resized = oriented.copy()
+                edge = 2560 if kind == "preview" else 256
+                resized.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+                with NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as temporary:
+                    temporary_path = Path(temporary.name)
+                try:
+                    resized.save(
+                        temporary_path,
+                        format="JPEG",
+                        quality=85,
+                        icc_profile=image.info.get("icc_profile"),
+                    )
+                    os.replace(temporary_path, path)
+                finally:
+                    temporary_path.unlink(missing_ok=True)
+    return True
+
+
+def run_once(service: Service) -> dict | None:
+    asset_id = service.catalog.claim_job()
+    if asset_id is None:
+        return None
+    try:
+        manifest = service.catalog.get(asset_id)
+        if manifest is None:
+            raise ValueError("Preview job references missing asset")
+        status = "ready" if generate(service, manifest) else "unavailable"
+        service.catalog.finish_job(asset_id, status)
+        return {"assetId": asset_id, "status": status}
+    except Exception as error:
+        service.catalog.finish_job(asset_id, "failed", str(error))
+        return {"assetId": asset_id, "status": "failed", "error": str(error)}
+
+
+def run(service: Service):
+    import json
+
+    while True:
+        result = run_once(service)
+        if result:
+            print(json.dumps(result), flush=True)
+        else:
+            time.sleep(2)
