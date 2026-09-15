@@ -1,7 +1,9 @@
 import io
+import json
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
@@ -10,6 +12,7 @@ from PIL import Image, ImageOps
 
 from photo_server.models import Manifest
 from photo_server.service import Service
+from photo_server.uploads import process_onboarding_job
 
 pillow_heif.register_heif_opener()
 
@@ -76,6 +79,18 @@ def generate(service: Service, manifest: Manifest) -> bool:
 
 
 def run_once(service: Service) -> dict | None:
+    onboarding = service.catalog.claim_onboarding_job()
+    if onboarding is not None:
+        try:
+            result = process_onboarding_job(service, onboarding)
+        except Exception as error:
+            try:
+                service.catalog.finish_onboarding_job(onboarding, error=str(error))
+            except Exception:
+                pass
+            result = {"status": "failed", "error": str(error)}
+        return {"jobType": "onboarding", "jobId": onboarding["id"], **result}
+
     asset_id = service.catalog.claim_job()
     if asset_id is None:
         return None
@@ -85,18 +100,38 @@ def run_once(service: Service) -> dict | None:
             raise ValueError("Preview job references missing asset")
         status = "ready" if generate(service, manifest) else "unavailable"
         service.catalog.finish_job(asset_id, status)
-        return {"assetId": asset_id, "status": status}
+        return {"jobType": "preview", "assetId": asset_id, "status": status}
     except Exception as error:
         service.catalog.finish_job(asset_id, "failed", str(error))
-        return {"assetId": asset_id, "status": "failed", "error": str(error)}
+        return {
+            "jobType": "preview",
+            "assetId": asset_id,
+            "status": "failed",
+            "error": str(error),
+        }
 
 
-def run(service: Service):
-    import json
-
+def _worker_loop(service: Service):
     while True:
-        result = run_once(service)
+        try:
+            result = run_once(service)
+        except Exception as error:
+            print(json.dumps({"status": "worker_error", "error": str(error)}), flush=True)
+            time.sleep(2)
+            continue
         if result:
             print(json.dumps(result), flush=True)
         else:
             time.sleep(2)
+
+
+def run(service: Service):
+    with ThreadPoolExecutor(
+        max_workers=service.settings.worker_threads,
+        thread_name_prefix="photo-worker",
+    ) as executor:
+        futures = [
+            executor.submit(_worker_loop, service) for _ in range(service.settings.worker_threads)
+        ]
+        for future in futures:
+            future.result()

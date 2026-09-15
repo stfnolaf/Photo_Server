@@ -1,7 +1,7 @@
 import pytest
 
 from photo_server.config import LibraryError, Settings
-from photo_server.selection import plan_import
+from photo_server.selection import plan_import, plan_names
 
 
 def selection_settings(root):
@@ -73,3 +73,17 @@ def test_rejects_symlink_outside_source_root(tmp_path):
 def test_deduplicates_same_input_path(tmp_path):
     settings = inputs(tmp_path, "a.JPG")
     assert len(plan_import(settings, ["a.JPG", str(tmp_path / "a.JPG")])["assets"]) == 1
+
+
+def test_network_batch_selection_rejects_unsafe_and_duplicate_paths():
+    for paths in (["/absolute.JPG"], ["../outside.JPG"], ["a.JPG", "a.JPG"]):
+        with pytest.raises(LibraryError):
+            plan_names(paths, 1000)
+
+
+def test_network_batch_prefers_raw_without_touching_a_filesystem():
+    plan = plan_names(["trip/a.HEIF", "trip/a.ARW", "trip/a.xmp"], 1000)
+    assert plan["assets"] == [{"path": "trip/a.ARW", "sidecars": ["trip/a.xmp"]}]
+    assert plan["skipped"] == [
+        {"path": "trip/a.HEIF", "selected": "trip/a.ARW", "reason": "raw_preferred"}
+    ]

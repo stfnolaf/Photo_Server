@@ -24,7 +24,7 @@ class Service:
         self.scratch = settings.data_dir / "scratch"
         self.scratch.mkdir(parents=True, exist_ok=True)
 
-    def initialize(self) -> dict:
+    def initialize(self, recover_uploads: bool = True) -> dict:
         with self.catalog.writer():
             self.storage.ensure_bucket()
             if self.storage.head("library.json") is None:
@@ -40,7 +40,14 @@ class Service:
                 raise LibraryError("Unsupported S3 library schema")
             self.library_id = UUID(marker["libraryId"])
             self.catalog.initialize(str(self.library_id))
-        return {"libraryId": str(self.library_id), "bucket": self.storage.bucket}
+        uploads = {"uploadBatchesRecovered": 0, "errors": []}
+        if recover_uploads:
+            from photo_server.uploads import recover_upload_batches
+
+            uploads = recover_upload_batches(self)
+            if uploads["errors"]:
+                raise LibraryError(f"Upload queue recovery requires attention: {uploads['errors']}")
+        return {"libraryId": str(self.library_id), "bucket": self.storage.bucket, **uploads}
 
     def plan(self, paths: list[str]) -> dict:
         return plan_import(self.settings, paths)

@@ -1,5 +1,6 @@
 import hashlib
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -215,24 +216,120 @@ def test_export_without_database_and_preview_cache_rebuild(backend, tmp_path):
     assert hashlib.sha256(exported.read_bytes()).hexdigest() == manifest.primary.sha256
 
 
-def test_api_plan_import_health_and_preview(backend):
+def test_api_upload_queue_onboarding_recovery_and_preview(backend):
     from photo_server.api import create_app
 
     source = photo(backend.root)
     with TestClient(create_app(backend.service.settings)) as client:
         assert client.get("/health").status_code == 200
-        assert client.post("/imports/plan", json={"paths": [source.name]}).status_code == 200
+        batch_id = uuid4()
         response = client.post(
-            "/imports", json={"paths": [source.name], "operation_id": str(uuid4())}
+            "/upload-batches",
+            json={
+                "batchId": str(batch_id),
+                "files": [
+                    {
+                        "path": source.name,
+                        "sizeBytes": source.stat().st_size,
+                        "mimeType": "image/jpeg",
+                    }
+                ],
+            },
         )
-        assert response.status_code == 200
-        asset_id = response.json()["results"][0]["assetId"]
+        assert response.status_code == 201, response.text
+        upload = response.json()["files"][0]
+        assert upload["required"] and upload["status"] == "waiting"
+        assert client.put(upload["uploadUrl"], content=source.read_bytes()).status_code == 200
+        response = client.post(f"/upload-batches/{batch_id}/seal")
+        assert response.status_code == 202 and response.json()["status"] == "queued"
+        assert client.get("/upload-queue").json()["onboardingPending"] == 1
+
+        onboarded = run_once(backend.service)
+        assert onboarded["jobType"] == "onboarding" and onboarded["status"] == "imported"
+        asset_id = onboarded["assetId"]
+        assert client.get(f"/upload-batches/{batch_id}").json()["status"] == "complete"
         assert client.get("/assets").json()[0]["assetId"] == asset_id
         assert client.get(f"/assets/{asset_id}/original").content == source.read_bytes()
         assert client.get(f"/assets/{asset_id}/preview").status_code == 202
-        run_once(backend.service)
+        assert run_once(backend.service)["jobType"] == "preview"
         assert client.get(f"/assets/{asset_id}/thumbnail").headers["content-type"] == "image/jpeg"
         assert client.post(f"/assets/{asset_id}/preview/retry").json()["status"] == "pending"
+
+    fresh = backend.fresh_catalog()
+    assert fresh.catalog.counts() == {"assets": 0, "blobs": 0}
+    replayed = run_once(fresh)
+    assert replayed["jobType"] == "onboarding" and replayed["replayed"]
+    assert replayed["assetId"] == asset_id
+
+
+def test_api_batch_does_not_request_raw_companions(backend):
+    from photo_server.api import create_app
+
+    raw = backend.root / "pair.ARW"
+    raw.write_bytes(b"raw fixture")
+    jpeg = photo(backend.root, "pair.JPG")
+    with TestClient(create_app(backend.service.settings)) as client:
+        response = client.post(
+            "/upload-batches",
+            json={
+                "files": [
+                    {"path": jpeg.name, "sizeBytes": jpeg.stat().st_size},
+                    {"path": raw.name, "sizeBytes": raw.stat().st_size},
+                ]
+            },
+        )
+    assert response.status_code == 201, response.text
+    by_path = {file["path"]: file for file in response.json()["files"]}
+    assert by_path[raw.name]["required"]
+    assert by_path[jpeg.name]["status"] == "skipped"
+    assert by_path[jpeg.name]["uploadUrl"] is None
+
+
+def test_api_streams_a_file_as_multiple_s3_parts(backend):
+    from photo_server.api import create_app
+
+    settings = backend.service.settings.model_copy(update={"upload_part_bytes": 5 * 1024 * 1024})
+    payload = b"multipart-fixture" * 350_000
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/upload-batches",
+            json={"files": [{"path": "large.JPG", "sizeBytes": len(payload)}]},
+        )
+        assert response.status_code == 201, response.text
+        upload = response.json()["files"][0]
+        result = client.put(upload["uploadUrl"], content=payload)
+    assert result.status_code == 200, result.text
+    assert result.json()["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
+def test_onboarding_jobs_are_claimed_concurrently_without_duplicates(backend):
+    from photo_server.api import create_app
+
+    sources = [
+        photo(backend.root, f"parallel-{number}.JPG", (number * 30, 20, 120)) for number in range(6)
+    ]
+    with TestClient(create_app(backend.service.settings)) as client:
+        response = client.post(
+            "/upload-batches",
+            json={
+                "files": [
+                    {"path": source.name, "sizeBytes": source.stat().st_size} for source in sources
+                ]
+            },
+        )
+        assert response.status_code == 201, response.text
+        for upload in response.json()["files"]:
+            source = backend.root / upload["path"]
+            assert client.put(upload["uploadUrl"], content=source.read_bytes()).status_code == 200
+        batch_id = response.json()["batchId"]
+        assert client.post(f"/upload-batches/{batch_id}/seal").status_code == 202
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            results = list(executor.map(lambda _: run_once(backend.service), range(len(sources))))
+
+        assert all(result["jobType"] == "onboarding" for result in results)
+        assert len({result["jobId"] for result in results}) == len(sources)
+        assert client.get(f"/upload-batches/{batch_id}").json()["status"] == "complete"
 
 
 def test_standalone_heif_import_and_preview(backend):

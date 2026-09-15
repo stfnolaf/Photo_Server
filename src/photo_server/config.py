@@ -24,8 +24,16 @@ class Settings(BaseSettings):
     aws_session_token: SecretStr | None = Field(default=None, validation_alias="AWS_SESSION_TOKEN")
     import_root: Path = Path("imports")
     data_dir: Path = Path(".runtime")
-    max_batch_files: int = Field(default=25, ge=1, le=10000)
+    max_batch_files: int = Field(default=1000, ge=1, le=10000)
     max_file_bytes: int = Field(default=512 * 1024 * 1024, ge=1)
+    upload_workers: int = Field(default=4, ge=1, le=32)
+    worker_threads: int = Field(default=4, ge=1, le=32)
+    upload_part_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=5 * 1024 * 1024,
+        le=64 * 1024 * 1024,
+    )
+    cors_origins: str = ""
     exiftool: str = "exiftool"
 
     @model_validator(mode="after")

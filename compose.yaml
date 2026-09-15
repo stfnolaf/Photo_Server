@@ -10,15 +10,17 @@ x-app: &app
     POSTGRES_DB: ${POSTGRES_DB:-photo}
     PHOTO_POSTGRES_HOST: postgres
     PHOTO_POSTGRES_PORT: 5432
-    PHOTO_IMPORT_ROOT: /imports
     PHOTO_DATA_DIR: /data
-    PHOTO_MAX_BATCH_FILES: ${PHOTO_MAX_BATCH_FILES:-25}
+    PHOTO_MAX_BATCH_FILES: ${PHOTO_MAX_BATCH_FILES:-1000}
     PHOTO_MAX_FILE_BYTES: ${PHOTO_MAX_FILE_BYTES:-536870912}
+    PHOTO_UPLOAD_WORKERS: ${PHOTO_UPLOAD_WORKERS:-4}
+    PHOTO_WORKER_THREADS: ${PHOTO_WORKER_THREADS:-4}
+    PHOTO_UPLOAD_PART_BYTES: ${PHOTO_UPLOAD_PART_BYTES:-8388608}
+    PHOTO_CORS_ORIGINS: ${PHOTO_CORS_ORIGINS:-}
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
   volumes:
-    - ${PHOTO_IMPORT_ROOT:?Set PHOTO_IMPORT_ROOT in .env}:/imports:ro
     - app-data:/data
   depends_on:
     postgres:
@@ -42,7 +44,7 @@ services:
   api:
     <<: *app
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${PHOTO_API_BIND:-0.0.0.0}:${PHOTO_API_PORT:-8000}:8000"
   worker:
     <<: *app
     command: ["photo-server", "worker"]

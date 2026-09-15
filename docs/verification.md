@@ -2,7 +2,7 @@
 
 ## Automated tests
 
-**22 passed:** 12 unit tests and 10 integration tests using the actual SeaweedFS endpoint, disposable PostgreSQL databases, and ExifTool in Docker.
+**27 passed:** 14 unit tests and 13 integration tests using the actual SeaweedFS endpoint, disposable PostgreSQL databases, and ExifTool in Docker.
 
 Verified:
 
@@ -15,7 +15,10 @@ Verified:
 - Detection of same-size object corruption during full recovery.
 - An unsupported newer manifest causes an error without silently using the older revision.
 - Standalone export with an unreachable PostgreSQL URL.
-- Preview cache reconstruction, standalone HEIF decoding, and API import/download behavior.
+- Preview cache reconstruction, standalone HEIF decoding, and API asset-download behavior.
+- Complete network-batch declaration, RAW companion suppression before transfer, and HTTP-to-S3 multipart upload.
+- Durable upload/onboarding recovery into a fresh PostgreSQL database after staged objects have been cleaned up.
+- Concurrent claiming and completion of six onboarding jobs without duplicate claims or a stale batch status.
 
 Test buckets/databases were randomly named and removed after the tests. The development library was not cleared. Two dependency deprecation warnings originated in Starlette's test client; they did not affect the checks.
 
@@ -30,14 +33,14 @@ Imported exactly **three existing source photos** (two Sony ARWs and one JPEG), 
 - Recovered the three complete manifests and their original hashes into a separate, initially empty PostgreSQL database. The development database remained intact.
 - Exported all three assets directly from S3 with an intentionally unreachable database URL and verified hashes.
 - Used a temporary copy of one RAW plus a generated same-stem JPEG to verify RAW preference and duplicate reuse. This added no new asset/original to the development library; the temporary files were removed.
-- Confirmed Docker mounts the configured NAS source directory with `RW=false`.
+- Confirmed the later network-upload deployment removes the NAS source mount entirely.
 
 No directory tree was imported or migrated. The development library contains three assets and three original blobs. Local test exports and the temporary recovery database were removed after verification.
 
 ## Running services
 
-- Interactive API: `http://localhost:8000/docs`
-- Health: `http://localhost:8000/health`
-- One API container, one preview worker, and PostgreSQL, managed by Docker Compose.
+- Interactive API: `http://192.168.8.180:8000/docs`
+- Health and upload queue: `http://192.168.8.180:8000/health`
+- One API container with four bounded upload transfers, one four-thread onboarding/preview worker, and PostgreSQL, managed by Docker Compose.
 
 This demonstrates application-catalog recovery with the NAS available. Recreating SeaweedFS containers against the existing filer/volume persistence paths remains a deployment test to perform on the NAS itself. No NAS administration was attempted.

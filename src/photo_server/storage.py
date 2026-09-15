@@ -92,6 +92,9 @@ class Storage:
             for entry in page.get("Contents", []):
                 yield entry["Key"]
 
+    def delete(self, key: str):
+        self.client.delete_object(Bucket=self.bucket, Key=key)
+
     def chunks(self, key: str):
         with closing(self.client.get_object(Bucket=self.bucket, Key=key)["Body"]) as body:
             while chunk := body.read(CHUNK):

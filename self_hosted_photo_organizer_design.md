@@ -27,9 +27,9 @@ A second important invariant is:
 
 ### V1 scope
 
-- Implementation stack: Python/FastAPI API, a separate Python worker, PostgreSQL jobs, and Docker Compose. Use ExifTool and native image libraries for metadata/preview work.
+- Implementation stack: Python/FastAPI API, a separate threaded Python worker, PostgreSQL jobs, and Docker Compose. Use ExifTool and native image libraries for metadata/preview work.
 - One user per library, using one client at a time.
-- One application process serializes library mutations; one worker handles background processing initially.
+- One API process bounds concurrent network-to-S3 transfers. A small worker thread pool handles durable onboarding and preview jobs. PostgreSQL row locks and per-content-hash advisory locks prevent two workers from claiming the same work or committing the same original concurrently.
 - RAW, JPEG, and HEIF originals, with typical RAW sizes of 30–150 MB. Stream imports and hashing instead of holding whole originals in memory. Total library size and asset count remain to be measured.
 - Prefer a RAW over same-basename JPEG/HEIF companions in the same folder and import batch, using the rule in Section 34.
 - Use embedded RAW previews. Photo editing and RAW rendering are future work.
@@ -41,9 +41,9 @@ The durability invariants describe the completed functionality. Phase 1 preserve
 
 - S3 endpoint: `PHOTO_S3_ENDPOINT` in the local `.env`, currently anonymous on the LAN.
 - Initial bucket: `photo-library`.
-- Existing photo source: `PHOTO_IMPORT_ROOT` in the local `.env`; application containers mount it read-only at `/imports`.
-- Initial validation uses an explicit handful of source files. No mass migration is authorized.
-- The initial implementation accepts explicit server-side file lists (25 files per batch by default), with no recursive directory import or browser upload yet. See `README.md` for current commands and implementation boundaries.
+- Existing photos remain outside the application until explicitly uploaded over the network. No NAS source directory is mounted into the containers.
+- Initial validation uses disposable fixtures or an explicit handful of photos. No mass migration is authorized.
+- The implementation accepts complete client-declared batches of up to 1,000 files by default. It selects RAW/media representations before requesting bytes, limits active transfers, and durably queues onboarding work. See `README.md` for the current protocol and commands.
 
 ---
 
@@ -551,7 +551,7 @@ All state application must therefore be idempotent.
 
 ### V1 coordination and retries
 
-One application coordinator serializes durable library mutations, including imports, user changes, and reconciler application. Workers may prepare artifacts but send library-state updates through that coordinator. No distributed writer election is needed in V1.
+V1 runs one API process and one worker process. PostgreSQL claims onboarding jobs with `FOR UPDATE SKIP LOCKED`, and advisory locks keyed by the primary SHA-256 serialize duplicate detection and manifest commits for identical media. Broad distributed writer election is unnecessary for the one-client V1 scope.
 
 - Reconcile pending durable state on startup before accepting new mutations.
 - Use an operation ID retained across retries and stored in the durable revision. A retry of an already-committed operation returns that operation's result without applying the change again.
@@ -566,29 +566,30 @@ This contract applies to durable user mutations from Phase 3 onward; Phase 2's l
 
 ## 14. Import Pipeline
 
-Recommended import flow:
+Implemented V1 upload/onboarding flow:
 
 ```text
-1. Enumerate a complete import batch, including source-relative folders and filenames
-2. Select media using the same-folder RAW preference rule in Section 34
-3. Assign operation/asset IDs for selected files, retained across retries
-4. Stream/hash selected originals and detect exact duplicates (Section 33)
-5. Extract basic metadata
-6. Store new originals in final S3 keys
-7. Verify byte count/checksum
-8. Write durable asset manifest/state listing imported blobs
-9. Insert/update PostgreSQL
-10. Queue embedded-preview extraction and thumbnail generation
-11. Queue optional AI analysis when implemented
+1. The client declares a complete batch with relative filenames and byte sizes
+2. Select media using the same-folder RAW preference rule in Section 34 and return upload URLs only for required files
+3. Stream and hash each required file through the API into immutable S3 staging, with a bounded number of active transfers
+4. Write an S3 seal marker and enqueue one durable PostgreSQL onboarding job per selected photo
+5. Worker threads claim jobs with row locks and leases
+6. Download and verify one staged asset into bounded local scratch
+7. Detect exact duplicates under a per-content-hash lock (Section 33)
+8. Extract basic metadata and store new originals in final S3 keys
+9. Verify byte count/checksum and write the durable asset manifest
+10. Insert/update PostgreSQL and write an S3 onboarding receipt
+11. Remove staged objects and queue embedded-preview/thumbnail generation
+12. Queue optional AI analysis when implemented
 ```
 
-For client uploads, submit the batch's file list before transferring media bytes so unneeded companions do not get uploaded. For NAS imports, enumerate the completed folder before copying selected files into S3. Exact duplicate checking may require streaming into local scratch before upload; bound scratch usage and stream processing for 30–150 MB originals.
+The API permits four active transfers by default. Excess upload requests wait on an asynchronous semaphore, while completed uploads remain durable in S3. Onboarding uses four worker threads by default and a durable PostgreSQL queue, so hundreds of declared files do not tie up the API or need to fit in memory. Exact duplicate checking streams one asset into local scratch; peak scratch and memory use remain bounded for 30–150 MB originals.
 
 The import result identifies imported files, exact duplicates, skipped companions, and failures. A skipped companion is not a stored blob and must not appear in the asset manifest as one.
 
 Do not depend on an S3 rename operation.
 
-S3 does not provide normal filesystem renames. Choose the final object key before upload.
+S3 does not provide normal filesystem renames. Client bytes first use deterministic `incoming/` keys because the content hash and final asset decision are not known until the stream completes. Onboarding chooses immutable final keys, copies verified bytes there, and later deletes staging.
 
 ### Partial import handling
 
@@ -607,7 +608,7 @@ Orphaned objects may exist if a crash occurs between S3 storage and PostgreSQL i
 
 ---
 
-## 15. Optional SMB Import Dropbox
+## 15. Optional Future SMB Import Dropbox
 
 For convenience, expose a separate NAS share:
 
@@ -645,7 +646,7 @@ periodic scan    -> recover missed discoveries
 explicit import -> process a completed folder as one batch
 ```
 
-In V1 the user starts a folder import after copying finishes. Do not import each arriving file immediately: a JPEG may arrive before its RAW companion. An automatic batch-completion protocol can be added later.
+This is outside V1. V1 clients declare a complete network batch before sending file bytes, which solves the same JPEG-before-RAW ordering problem without a server-side filesystem mount.
 
 Skipped companion files stay untouched in the source folder. Any optional delete-after-import behavior applies only to files actually imported and verified, never to files skipped by the filename heuristic.
 
@@ -775,6 +776,8 @@ updated_at
 ```
 
 PostgreSQL may also use `pgvector` for fast embedding search even if canonical embeddings remain stored in S3.
+
+V1 also uses `upload_batches`, `upload_files`, and `onboarding_jobs`. These tables track declared files, active/sealed batch state, staged object keys, checksums, job attempts, leases, and results. S3 declarations, seal markers, and result receipts remain the recovery source if these queue tables are lost.
 
 ---
 
@@ -1298,7 +1301,13 @@ Do not expose SeaweedFS's S3 endpoint directly to the public internet unless the
 An initial API may include:
 
 ```text
-POST   /assets
+POST   /upload-batches
+PUT    /upload-batches/:batch/files/:file
+POST   /upload-batches/:batch/seal
+GET    /upload-batches/:batch
+POST   /upload-batches/:batch/retry
+GET    /upload-queue
+
 GET    /assets/:id
 DELETE /assets/:id
 
@@ -1320,7 +1329,7 @@ POST   /assets/:id/reanalyze
 POST   /maintenance/reconcile
 ```
 
-Upload may initially flow through the application server.
+Upload currently flows through the application server into S3 multipart staging. A bounded asynchronous gate controls active transfers; PostgreSQL queues subsequent onboarding independently of the HTTP connection.
 
 A future optimization may use presigned S3 uploads, with the application generating the asset ID and upload target before the client uploads directly to SeaweedFS.
 
@@ -1346,6 +1355,7 @@ Jobs should have:
 Typical jobs:
 
 ```text
+ONBOARD_UPLOAD
 EXTRACT_METADATA
 GENERATE_THUMBNAIL
 GENERATE_PREVIEW
@@ -1494,6 +1504,7 @@ Expose basic operational metrics:
 - available NAS capacity
 - local cache capacity
 - import queue depth
+- active and waiting network uploads
 - analysis queue depth
 - failed jobs
 - reconciliation errors
@@ -1595,7 +1606,8 @@ Implement:
 - asset IDs
 - S3 BlobStore
 - complete-batch enumeration and same-folder RAW preference
-- original upload
+- declared network batches, bounded multipart staging, and durable onboarding jobs
+- threaded onboarding workers
 - SHA-256
 - exact-duplicate reuse of existing assets
 - manifest with a blob list and original filenames
