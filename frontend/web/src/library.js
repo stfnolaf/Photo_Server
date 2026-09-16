@@ -8,6 +8,8 @@ const state = {
   generation: 0, request: null, previews: null, favorites: false,
   selected: null, detail: null, detailRequest: null, viewerPreviews: null,
   mutations: new Set(), dirty: false, returnFocus: null,
+  trash: false, albumId: null, albums: [], editingAlbum: null, albumMembers: [],
+  pending: null, saving: false, journalKey: null,
 };
 
 function element(tag, className, text) {
@@ -26,7 +28,9 @@ async function api(url, options = {}) {
       message = typeof body.detail === "string" ? body.detail :
         Array.isArray(body.detail) ? body.detail.map((error) => error.msg).join("; ") : message;
     } catch { /* A proxy may return a non-JSON error. */ }
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -180,6 +184,8 @@ function filterParams() {
     if (value && value !== "0" && !(key === "sort" && value === "newest")) params.set(key, value);
   }
   if (state.favorites) params.set("favorite", "true");
+  if (state.trash) params.set("deleted", "true");
+  if (state.albumId) params.set("album_id", state.albumId);
   return params;
 }
 
@@ -187,8 +193,9 @@ function syncFilterUI() {
   const params = filterParams();
   const count = ["date_from", "date_to", "media_type", "rating_min"].filter((key) => params.has(key)).length;
   $("#filter-count").textContent = count || "";
-  $("#page-title").textContent = state.favorites ? "Favorites" : "All photos";
-  for (const [id, active] of [["#nav-all", !state.favorites], ["#nav-favorites", state.favorites]]) {
+  $("#page-title").textContent = state.albumId ? state.albums.find((album) => album.albumId === state.albumId)?.name || "Album" : state.trash ? "Trash" : state.favorites ? "Favorites" : "All photos";
+  $("#edit-album").hidden = !state.albumId;
+  for (const [id, active] of [["#nav-all", !state.favorites && !state.trash && !state.albumId], ["#nav-favorites", state.favorites], ["#nav-trash", state.trash]]) {
     $(id).classList.toggle("active", active);
     if (active) $(id).setAttribute("aria-current", "page");
     else $(id).removeAttribute("aria-current");
@@ -315,7 +322,7 @@ function updateCard(item) {
   refs.favorite.textContent = item.favorite ? "♥" : "♡";
   refs.favorite.setAttribute("aria-label", `${item.favorite ? "Remove" : "Add"} ${item.originalFilename} ${item.favorite ? "from" : "to"} favorites`);
   refs.favorite.setAttribute("aria-pressed", String(item.favorite));
-  refs.favorite.disabled = state.mutations.has(item.assetId);
+  refs.favorite.disabled = state.mutations.has(item.assetId) || !!item.deletedAt;
 }
 
 function updateNavigation() {
@@ -380,6 +387,7 @@ async function openViewer(assetId, replace = false, fromURL = false) {
     $("#download-original").hidden = false;
     state.viewerPreviews.add($("#viewer-image"), `/assets/${assetId}/preview`, detail.preview.status, primary.originalFilename, true);
     renderMetadata(detail, primary);
+    fillMetadataEditor(detail.userState);
     updateViewerControls();
   } catch (error) {
     if (error.name !== "AbortError" && state.selected === assetId) {
@@ -420,14 +428,20 @@ function renderMetadata(detail, primary) {
 
 function updateViewerControls() {
   const data = state.detail?.userState;
-  const busy = !data || state.mutations.has(state.selected);
+  const busy = !data || state.mutations.has(state.selected) || state.saving;
+  const deleted = !!state.detail?.deletedAt;
+  $("#trash-photo").textContent = deleted ? "Restore photo" : "Move to trash";
+  $("#trash-photo").disabled = busy;
+  for (const input of $("#metadata-editor").elements) input.disabled = busy || deleted;
+  $("#photo-album").disabled = busy || deleted;
+  updateMembershipButton();
   const favorite = $("#viewer-favorite");
-  favorite.disabled = busy;
+  favorite.disabled = busy || deleted;
   favorite.setAttribute("aria-pressed", String(data?.favorite || false));
   favorite.textContent = data?.favorite ? "♥ In favorites" : "♡ Add to favorites";
   for (const button of $("#viewer-rating").querySelectorAll("button")) {
     const rating = Number(button.dataset.rating);
-    button.disabled = busy;
+    button.disabled = busy || deleted;
     button.classList.toggle("filled", rating > 0 && rating <= (data?.rating || 0));
     button.setAttribute("aria-pressed", String(rating === (data?.rating || 0)));
   }
@@ -444,15 +458,14 @@ async function saveState(assetId, changes) {
     $("#save-status").classList.remove("error");
   }
   try {
-    const data = await api(`/assets/${assetId}/user-state`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes),
-    });
+    const data = await durableRequest(`/assets/${assetId}/user-state`, "PATCH", changes);
     if (item) Object.assign(item, data);
     if (state.selected === assetId && state.detail) {
       state.detail.userState = data;
+      state.detail.revision = data.revision;
       $("#save-status").textContent = "Saved";
     }
-    if (state.favorites || Number($("#rating-min").value) > 0) {
+    if (state.favorites || $("#search").value || Number($("#rating-min").value) > 0) {
       state.dirty = true;
       if (!$("#viewer").open) await loadLibrary(true);
     }
@@ -486,6 +499,8 @@ function readLocation() {
     $(selector).value = params.get(key) || (key === "rating_min" ? "0" : key === "sort" ? "newest" : "");
   }
   state.favorites = params.get("favorite") === "true";
+  state.trash = params.get("deleted") === "true";
+  state.albumId = params.get("album_id");
   if (["date_from", "date_to", "media_type", "rating_min"].some((key) => params.has(key))) {
     $("#filter-fields").hidden = false;
     $("#filter-toggle").setAttribute("aria-expanded", "true");
@@ -501,6 +516,8 @@ function routePhoto() {
 function clearFilters() {
   $("#filters").reset();
   state.favorites = false;
+  state.trash = false;
+  state.albumId = null;
   clearTimeout(searchTimer);
   loadLibrary(true);
 }
@@ -521,9 +538,10 @@ $("#filter-toggle").addEventListener("click", () => {
 });
 $("#clear-filters").addEventListener("click", clearFilters);
 $("#empty-clear").addEventListener("click", clearFilters);
-$("#nav-all").addEventListener("click", () => { state.favorites = false; loadLibrary(true); });
-$("#nav-favorites").addEventListener("click", () => { state.favorites = true; loadLibrary(true); });
-$("#refresh").addEventListener("click", () => loadLibrary(true));
+$("#nav-all").addEventListener("click", () => selectCollection());
+$("#nav-favorites").addEventListener("click", () => selectCollection("favorites"));
+$("#nav-trash").addEventListener("click", () => selectCollection("trash"));
+$("#refresh").addEventListener("click", async () => { await loadAlbums(); loadLibrary(true); });
 $("#load-more").addEventListener("click", () => loadLibrary());
 $("#close-viewer").addEventListener("click", () => closeViewer());
 $("#viewer").addEventListener("cancel", (event) => { event.preventDefault(); closeViewer(); });
@@ -541,10 +559,10 @@ $("#viewer").addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
     event.preventDefault();
     navigatePhoto(event.key === "ArrowLeft" ? -1 : 1);
-  } else if (state.detail && /^[0-5]$/.test(event.key)) {
+  } else if (state.detail && !state.detail.deletedAt && /^[0-5]$/.test(event.key)) {
     event.preventDefault();
     saveState(state.selected, { rating: Number(event.key) });
-  } else if (state.detail && event.key.toLowerCase() === "f") {
+  } else if (state.detail && !state.detail.deletedAt && event.key.toLowerCase() === "f") {
     event.preventDefault();
     saveState(state.selected, { favorite: !state.detail.userState.favorite });
   }
@@ -556,5 +574,228 @@ window.addEventListener("popstate", () => {
   if (old !== filterParams().toString()) loadLibrary(true);
   routePhoto();
 });
-readLocation();
-loadLibrary(true).then(routePhoto);
+initializeLibrary();
+
+function operationId() {
+  // getRandomValues also works on trusted LAN HTTP origins.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function pendingNotice() {
+  $("#pending-mutation").hidden = !state.pending;
+  $("#retry-mutation").disabled = state.saving;
+  $("#discard-mutation").disabled = state.saving;
+  $("#pending-message").textContent = state.saving ? "Saving your change…" : "A change is awaiting retry. Retry it before making another change.";
+}
+
+async function durableRequest(path, method, changes = {}) {
+  if (!state.journalKey) throw new Error("Library is still connecting. Refresh and try again.");
+  if (state.pending) throw new Error("Retry or discard the pending request first.");
+  const pending = { path, method, body: { ...changes, operationId: operationId() } };
+  // Do not send a mutation unless its retry ID can survive a tab reload.
+  localStorage.setItem(state.journalKey, JSON.stringify(pending));
+  state.pending = pending;
+  return sendPending();
+}
+
+async function sendPending() {
+  if (state.saving || !state.pending) throw new Error("A save is already in progress.");
+  state.saving = true;
+  pendingNotice();
+  const pending = state.pending;
+  try {
+    const result = await api(pending.path, {
+      method: pending.method, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pending.body),
+    });
+    localStorage.removeItem(state.journalKey);
+    state.pending = null;
+    return result;
+  } finally {
+    state.saving = false;
+    pendingNotice();
+  }
+}
+
+async function reloadAfterMutation() {
+  await loadAlbums();
+  await loadLibrary(true);
+  if (state.selected) {
+    const selected = state.selected;
+    state.selected = null;
+    await openViewer(selected, true, true);
+  }
+}
+
+$("#retry-mutation").addEventListener("click", async () => {
+  try { await sendPending(); await reloadAfterMutation(); toast("Change saved"); }
+  catch (error) { toast(error.message); }
+});
+$("#discard-mutation").addEventListener("click", () => {
+  if (!confirm("Discard this pending request? A change that already reached storage remains saved. Refresh to see its current state.")) return;
+  localStorage.removeItem(state.journalKey);
+  state.pending = null;
+  pendingNotice();
+  reloadAfterMutation().catch((error) => toast(error.message));
+});
+
+function selectCollection(kind = "all", albumId = null) {
+  state.favorites = kind === "favorites";
+  state.trash = kind === "trash";
+  state.albumId = albumId;
+  loadLibrary(true);
+}
+
+async function loadAlbums() {
+  const [active, deleted] = await Promise.all([api("/albums"), api("/albums?deleted=true")]);
+  state.albums = [...active, ...deleted];
+  $("#album-list").replaceChildren();
+  for (const album of state.albums) {
+    const button = element("button", "nav-button", `${album.deletedAt ? "♲ " : ""}${album.name}`);
+    button.addEventListener("click", () => album.deletedAt ? editAlbum(album) : selectCollection("album", album.albumId));
+    $("#album-list").append(button);
+  }
+  const selected = $("#photo-album").value;
+  $("#photo-album").replaceChildren(new Option("Choose an album", ""));
+  for (const album of active) $("#photo-album").add(new Option(album.name, album.albumId));
+  $("#photo-album").value = selected;
+  updateMembershipButton();
+}
+
+function fillMetadataEditor(data) {
+  $("#edit-caption").value = data.caption;
+  $("#edit-keywords").value = data.keywords.join("\n");
+  $("#edit-location").value = data.location?.name || "";
+  $("#edit-latitude").value = data.location?.latitude ?? "";
+  $("#edit-longitude").value = data.location?.longitude ?? "";
+}
+
+$("#metadata-editor").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.detail) return;
+  const latitude = $("#edit-latitude").value;
+  const longitude = $("#edit-longitude").value;
+  if (!!latitude !== !!longitude) { toast("Enter both latitude and longitude."); return; }
+  const name = $("#edit-location").value.trim();
+  await saveState(state.selected, {
+    caption: $("#edit-caption").value,
+    keywords: [...new Set($("#edit-keywords").value.split("\n").map((word) => word.trim()).filter(Boolean))],
+    location: name || latitude ? { name, latitude: latitude ? Number(latitude) : null, longitude: longitude ? Number(longitude) : null } : null,
+  });
+});
+
+function updateMembershipButton() {
+  const album = state.albums.find((entry) => entry.albumId === $("#photo-album").value);
+  $("#toggle-membership").disabled = !album || !state.detail || !!state.detail.deletedAt || state.saving;
+  $("#toggle-membership").textContent = album?.assetIds.includes(state.selected) ? "Remove from album" : "Add to album";
+}
+$("#photo-album").addEventListener("change", updateMembershipButton);
+$("#toggle-membership").addEventListener("click", async () => {
+  const album = state.albums.find((entry) => entry.albumId === $("#photo-album").value);
+  if (!album || !state.selected) return;
+  const assetIds = album.assetIds.includes(state.selected) ? album.assetIds.filter((id) => id !== state.selected) : [...album.assetIds, state.selected];
+  try {
+    await durableRequest(`/albums/${album.albumId}`, "PATCH", { assetIds, expectedRevision: album.revision });
+    await loadAlbums();
+    state.dirty = true;
+    toast("Album saved");
+  } catch (error) { toast(error.message); }
+});
+$("#trash-photo").addEventListener("click", async () => {
+  if (!state.detail) return;
+  const restore = !!state.detail.deletedAt;
+  const id = state.selected;
+  try {
+    await durableRequest(`/assets/${id}${restore ? "/restore" : ""}`, restore ? "POST" : "DELETE");
+    state.dirty = true;
+    closeViewer();
+    toast(restore ? "Photo restored" : "Photo moved to trash");
+  } catch (error) { toast(error.message); }
+});
+
+function editAlbum(album = null) {
+  state.editingAlbum = album;
+  state.albumMembers = [...(album?.assetIds || [])];
+  $("#album-editor-title").textContent = album ? album.deletedAt ? "Trashed album" : "Edit album" : "New album";
+  $("#album-name").value = album?.name || "";
+  $("#album-description").value = album?.description || "";
+  $("#album-name").disabled = $("#album-description").disabled = !!album?.deletedAt;
+  $("#save-album").hidden = !!album?.deletedAt;
+  $("#trash-album").hidden = !album;
+  $("#trash-album").textContent = album?.deletedAt ? "Restore album" : "Move album to trash";
+  $("#album-status").textContent = "";
+  renderAlbumMembers();
+  $("#album-editor").showModal();
+}
+function renderAlbumMembers() {
+  $("#album-members").replaceChildren();
+  state.albumMembers.forEach((id, index) => {
+    const row = element("li");
+    const name = state.items.find((item) => item.assetId === id)?.originalFilename || id;
+    row.append(element("span", "member-name", name));
+    if (!state.editingAlbum?.deletedAt) {
+      for (const [label, change, disabled] of [
+        ["Move up", -1, index === 0], ["Move down", 1, index === state.albumMembers.length - 1], ["Remove", 0, false],
+      ]) {
+        const button = element("button", "button secondary", label);
+        button.type = "button";
+        button.disabled = disabled;
+        button.setAttribute("aria-label", `${label}: ${name}`);
+        button.addEventListener("click", () => {
+          if (change) [state.albumMembers[index], state.albumMembers[index + change]] = [state.albumMembers[index + change], state.albumMembers[index]];
+          else state.albumMembers.splice(index, 1);
+          renderAlbumMembers();
+        });
+        row.append(button);
+      }
+    }
+    $("#album-members").append(row);
+  });
+}
+$("#new-album").addEventListener("click", () => editAlbum());
+$("#edit-album").addEventListener("click", () => editAlbum(state.albums.find((album) => album.albumId === state.albumId)));
+$("#close-album").addEventListener("click", () => $("#album-editor").close());
+$("#album-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const album = state.editingAlbum;
+  try {
+    const result = await durableRequest(album ? `/albums/${album.albumId}` : "/albums", album ? "PATCH" : "POST", {
+      name: $("#album-name").value.trim(), description: $("#album-description").value,
+      assetIds: state.albumMembers, ...(album ? { expectedRevision: album.revision } : {}),
+    });
+    $("#album-editor").close();
+    await loadAlbums();
+    selectCollection("album", result.albumId);
+  } catch (error) { $("#album-status").textContent = error.message; }
+});
+$("#trash-album").addEventListener("click", async () => {
+  const album = state.editingAlbum;
+  const restore = !!album.deletedAt;
+  try {
+    await durableRequest(`/albums/${album.albumId}${restore ? "/restore" : ""}`, restore ? "POST" : "DELETE");
+    $("#album-editor").close();
+    await loadAlbums();
+    selectCollection();
+  } catch (error) { $("#album-status").textContent = error.message; }
+});
+
+async function initializeLibrary() {
+  try {
+    const health = await api("/health");
+    state.journalKey = `photo-library-pending:${health.libraryId}`;
+    state.pending = JSON.parse(localStorage.getItem(state.journalKey) || "null");
+    pendingNotice();
+    await loadAlbums();
+    readLocation();
+    await loadLibrary(true);
+    routePhoto();
+  } catch (error) {
+    $("#library-error").textContent = error.message;
+    $("#library-error").hidden = false;
+    $("#collection-count").textContent = "Library could not be loaded. Reload to reconnect.";
+  }
+}

@@ -45,17 +45,17 @@ def test_malformed_cursor_payload_is_rejected(payload):
         {"rating": "3"},
         {"favorite": 1},
         {"favorite": None},
-        {"caption": "future"},
+        {"rotation": 90},
     ],
 )
 def test_user_state_rejects_ambiguous_or_out_of_scope_mutations(payload):
     with pytest.raises(ValidationError):
-        UserStatePatch.model_validate(payload)
+        UserStatePatch.model_validate({"operationId": str(uuid4()), **payload})
 
 
 def test_state_patch_only_sets_supplied_fields():
-    assert UserStatePatch(rating=0).model_dump(exclude_unset=True) == {"rating": 0}
-    assert UserStatePatch(favorite=False).model_dump(exclude_unset=True) == {"favorite": False}
+    assert UserStatePatch(operation_id=uuid4(), rating=0).changes() == {"rating": 0}
+    assert UserStatePatch(operation_id=uuid4(), favorite=False).changes() == {"favorite": False}
 
 
 def test_reversed_date_range_is_rejected():

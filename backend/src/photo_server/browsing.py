@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from photo_server.models import Manifest
+from photo_server.models import DurableModel, Location, Manifest, UserState
 
 
 def camera_time(value: str | None) -> datetime | None:
@@ -41,6 +41,9 @@ def browse_fields(manifest: Manifest) -> dict:
                 metadata.get("Model", ""),
                 metadata.get("LensModel", ""),
                 metadata.get("LensID", ""),
+                manifest.user_state.caption,
+                " ".join(manifest.user_state.keywords),
+                manifest.user_state.location.name if manifest.user_state.location else "",
             )
         ),
     }
@@ -55,6 +58,8 @@ class BrowseQuery(BaseModel):
     media_type: Literal["RAW", "JPEG", "HEIF"] | None = None
     rating_min: int = Field(default=0, ge=0, le=5)
     favorite: bool | None = None
+    deleted: bool = False
+    album_id: UUID | None = None
     sort: Literal["newest", "oldest"] = "newest"
     limit: int = Field(default=60, ge=1, le=200)
     cursor: str | None = Field(default=None, min_length=1, max_length=2048)
@@ -97,20 +102,57 @@ class BrowseQuery(BaseModel):
             raise ValueError("Invalid cursor or cursor belongs to different filters") from error
 
 
-class UserStatePatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class OperationRequest(DurableModel):
+    operation_id: UUID
+    expected_revision: int | None = Field(default=None, ge=1)
 
+
+class UserStatePatch(OperationRequest):
     rating: int | None = Field(default=None, ge=0, le=5, strict=True)
     favorite: bool | None = Field(default=None, strict=True)
+    caption: str | None = Field(default=None, max_length=10000)
+    keywords: list[str] | None = Field(default=None, max_length=200)
+    location: Location | None = None
+
+    def changes(self):
+        return self.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_unset=True,
+            exclude={"operation_id", "expected_revision"},
+        )
 
     @model_validator(mode="after")
     def nonempty(self):
-        if not self.model_fields_set or any(
-            getattr(self, name) is None for name in self.model_fields_set
-        ):
-            raise ValueError(
-                "Provide rating (0–5) and/or favorite (true/false); null is not allowed"
-            )
+        changes = self.changes()
+        if not changes:
+            raise ValueError("Provide at least one metadata field")
+        UserState.model_validate(changes)
+        return self
+
+
+class AlbumPatch(OperationRequest):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=10000)
+    asset_ids: list[UUID] | None = Field(default=None, max_length=100000)
+
+    def changes(self):
+        return self.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_unset=True,
+            exclude={"operation_id", "expected_revision"},
+        )
+
+    @model_validator(mode="after")
+    def valid_changes(self):
+        changes = self.changes()
+        if not changes or any(value is None for value in changes.values()):
+            raise ValueError("Provide album fields; null is not allowed")
+        if self.name is not None and not self.name.strip():
+            raise ValueError("Album name cannot be blank")
+        if self.asset_ids is not None and len(set(self.asset_ids)) != len(self.asset_ids):
+            raise ValueError("Album membership cannot contain duplicates")
         return self
 
 
@@ -133,6 +175,9 @@ def asset_summary(row) -> dict:
         "sizeBytes": manifest.primary.size_bytes,
         "rating": row["rating"],
         "favorite": row["favorite"],
+        "caption": manifest.user_state.caption,
+        "deletedAt": manifest.deleted_at,
+        "revision": manifest.revision,
         "preview": {"status": row["preview_status"] or "missing", "error": row["preview_error"]},
         "thumbnailUrl": f"/assets/{row['id']}/thumbnail",
         "previewUrl": f"/assets/{row['id']}/preview",

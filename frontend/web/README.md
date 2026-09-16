@@ -11,3 +11,5 @@ docker compose up --build -d web
 Open `http://SERVER_IP:3000/`. The backend remains independently available at `http://SERVER_IP:8000/`.
 
 The source files are in `src/`; there is no generated bundle or checked-in dependency tree.
+
+The viewer edits durable metadata and album membership. Albums support ordering, names/descriptions, trash, and restore; photos have their own trash view. Pending mutation requests are kept in browser local storage, scoped to the library ID, so **Retry save** uses the same operation ID after a lost response or reload.

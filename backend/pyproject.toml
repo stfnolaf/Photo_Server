@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "photo-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "Recoverable, RAW-first personal photo library"
 requires-python = ">=3.12"
 dependencies = [
@@ -37,3 +37,6 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
 ignore = ["E501"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/photo_server"]

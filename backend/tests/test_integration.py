@@ -106,7 +106,13 @@ def test_import_duplicate_retry_sidecar_and_empty_database_recovery(backend):
     assert len(list(service.storage.keys("originals/"))) == 2
     fresh = backend.fresh_catalog()
     assert fresh.catalog.counts() == {"assets": 0, "blobs": 0}
-    assert fresh.recover(full=True) == {"recovered": 1, "verification": "sha256", "errors": []}
+    assert fresh.recover(full=True) == {
+        "recovered": 1,
+        "albumsRecovered": 0,
+        "migrated": 0,
+        "verification": "sha256",
+        "errors": [],
+    }
     assert fresh.catalog.get(asset_id).document() == service.catalog.get(asset_id).document()
     assert (original.read_bytes(), sidecar.read_bytes()) == before
     photo(backend.root, color="blue")
@@ -354,7 +360,7 @@ def catalog_fixture(
     media="JPEG",
     camera="SONY",
 ):
-    """Small catalog-only records for query tests; no originals are uploaded."""
+    """Tiny durable synthetic records for query tests."""
     from uuid import UUID
 
     from photo_server.models import Blob, Manifest
@@ -366,7 +372,7 @@ def catalog_fixture(
         role=f"ORIGINAL_{media}",
         original_filename=filename,
         object_key=f"originals/{asset_id}/{filename}",
-        sha256=hashlib.sha256(str(number).encode()).hexdigest(),
+        sha256=hashlib.sha256(str(number).encode().ljust(100, b"0")).hexdigest(),
         size_bytes=100,
         mime_type="image/jpeg",
     )
@@ -380,8 +386,17 @@ def catalog_fixture(
         capture_time=capture,
         metadata={"Make": camera, "Model": "Camera", "LensModel": "35mm Prime"},
     )
+    service.storage.put(blob.object_key, str(number).encode().ljust(100, b"0"), "image/jpeg")
+    service.storage.put_json(manifest.key, manifest.document())
     service.catalog.apply(manifest)
     return manifest
+
+
+def set_legacy_state(service, asset_id, changes):
+    from photo_server.catalog import assets
+
+    with service.catalog.engine.begin() as connection:
+        connection.execute(assets.update().where(assets.c.id == asset_id).values(**changes))
 
 
 def test_browse_timeline_search_filters_and_cursor_stability(backend):
@@ -393,8 +408,8 @@ def test_browse_timeline_search_filters_and_cursor_stability(backend):
     c = catalog_fixture(service, 3, None, media="HEIF", camera="Apple")
     d = catalog_fixture(service, 4, "0000:00:00 00:00:00", imported="2023-01-01T00:00:00Z")
     e = catalog_fixture(service, 5, "2024-04-30T23:59:59", name="100%_done.JPG")
-    service.catalog.update_user_state(str(a.asset_id), {"rating": 5, "favorite": True})
-    service.catalog.update_user_state(str(b.asset_id), {"rating": 3})
+    set_legacy_state(service, str(a.asset_id), {"rating": 5, "favorite": True})
+    set_legacy_state(service, str(b.asset_id), {"rating": 3})
     with TestClient(create_app(service.settings)) as client:
         page = client.get("/library/assets?limit=2").json()
         assert page["total"] == 5
@@ -454,56 +469,59 @@ def test_browse_timeline_search_filters_and_cursor_stability(backend):
         )
 
 
-def test_ratings_favorites_survive_restart_and_reconcile_but_are_local(backend):
+def test_ratings_favorites_survive_restart_reconcile_and_database_loss(backend):
     from photo_server.api import create_app
+    from photo_server.models import UserState
 
     service = backend.service
     result = service.import_batch([photo(backend.root).name], uuid4())
     asset_id = result["results"][0]["assetId"]
-    before = service.catalog.get(asset_id).document()
-    keys = set(service.storage.keys(""))
+    original = service.catalog.get(asset_id)
     settings = service.settings.model_copy(update={"cors_origins": "http://library.example"})
     with TestClient(create_app(settings)) as client:
-        assert client.get(f"/assets/{asset_id}").json()["userState"] == {
-            "rating": 0,
-            "favorite": False,
-        }
-        assert client.patch(f"/assets/{asset_id}/user-state", json={"rating": 5}).json() == {
-            "rating": 5,
-            "favorite": False,
-        }
-        assert client.patch(f"/assets/{asset_id}/user-state", json={"favorite": True}).json() == {
-            "rating": 5,
-            "favorite": True,
-        }
-        assert client.patch(f"/assets/{asset_id}/user-state", json={"favorite": True}).json() == {
-            "rating": 5,
-            "favorite": True,
-        }
-        assert client.patch(f"/assets/{uuid4()}/user-state", json={"rating": 1}).status_code == 404
-        assert (
-            client.patch(f"/assets/{asset_id}/user-state", json={"rating": None}).status_code == 422
+        assert client.get(f"/assets/{asset_id}").json()["userState"] == UserState().document()
+        first = client.patch(
+            f"/assets/{asset_id}/user-state", json={"operationId": str(uuid4()), "rating": 5}
         )
+        assert first.status_code == 200, first.text
+        operation = {"operationId": str(uuid4()), "favorite": True}
+        second = client.patch(f"/assets/{asset_id}/user-state", json=operation)
+        assert second.status_code == 200, second.text
+        assert second.json()["rating"] == 5 and second.json()["favorite"] is True
+        assert (
+            client.patch(f"/assets/{asset_id}/user-state", json=operation).json() == second.json()
+        )
+        assert (
+            client.patch(
+                f"/assets/{uuid4()}/user-state", json={"operationId": str(uuid4()), "rating": 1}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.patch(
+                f"/assets/{asset_id}/user-state", json={"operationId": str(uuid4()), "rating": None}
+            ).status_code
+            == 422
+        )
+        assert client.patch(f"/assets/{asset_id}/user-state", json={"rating": 1}).status_code == 422
         preflight = client.options(
-            f"/assets/{asset_id}/user-state",
-            headers={"Origin": "http://library.example", "Access-Control-Request-Method": "PATCH"},
+            f"/assets/{asset_id}",
+            headers={"Origin": "http://library.example", "Access-Control-Request-Method": "DELETE"},
         )
         assert (
             preflight.status_code == 200
-            and "PATCH" in preflight.headers["access-control-allow-methods"]
+            and "DELETE" in preflight.headers["access-control-allow-methods"]
         )
         assert client.post("/maintenance/reconcile").json()["errors"] == []
+    expected = UserState(rating=5, favorite=True).document()
     with TestClient(create_app(service.settings)) as client:
-        assert client.get(f"/assets/{asset_id}").json()["userState"] == {
-            "rating": 5,
-            "favorite": True,
-        }
+        assert client.get(f"/assets/{asset_id}").json()["userState"] == expected
         assert client.get("/library/assets?favorite=true&rating_min=5").json()["total"] == 1
-    assert service.catalog.get(asset_id).document() == before
-    assert set(service.storage.keys("")) == keys  # Local mutations create no S3 revision.
+    assert service.storage.get_json(original.key) == original.document()
+    assert len(list(service.storage.keys(f"state/assets/{asset_id}/"))) == 3
     recovered = backend.fresh_catalog()
     assert recovered.recover()["errors"] == []
-    assert recovered.catalog.user_state(asset_id) == {"rating": 0, "favorite": False}
+    assert recovered.catalog.user_state(asset_id) == expected
 
 
 def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend):
@@ -515,12 +533,15 @@ def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend)
     a = catalog_fixture(service, 1, "2024-01-01T00:30:00+13:00", media="RAW")
     b = catalog_fixture(service, 2, None)
     with service.catalog.engine.begin() as connection:
+        connection.execute(text("DROP TABLE operations, album_assets, albums"))
         connection.execute(
             text("""
             ALTER TABLE assets DROP COLUMN timeline_at, DROP COLUMN media_type,
-              DROP COLUMN search_text, DROP COLUMN rating, DROP COLUMN favorite
+              DROP COLUMN search_text, DROP COLUMN rating, DROP COLUMN favorite,
+              DROP COLUMN deleted_at
         """)
         )
+        connection.execute(text("DELETE FROM schema_migrations WHERE version > 1"))
         connection.execute(text("UPDATE library SET schema_version = 1"))
     service.catalog.initialize(str(service.library_id))
     page = service.catalog.browse(BrowseQuery())
@@ -528,10 +549,11 @@ def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend)
     assert page["items"][0]["assetId"] == str(b.asset_id)
     assert page["items"][1]["timelineTime"] == "2024-01-01T00:30:00"
     assert service.catalog.get(str(a.asset_id)).document() == a.document()
-    service.catalog.update_user_state(str(a.asset_id), {"rating": 4, "favorite": True})
+    set_legacy_state(service, str(a.asset_id), {"rating": 4, "favorite": True})
     service.catalog.initialize(str(service.library_id))
     service.catalog.apply(a)
-    assert service.catalog.user_state(str(a.asset_id)) == {"rating": 4, "favorite": True}
+    assert service.catalog.user_state(str(a.asset_id))["rating"] == 4
+    assert service.catalog.user_state(str(a.asset_id))["favorite"] is True
     assert service.catalog.counts() == {"assets": 2, "blobs": 2}
 
 

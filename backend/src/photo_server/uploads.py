@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -52,14 +51,6 @@ class UploadGate:
             "uploadsActive": self.active,
             "uploadsWaiting": self.waiting,
         }
-
-
-def declaration_key(batch_id: UUID | str) -> str:
-    return f"upload-batches/{batch_id}/declaration.json"
-
-
-def sealed_key(batch_id: UUID | str) -> str:
-    return f"upload-batches/{batch_id}/sealed.json"
 
 
 def _records(batch_id: UUID, declaration: dict) -> list[dict]:
@@ -114,25 +105,7 @@ def create_batch(service, files: list[dict], batch_id: UUID | None = None) -> di
         "files": normalized,
         "plan": plan,
     }
-    key = declaration_key(batch_id)
-    if service.storage.head(key):
-        declaration = service.storage.get_json(key)
-        comparable = {name: declaration.get(name) for name in proposed if name != "createdAt"}
-        expected = {name: proposed[name] for name in proposed if name != "createdAt"}
-        if comparable != expected:
-            raise LibraryError("Batch ID was reused with a different file declaration")
-    else:
-        declaration = proposed
-        try:
-            service.storage.put_json(key, declaration)
-        except LibraryError:
-            # Another request may have created the same caller-supplied batch ID.
-            declaration = service.storage.get_json(key)
-            comparable = {name: declaration.get(name) for name in proposed if name != "createdAt"}
-            expected = {name: proposed[name] for name in proposed if name != "createdAt"}
-            if comparable != expected:
-                raise
-    service.catalog.create_upload_batch(batch_id, _records(batch_id, declaration))
+    service.catalog.create_upload_batch(batch_id, _records(batch_id, proposed))
     return describe_batch(service, batch_id)
 
 
@@ -311,7 +284,6 @@ def _hash_object(service, key: str) -> str:
 
 
 def seal_batch(service, batch_id: UUID) -> dict:
-    declaration = service.storage.get_json(declaration_key(batch_id))
     batch = service.catalog.upload_batch(batch_id)
     if batch is None:
         raise LibraryError("Upload batch not found")
@@ -322,81 +294,14 @@ def seal_batch(service, batch_id: UUID) -> dict:
     ]
     if missing:
         raise LibraryError(f"Upload these required files before sealing: {missing}")
-    service.storage.put_json(
-        sealed_key(batch_id),
-        {"schemaVersion": 1, "libraryId": str(service.library_id), "batchId": str(batch_id)},
+    plan = plan_names(
+        [row["relative_path"] for row in batch["files"]], service.settings.max_batch_files
     )
-    service.catalog.seal_upload_batch(batch_id, declaration["plan"])
+    service.catalog.seal_upload_batch(batch_id, plan)
     return describe_batch(service, batch_id)
 
 
-def recover_upload_batches(service) -> dict:
-    recovered, errors = 0, []
-    for key in service.storage.keys("upload-batches/"):
-        match = re.fullmatch(r"upload-batches/([0-9a-f-]+)/declaration\.json", key)
-        if not match:
-            continue
-        try:
-            batch_id = UUID(match.group(1))
-            declaration = service.storage.get_json(key)
-            if declaration["libraryId"] != str(service.library_id) or declaration["batchId"] != str(
-                batch_id
-            ):
-                raise LibraryError("Upload declaration library or key mismatch")
-            records = _records(batch_id, declaration)
-            service.catalog.create_upload_batch(batch_id, records)
-            state = service.catalog.upload_batch(batch_id)
-            by_id = {row["id"]: row for row in state["files"]}
-            is_sealed = service.storage.head(sealed_key(batch_id)) is not None
-
-            if is_sealed:
-                for asset in declaration["plan"]["assets"]:
-                    job_id = uuid5(batch_id, f"onboard:{asset['path']}")
-                    receipt_key = f"upload-batches/{batch_id}/results/{job_id}.json"
-                    if not service.storage.head(receipt_key):
-                        continue
-                    receipt = service.storage.get_json(receipt_key)
-                    paths = [asset["path"], *asset["sidecars"]]
-                    inputs = receipt.get("inputs", [])
-                    if len(paths) != len(inputs):
-                        raise LibraryError(f"Onboarding receipt input mismatch: {receipt_key}")
-                    for path, fingerprint in zip(paths, inputs, strict=True):
-                        record = next(item for item in records if item["relative_path"] == path)
-                        if (
-                            fingerprint.get("name") != PurePosixPath(path).name
-                            or fingerprint.get("size") != record["size_bytes"]
-                        ):
-                            raise LibraryError(f"Onboarding receipt input mismatch: {receipt_key}")
-                        service.catalog.complete_upload(record["id"], fingerprint["sha256"])
-
-            for record in records:
-                status = by_id[record["id"]]["status"]
-                if not record["required"] or status not in {"waiting", "uploading"}:
-                    continue
-                head = service.storage.head(record["staging_key"])
-                if head and head["ContentLength"] == record["size_bytes"]:
-                    service.catalog.complete_upload(record["id"], None)
-                elif status == "uploading":
-                    service.catalog.fail_upload(record["id"], "Interrupted upload; retry the file")
-            if is_sealed:
-                service.catalog.seal_upload_batch(batch_id, declaration["plan"])
-            recovered += 1
-        except Exception as error:
-            errors.append({"key": key, "error": str(error)})
-    return {"uploadBatchesRecovered": recovered, "errors": errors}
-
-
 def process_onboarding_job(service, job: dict) -> dict:
-    receipt_key = f"upload-batches/{job['batch_id']}/results/{job['id']}.json"
-    if service.storage.head(receipt_key):
-        receipt = service.storage.get_json(receipt_key)
-        manifest = service._load_manifest(receipt["manifestKey"])
-        service.catalog.apply(manifest)
-        result = {"status": receipt["status"], "assetId": str(manifest.asset_id), "replayed": True}
-        service.catalog.finish_onboarding_job(job, result=result)
-        _delete_staging(service, job)
-        return result
-
     ordered_ids = [job["primary_file_id"], *job["sidecar_file_ids"]]
     rows = [job["files"][file_id] for file_id in ordered_ids]
     try:
@@ -415,7 +320,7 @@ def process_onboarding_job(service, job: dict) -> dict:
                 ):
                     raise LibraryError(f"Staged upload failed verification: {row['relative_path']}")
                 staged.append((path, digest.hexdigest(), size))
-            result = _commit_staged(service, job, staged, receipt_key)
+            result = _commit_staged(service, job, staged)
         service.catalog.finish_onboarding_job(job, result=result)
         _delete_staging(service, job)
         return result
@@ -433,26 +338,24 @@ def _delete_staging(service, job: dict):
             pass
 
 
-def _commit_staged(
-    service, job: dict, files: list[tuple[Path, str, int]], receipt_key: str
-) -> dict:
+def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> dict:
     assert service.library_id is not None
     operation_id = UUID(job["id"])
     asset_id = uuid5(service.library_id, f"upload:{job['id']}")
-    manifest_key = f"state/assets/{asset_id}/00000001.json"
     fingerprints = [
         {"name": path.name, "sha256": digest, "size": size} for path, digest, size in files
     ]
-    with service.catalog.digest_lock(files[0][1]):
-        if service.storage.head(manifest_key):
-            manifest = service._load_manifest(manifest_key, full=True)
-            durable = [
+    with service.catalog.writer(), service.catalog.digest_lock(files[0][1]):
+        manifest = service.catalog.get(str(asset_id))
+        if manifest:
+            stored = [
                 {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
                 for blob in manifest.blobs
             ]
-            if durable != fingerprints:
-                raise LibraryError("Onboarding job conflicts with an existing manifest")
+            if stored != fingerprints:
+                raise LibraryError("Onboarding job conflicts with an existing asset")
             status = "imported"
+            replayed = True
         else:
             manifest = service.catalog.find_hash(files[0][1])
             if manifest:
@@ -464,6 +367,7 @@ def _commit_staged(
                         "Original already exists with different sidecars; metadata merging is not implemented"
                     )
                 status = "duplicate"
+                replayed = False
             else:
                 info, mime = metadata.extract(files[0][0], service.settings.exiftool)
                 imported_blobs = []
@@ -493,16 +397,7 @@ def _commit_staged(
                     capture_time=info.get("captureTime"),
                     metadata=info,
                 )
-                service.storage.put_json(manifest.key, manifest.document())
+                service.catalog.apply(manifest)
                 status = "imported"
-        service.storage.put_json(
-            receipt_key,
-            {
-                "schemaVersion": 1,
-                "inputs": fingerprints,
-                "manifestKey": manifest.key,
-                "status": status,
-            },
-        )
-        service.catalog.apply(manifest)
-    return {"status": status, "assetId": str(manifest.asset_id), "replayed": False}
+                replayed = False
+    return {"status": status, "assetId": str(manifest.asset_id), "replayed": replayed}

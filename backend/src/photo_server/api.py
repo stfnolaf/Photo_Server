@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from typing import Annotated
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,9 +9,11 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from photo_server.browsing import BrowseQuery, UserStatePatch
+from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
+from photo_server.models import Mutation
 from photo_server.service import Service
+from photo_server.state import mutate
 from photo_server.uploads import (
     UploadGate,
     create_batch,
@@ -44,15 +46,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         service.initialize()
-        result = service.recover()
-        if result["errors"]:
-            raise RuntimeError(f"Library recovery requires attention: {result['errors']}")
         app.state.service = service
         app.state.upload_gate = upload_gate
         yield
         service.catalog.engine.dispose()
 
-    app = FastAPI(title="Photo Server", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Photo Server", version="0.4.0", lifespan=lifespan)
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -60,7 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_methods=["GET", "POST", "PUT", "PATCH"],
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
             allow_headers=["Content-Type", "Content-Length"],
         )
 
@@ -70,7 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(FileNotFoundError)
     async def missing_file(request: Request, error: FileNotFoundError):
-        return JSONResponse(status_code=404, content={"detail": "An input file does not exist"})
+        return JSONResponse(status_code=404, content={"detail": "Requested item does not exist"})
 
     @app.get("/", include_in_schema=False)
     def root():
@@ -157,13 +156,106 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.patch("/assets/{asset_id}/user-state")
+    @app.patch("/assets/{asset_id}/metadata")
     def update_user_state(asset_id: UUID, body: UserStatePatch):
-        state = service.catalog.update_user_state(
-            str(asset_id), body.model_dump(exclude_unset=True)
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="asset.patch",
+                entity_id=asset_id,
+                changes=body.changes(),
+                expected_revision=body.expected_revision,
+            ),
         )
-        if state is None:
-            raise HTTPException(404, "Asset not found")
-        return state
+
+    @app.delete("/assets/{asset_id}")
+    def trash_asset(asset_id: UUID, body: OperationRequest):
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="asset.delete",
+                entity_id=asset_id,
+                expected_revision=body.expected_revision,
+            ),
+        )
+
+    @app.post("/assets/{asset_id}/restore")
+    def restore_asset(asset_id: UUID, body: OperationRequest):
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="asset.restore",
+                entity_id=asset_id,
+                expected_revision=body.expected_revision,
+            ),
+        )
+
+    @app.get("/albums")
+    def list_albums(deleted: bool = False):
+        return service.catalog.list_albums(deleted)
+
+    @app.post("/albums", status_code=201)
+    def create_album(body: AlbumPatch):
+        if body.name is None:
+            raise HTTPException(422, "Provide an album name")
+        album_id = uuid5(service.library_id, f"album:{body.operation_id}")
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="album.create",
+                entity_id=album_id,
+                changes=body.changes(),
+                expected_revision=body.expected_revision,
+            ),
+        )
+
+    @app.get("/albums/{album_id}")
+    def get_album(album_id: UUID):
+        album = service.catalog.get_album(str(album_id))
+        if album is None:
+            raise HTTPException(404, "Album not found")
+        return album.document()
+
+    @app.patch("/albums/{album_id}")
+    def update_album(album_id: UUID, body: AlbumPatch):
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="album.patch",
+                entity_id=album_id,
+                changes=body.changes(),
+                expected_revision=body.expected_revision,
+            ),
+        )
+
+    @app.delete("/albums/{album_id}")
+    def trash_album(album_id: UUID, body: OperationRequest):
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="album.delete",
+                entity_id=album_id,
+                expected_revision=body.expected_revision,
+            ),
+        )
+
+    @app.post("/albums/{album_id}/restore")
+    def restore_album(album_id: UUID, body: OperationRequest):
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="album.restore",
+                entity_id=album_id,
+                expected_revision=body.expected_revision,
+            ),
+        )
 
     @app.get("/assets/{asset_id}/original")
     def original(asset_id: UUID):
@@ -211,9 +303,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         service.catalog.queue_preview(str(asset_id))
         return service.catalog.preview_status(str(asset_id))
 
-    @app.post("/maintenance/reconcile")
-    def reconcile(verify: bool = False):
-        return service.recover(verify)
+    @app.post("/maintenance/verify")
+    def verify_storage(full: bool = False):
+        return service.verify(full)
 
     return app
 

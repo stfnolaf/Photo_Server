@@ -1,6 +1,5 @@
 import hashlib
 import os
-import re
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,27 +26,37 @@ class Service:
     def initialize(self, recover_uploads: bool = True) -> dict:
         with self.catalog.writer():
             self.storage.ensure_bucket()
-            if self.storage.head("library.json") is None:
+            marker = (
+                self.storage.get_json("library.json")
+                if self.storage.head("library.json") is not None
+                else None
+            )
+            if marker and marker.get("schemaVersion") != 1:
+                raise LibraryError("Unsupported S3 library schema")
+            database_id = self.catalog.existing_library_id()
+            proposed_id = database_id or (UUID(marker["libraryId"]) if marker else uuid4())
+            self.library_id = proposed_id
+            database_migrations = self.catalog.initialize(str(self.library_id))
+            self.library_id = self.catalog.library_id()
+            if marker and UUID(marker["libraryId"]) != self.library_id:
+                raise LibraryError("PostgreSQL and the S3 media bucket belong to different libraries")
+            if marker is None:
                 from photo_server.storage import canonical_json
 
                 self.storage.put(
                     "library.json",
-                    canonical_json({"schemaVersion": 1, "libraryId": str(uuid4())}),
+                    canonical_json({"schemaVersion": 1, "libraryId": str(self.library_id)}),
                     "application/json",
                 )
-            marker = self.storage.get_json("library.json")
-            if marker.get("schemaVersion") != 1:
-                raise LibraryError("Unsupported S3 library schema")
-            self.library_id = UUID(marker["libraryId"])
-            self.catalog.initialize(str(self.library_id))
-        uploads = {"uploadBatchesRecovered": 0, "errors": []}
-        if recover_uploads:
-            from photo_server.uploads import recover_upload_batches
-
-            uploads = recover_upload_batches(self)
-            if uploads["errors"]:
-                raise LibraryError(f"Upload queue recovery requires attention: {uploads['errors']}")
-        return {"libraryId": str(self.library_id), "bucket": self.storage.bucket, **uploads}
+        migrated = self.catalog.migrate_legacy_user_state()
+        interrupted = self.catalog.resume_interrupted_uploads() if recover_uploads else 0
+        return {
+            "libraryId": str(self.library_id),
+            "bucket": self.storage.bucket,
+            "databaseMigrations": database_migrations,
+            "legacyUserStateMigrated": migrated,
+            "interruptedUploadsReset": interrupted,
+        }
 
     def plan(self, paths: list[str]) -> dict:
         return plan_import(self.settings, paths)
@@ -79,58 +88,39 @@ class Service:
                 raise LibraryError(f"Source is empty or changed during import: {relative}")
             yield staged, digest.hexdigest(), size
 
-    def _load_manifest(self, key: str, full: bool = False) -> Manifest:
-        manifest = Manifest.model_validate(self.storage.get_json(key))
-        if manifest.key != key or manifest.library_id != self.library_id:
-            raise LibraryError(f"Manifest key/library mismatch: {key}")
-        for blob in manifest.blobs:
-            self.storage.verify(blob.object_key, blob.size_bytes, blob.sha256, full=full)
-        return manifest
-
-    def _recover(self, full: bool) -> dict:
-        latest = {}
-        errors = []
-        for key in self.storage.keys("state/assets/"):
-            match = re.fullmatch(r"state/assets/([0-9a-f-]+)/([0-9]{8})\.json", key)
-            if not match:
-                errors.append({"key": key, "error": "Unrecognized manifest key"})
-                continue
-            asset, revision = match.groups()
-            if asset not in latest or revision > latest[asset][0]:
-                latest[asset] = (revision, key)
-        recovered = 0
-        for _, key in latest.values():
-            try:
-                manifest = self._load_manifest(key, full)
-                self.catalog.apply(manifest)
-                recovered += 1
-            except Exception as error:
-                errors.append({"key": key, "error": str(error)})
+    def verify(self, full: bool = False) -> dict:
+        """Verify that PostgreSQL's authoritative records reference valid S3 blobs."""
+        errors, checked = [], 0
+        manifests = self.catalog.all_assets()
+        asset_ids = {manifest.asset_id for manifest in manifests}
+        for manifest in manifests:
+            for blob in manifest.blobs:
+                try:
+                    self.storage.verify(
+                        blob.object_key, blob.size_bytes, blob.sha256, full=full
+                    )
+                    checked += 1
+                except Exception as error:
+                    errors.append({"key": blob.object_key, "error": str(error)})
+        for album in self.catalog.all_albums():
+            for asset_id in album.asset_ids:
+                if asset_id not in asset_ids:
+                    errors.append(
+                        {
+                            "key": f"album:{album.album_id}",
+                            "error": f"Album references missing asset {asset_id}",
+                        }
+                    )
         return {
-            "recovered": recovered,
+            "assetsChecked": len(manifests),
+            "blobsChecked": checked,
             "verification": "sha256" if full else "size",
             "errors": errors,
         }
 
-    def recover(self, full: bool = False) -> dict:
-        with self.catalog.writer():
-            return self._recover(full)
-
     def import_batch(self, paths: list[str], operation_id: UUID) -> dict:
         plan = self.plan(paths)
         with self.catalog.writer():
-            reconciliation = self._recover(False)
-            if reconciliation["errors"]:
-                raise LibraryError(
-                    f"Resolve recovery errors before importing: {reconciliation['errors']}"
-                )
-            intent = {
-                "schemaVersion": 1,
-                "libraryId": str(self.library_id),
-                "operationId": str(operation_id),
-                "plan": plan,
-            }
-            self.storage.put_json(f"imports/{operation_id}/intent.json", intent)
             results = []
             for entry in plan["assets"]:
                 try:
@@ -138,7 +128,6 @@ class Service:
                     results.append({"path": entry["path"], **result})
                 except Exception as error:
                     results.append({"path": entry["path"], "status": "failed", "error": str(error)})
-                    # A commit may have reached S3. Do not construct later state from a stale DB.
                     break
             completed = {entry["path"] for entry in results}
             results.extend(
@@ -165,8 +154,6 @@ class Service:
 
         assert self.library_id is not None
         asset_id = uuid5(self.library_id, f"{operation_id}:{entry['path']}")
-        manifest_key = f"state/assets/{asset_id}/00000001.json"
-        receipt_key = f"imports/{operation_id}/results/{asset_id}.json"
         with ExitStack() as stack:
             files = [
                 stack.enter_context(self.stage(path))
@@ -175,78 +162,57 @@ class Service:
             fingerprints = [
                 {"name": path.name, "sha256": digest, "size": size} for path, digest, size in files
             ]
-            if self.storage.head(receipt_key):
-                receipt = self.storage.get_json(receipt_key)
-                if receipt["inputs"] != fingerprints:
+            manifest = self.catalog.get(str(asset_id))
+            if manifest:
+                stored = [
+                    {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
+                    for blob in manifest.blobs
+                ]
+                if stored != fingerprints:
                     raise LibraryError("Operation ID was reused with changed file content")
-                manifest = self._load_manifest(receipt["manifestKey"])
-                self.catalog.apply(manifest)
                 return {
-                    "status": receipt["status"],
+                    "status": "imported",
                     "assetId": str(manifest.asset_id),
                     "replayed": True,
                 }
 
-            if self.storage.head(manifest_key):
-                manifest = self._load_manifest(manifest_key, full=True)
-                durable_fingerprints = [
-                    {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
-                    for blob in manifest.blobs
-                ]
-                if durable_fingerprints != fingerprints:
-                    raise LibraryError("Operation ID was reused with changed file content")
-                status = "imported"
-            else:
-                manifest = self.catalog.find_hash(files[0][1])
-                if manifest:
-                    existing_sidecars = {
-                        blob.sha256 for blob in manifest.blobs if blob.role == "SIDECAR"
-                    }
-                    if any(digest not in existing_sidecars for _, digest, _ in files[1:]):
-                        raise LibraryError(
-                            "Original already exists with different sidecars; metadata merging is not implemented"
-                        )
-                    status = "duplicate"
-                else:
-                    info, mime = metadata.extract(files[0][0], self.settings.exiftool)
-                    imported_blobs = []
-                    for index, (path, digest, size) in enumerate(files):
-                        blob = Blob(
-                            blob_id=uuid5(asset_id, path.name),
-                            role=role(path),
-                            original_filename=path.name,
-                            object_key=f"originals/{asset_id}/{path.name}",
-                            sha256=digest,
-                            size_bytes=size,
-                            mime_type=mime if index == 0 else "application/rdf+xml",
-                        )
-                        with path.open("rb") as stream:
-                            self.storage.put(
-                                blob.object_key, stream, blob.mime_type, {"sha256": digest}
-                            )
-                        self.storage.verify(blob.object_key, size, digest)
-                        imported_blobs.append(blob)
-                    manifest = Manifest(
-                        library_id=self.library_id,
-                        asset_id=asset_id,
-                        operation_id=operation_id,
-                        primary_blob_id=imported_blobs[0].blob_id,
-                        blobs=imported_blobs,
-                        imported_at=datetime.now(UTC).isoformat(),
-                        capture_time=info.get("captureTime"),
-                        metadata=info,
+            manifest = self.catalog.find_hash(files[0][1])
+            if manifest:
+                existing_sidecars = {
+                    blob.sha256 for blob in manifest.blobs if blob.role == "SIDECAR"
+                }
+                if any(digest not in existing_sidecars for _, digest, _ in files[1:]):
+                    raise LibraryError(
+                        "Original already exists with different sidecars; metadata merging is not implemented"
                     )
-                    self.storage.put_json(manifest.key, manifest.document())
-                    status = "imported"
-
-            self.storage.put_json(
-                receipt_key,
-                {
-                    "schemaVersion": 1,
-                    "inputs": fingerprints,
-                    "manifestKey": manifest.key,
-                    "status": status,
-                },
-            )
-            self.catalog.apply(manifest)
+                status = "duplicate"
+            else:
+                info, mime = metadata.extract(files[0][0], self.settings.exiftool)
+                imported_blobs = []
+                for index, (path, digest, size) in enumerate(files):
+                    blob = Blob(
+                        blob_id=uuid5(asset_id, path.name),
+                        role=role(path),
+                        original_filename=path.name,
+                        object_key=f"originals/{asset_id}/{path.name}",
+                        sha256=digest,
+                        size_bytes=size,
+                        mime_type=mime if index == 0 else "application/rdf+xml",
+                    )
+                    with path.open("rb") as stream:
+                        self.storage.put(blob.object_key, stream, blob.mime_type, {"sha256": digest})
+                    self.storage.verify(blob.object_key, size, digest)
+                    imported_blobs.append(blob)
+                manifest = Manifest(
+                    library_id=self.library_id,
+                    asset_id=asset_id,
+                    operation_id=operation_id,
+                    primary_blob_id=imported_blobs[0].blob_id,
+                    blobs=imported_blobs,
+                    imported_at=datetime.now(UTC).isoformat(),
+                    capture_time=info.get("captureTime"),
+                    metadata=info,
+                )
+                self.catalog.apply(manifest)
+                status = "imported"
             return {"status": status, "assetId": str(manifest.asset_id), "replayed": False}

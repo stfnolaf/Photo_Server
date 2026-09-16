@@ -1,23 +1,21 @@
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from datetime import time as day_time
+from threading import RLock
 from time import time
 from uuid import UUID, uuid5
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     MetaData,
     String,
     Table,
     Text,
-    UniqueConstraint,
     create_engine,
     func,
     select,
@@ -28,7 +26,8 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from photo_server.browsing import BrowseQuery, asset_summary, browse_fields
 from photo_server.config import LibraryError
-from photo_server.models import Manifest
+from photo_server.migrations import migrate
+from photo_server.models import Album, Manifest, Mutation, UserState
 
 schema = MetaData()
 library = Table(
@@ -37,6 +36,7 @@ library = Table(
     Column("singleton", Integer, primary_key=True),
     Column("library_id", String, nullable=False),
     Column("schema_version", Integer, nullable=False),
+    Column("state_authority", String, nullable=False, server_default="postgres"),
 )
 assets = Table(
     "assets",
@@ -51,7 +51,29 @@ assets = Table(
     Column("search_text", Text, nullable=False),
     Column("rating", Integer, nullable=False, server_default="0"),
     Column("favorite", Boolean, nullable=False, server_default="false"),
-    CheckConstraint("rating BETWEEN 0 AND 5", name="ck_assets_rating"),
+    Column("deleted_at", Text),
+)
+albums = Table(
+    "albums",
+    schema,
+    Column("id", String, primary_key=True),
+    Column("state_revision", Integer, nullable=False),
+    Column("state", JSONB, nullable=False),
+    Column("deleted_at", Text),
+)
+album_assets = Table(
+    "album_assets",
+    schema,
+    Column("album_id", String, ForeignKey("albums.id"), primary_key=True),
+    Column("asset_id", String, ForeignKey("assets.id"), primary_key=True),
+    Column("position", Integer, nullable=False),
+)
+operations = Table(
+    "operations",
+    schema,
+    Column("id", String, primary_key=True),
+    Column("request", JSONB, nullable=False),
+    Column("result", JSONB, nullable=False),
 )
 blobs = Table(
     "blobs",
@@ -100,7 +122,6 @@ upload_files = Table(
     Column("sha256", String(64)),
     Column("asset_id", String),
     Column("error", Text),
-    UniqueConstraint("batch_id", "relative_path"),
 )
 onboarding_jobs = Table(
     "onboarding_jobs",
@@ -115,21 +136,17 @@ onboarding_jobs = Table(
     Column("result", JSONB),
     Column("error", Text),
 )
-onboarding_claim_index = Index(
-    "ix_onboarding_jobs_claim",
-    onboarding_jobs.c.status,
-    onboarding_jobs.c.lease_until,
-)
 
 
 class Catalog:
     def __init__(self, url: str):
         self.engine = create_engine(url, pool_pre_ping=True)
+        self._writer_lock = RLock()
 
     @contextmanager
     def writer(self):
         # Serializes the CLI, API, and recovery against the same PostgreSQL database.
-        with self.engine.connect() as connection:
+        with self._writer_lock, self.engine.connect() as connection:
             connection.execute(text("SELECT pg_advisory_lock(7046868301)"))
             connection.commit()
             try:
@@ -155,132 +172,109 @@ class Catalog:
                 )
                 connection.commit()
 
-    def initialize(self, library_id: str):
-        with self.engine.begin() as connection:
-            # API and worker can start together; DDL/backfill must commit atomically.
-            connection.execute(text("SELECT pg_advisory_xact_lock(7046868302)"))
-            schema.create_all(connection)
-            onboarding_claim_index.create(connection, checkfirst=True)
-            connection.execute(
-                insert(library)
-                .values(singleton=1, library_id=library_id, schema_version=1)
-                .on_conflict_do_nothing()
-            )
-            row = connection.execute(select(library)).mappings().one()
-            if row["library_id"] != library_id or row["schema_version"] not in {1, 2}:
-                raise LibraryError("Database belongs to a different library or schema version")
-            if row["schema_version"] == 1:
-                self._upgrade_browsing(connection)
+    def initialize(self, library_id: str) -> dict:
+        return migrate(self.engine, library_id)
 
-    @staticmethod
-    def _upgrade_browsing(connection):
-        # create_all handles new catalogs; these additive changes upgrade Phase 1.
-        connection.execute(
-            text("""
-            ALTER TABLE assets
-              ADD COLUMN IF NOT EXISTS timeline_at TIMESTAMP,
-              ADD COLUMN IF NOT EXISTS media_type VARCHAR,
-              ADD COLUMN IF NOT EXISTS search_text TEXT,
-              ADD COLUMN IF NOT EXISTS rating INTEGER NOT NULL DEFAULT 0,
-              ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT false
-        """)
-        )
-        while True:
-            rows = (
-                connection.execute(
-                    select(assets.c.id, assets.c.manifest)
-                    .where(assets.c.timeline_at.is_(None))
-                    .limit(500)
-                )
-                .mappings()
-                .all()
+    def existing_library_id(self) -> UUID | None:
+        """Read identity without assuming that migrations have already run."""
+        with self.engine.connect() as connection:
+            if connection.scalar(text("SELECT to_regclass('public.library')")) is None:
+                return None
+            value = connection.scalar(text("SELECT library_id FROM library WHERE singleton = 1"))
+        return UUID(value) if value else None
+
+    def resume_interrupted_uploads(self) -> int:
+        """Make request-scoped uploads retryable after an API process restart."""
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                upload_files.update()
+                .where(upload_files.c.status == "uploading")
+                .values(status="waiting", error="Interrupted upload; retry the file")
             )
-            if not rows:
-                break
-            for row in rows:
-                connection.execute(
-                    assets.update()
-                    .where(assets.c.id == row["id"])
-                    .values(**browse_fields(Manifest.model_validate(row["manifest"])))
-                )
-        connection.execute(
-            text("""
-            ALTER TABLE assets
-              ALTER COLUMN timeline_at SET NOT NULL,
-              ALTER COLUMN media_type SET NOT NULL,
-              ALTER COLUMN search_text SET NOT NULL
-        """)
-        )
-        if not connection.scalar(
-            text("""
-            SELECT 1 FROM pg_constraint
-            WHERE conrelid = 'assets'::regclass AND conname = 'ck_assets_rating'
-        """)
-        ):
-            connection.execute(
-                text(
-                    "ALTER TABLE assets ADD CONSTRAINT ck_assets_rating CHECK (rating BETWEEN 0 AND 5)"
-                )
-            )
-        connection.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_assets_timeline ON assets (timeline_at, id)")
-        )
-        connection.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_assets_favorites ON assets (timeline_at, id) WHERE favorite"
-            )
-        )
-        connection.execute(library.update().values(schema_version=2))
+        return result.rowcount
 
     def apply(self, manifest: Manifest):
         with self.engine.begin() as connection:
-            existing = connection.execute(
-                select(assets.c.manifest).where(assets.c.id == str(manifest.asset_id))
-            ).scalar_one_or_none()
-            if existing:
-                if existing != manifest.document():
-                    raise LibraryError(f"Conflicting immutable manifest for {manifest.asset_id}")
-            else:
-                connection.execute(
-                    insert(assets).values(
-                        id=str(manifest.asset_id),
-                        original_filename=manifest.primary.original_filename,
-                        sha256=manifest.primary.sha256,
-                        state_revision=manifest.revision,
-                        manifest=manifest.document(),
-                        **browse_fields(manifest),
-                    )
-                )
-                for blob in manifest.blobs:
-                    connection.execute(
-                        insert(blobs).values(
-                            id=str(blob.blob_id),
-                            asset_id=str(manifest.asset_id),
-                            role=blob.role,
-                            object_key=blob.object_key,
-                            original_filename=blob.original_filename,
-                            sha256=blob.sha256,
-                            size_bytes=blob.size_bytes,
-                            mime_type=blob.mime_type,
-                        )
-                    )
+            self._apply(connection, manifest)
+
+    def _apply(self, connection, manifest: Manifest):
+        """Project one authoritative asset snapshot using the caller's transaction."""
+        existing = connection.execute(
+            select(assets.c.manifest)
+            .where(assets.c.id == str(manifest.asset_id))
+            .with_for_update()
+        ).scalar_one_or_none()
+        if existing:
+            current = Manifest.model_validate(existing)
+            from photo_server.state import import_identity
+
+            if import_identity(current) != import_identity(manifest):
+                raise LibraryError(f"Conflicting original identity for {manifest.asset_id}")
+            if current.revision == manifest.revision and existing != manifest.document():
+                raise LibraryError(f"Conflicting revision for {manifest.asset_id}")
+            if manifest.revision <= current.revision:
+                return
             connection.execute(
-                insert(jobs)
+                assets.update()
+                .where(assets.c.id == str(manifest.asset_id))
                 .values(
-                    asset_id=str(manifest.asset_id),
-                    job_type="preview-v1",
-                    status="pending",
-                    attempts=0,
+                    manifest=manifest.document(),
+                    state_revision=manifest.revision,
+                    rating=manifest.user_state.rating,
+                    favorite=manifest.user_state.favorite,
+                    deleted_at=manifest.deleted_at,
+                    **browse_fields(manifest),
                 )
-                .on_conflict_do_nothing()
             )
+        else:
+            connection.execute(
+                insert(assets).values(
+                    id=str(manifest.asset_id),
+                    original_filename=manifest.primary.original_filename,
+                    sha256=manifest.primary.sha256,
+                    state_revision=manifest.revision,
+                    manifest=manifest.document(),
+                    rating=manifest.user_state.rating,
+                    favorite=manifest.user_state.favorite,
+                    deleted_at=manifest.deleted_at,
+                    **browse_fields(manifest),
+                )
+            )
+            for blob in manifest.blobs:
+                connection.execute(
+                    insert(blobs).values(
+                        id=str(blob.blob_id),
+                        asset_id=str(manifest.asset_id),
+                        role=blob.role,
+                        object_key=blob.object_key,
+                        original_filename=blob.original_filename,
+                        sha256=blob.sha256,
+                        size_bytes=blob.size_bytes,
+                        mime_type=blob.mime_type,
+                    )
+                )
+        connection.execute(
+            insert(jobs)
+            .values(
+                asset_id=str(manifest.asset_id),
+                job_type="preview-v1",
+                status="pending",
+                attempts=0,
+            )
+            .on_conflict_do_nothing()
+        )
 
     def find_hash(self, digest: str) -> Manifest | None:
         with self.engine.connect() as connection:
             value = connection.execute(
                 select(assets.c.manifest).where(assets.c.sha256 == digest)
             ).scalar_one_or_none()
-        return Manifest.model_validate(value) if value else None
+        manifest = Manifest.model_validate(value) if value else None
+        if manifest and manifest.deleted_at:
+            raise LibraryError(
+                f"Matching asset {manifest.asset_id} is in trash; restore it before importing"
+            )
+        return manifest
 
     def get(self, asset_id: str) -> Manifest | None:
         with self.engine.connect() as connection:
@@ -293,9 +287,19 @@ class Catalog:
         with self.engine.connect() as connection:
             return list(
                 connection.execute(
-                    select(assets.c.manifest).order_by(assets.c.id).limit(limit).offset(offset)
+                    select(assets.c.manifest)
+                    .where(assets.c.deleted_at.is_(None))
+                    .order_by(assets.c.id)
+                    .limit(limit)
+                    .offset(offset)
                 ).scalars()
             )
+
+    def all_assets(self) -> list[Manifest]:
+        """Return every authoritative asset, including trash, for verify/export."""
+        with self.engine.connect() as connection:
+            values = list(connection.scalars(select(assets.c.manifest).order_by(assets.c.id)))
+        return [Manifest.model_validate(value) for value in values]
 
     def counts(self) -> dict:
         with self.engine.connect() as connection:
@@ -305,7 +309,20 @@ class Catalog:
             }
 
     def browse(self, query: BrowseQuery) -> dict:
-        filters = []
+        filters = [
+            assets.c.deleted_at.is_not(None) if query.deleted else assets.c.deleted_at.is_(None)
+        ]
+        if query.album_id:
+            filters.append(
+                assets.c.id.in_(
+                    select(album_assets.c.asset_id)
+                    .join(albums)
+                    .where(
+                        album_assets.c.album_id == str(query.album_id),
+                        albums.c.deleted_at.is_(None),
+                    )
+                )
+            )
         if query.q:
             # Literal substring search: '%' and '_' in filenames are not wildcards.
             filters.append(assets.c.search_text.icontains(query.q, autoescape=True))
@@ -353,28 +370,297 @@ class Catalog:
         with self.engine.connect() as connection:
             row = (
                 connection.execute(
-                    select(assets.c.rating, assets.c.favorite).where(assets.c.id == asset_id)
+                    select(assets.c.rating, assets.c.favorite, assets.c.manifest).where(
+                        assets.c.id == asset_id
+                    )
                 )
                 .mappings()
                 .one_or_none()
             )
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        state = Manifest.model_validate(row["manifest"]).user_state.document()
+        return {**state, "rating": row["rating"], "favorite": row["favorite"]}
 
-    def update_user_state(self, asset_id: str, changes: dict) -> dict | None:
-        # Only explicitly supplied fields are updated, so independent mutations don't
-        # clobber each other. Replaying a PATCH sets the same values again.
-        with self.engine.begin() as connection:
-            row = (
+    def legacy_states(self) -> list[tuple[Manifest, UserState]]:
+        with self.engine.connect() as connection:
+            rows = (
                 connection.execute(
-                    assets.update()
-                    .where(assets.c.id == asset_id)
-                    .values(**changes)
-                    .returning(assets.c.rating, assets.c.favorite)
+                    select(assets).where(
+                        assets.c.state_revision == 1,
+                        (assets.c.rating != 0) | assets.c.favorite,
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [
+            (
+                Manifest.model_validate(row["manifest"]),
+                UserState(rating=row["rating"], favorite=row["favorite"]),
+            )
+            for row in rows
+        ]
+
+    def state_ids(self) -> dict[str, set[str]]:
+        with self.engine.connect() as connection:
+            return {
+                "assets": set(connection.scalars(select(assets.c.id))),
+                "albums": set(connection.scalars(select(albums.c.id))),
+            }
+
+    def operation(self, operation_id: UUID) -> dict | None:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(select(operations).where(operations.c.id == str(operation_id)))
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
+
+    def commit_mutation(self, operation_id: UUID, mutation: Mutation) -> dict:
+        """Apply state and record its retry result in one PostgreSQL transaction."""
+        from photo_server.state import mutation_result
+
+        with self.writer(), self.engine.begin() as connection:
+            previous = (
+                connection.execute(
+                    select(operations)
+                    .where(operations.c.id == str(operation_id))
+                    .with_for_update()
                 )
                 .mappings()
                 .one_or_none()
             )
-        return dict(row) if row is not None else None
+            if previous:
+                if previous["request"] != mutation.document():
+                    raise LibraryError("Operation ID was reused with a different request")
+                return previous["result"]
+
+            entity_id = str(mutation.entity_id)
+            kind, action = mutation.action.split(".")
+            if kind == "asset":
+                value = connection.scalar(
+                    select(assets.c.manifest)
+                    .where(assets.c.id == entity_id)
+                    .with_for_update()
+                )
+                current = Manifest.model_validate(value) if value else None
+            else:
+                value = connection.scalar(
+                    select(albums.c.state)
+                    .where(albums.c.id == entity_id)
+                    .with_for_update()
+                )
+                current = Album.model_validate(value) if value else None
+
+            if current is None and mutation.action != "album.create":
+                raise FileNotFoundError("Entity not found")
+            if mutation.expected_revision is not None and (
+                current is None or current.revision != mutation.expected_revision
+            ):
+                raise LibraryError("Revision changed; reload before editing")
+            if current and current.deleted_at and action not in {"restore", "delete"}:
+                raise LibraryError("Restore this item before editing")
+
+            if kind == "asset":
+                changes = {}
+                if action in {"patch", "migrate"}:
+                    changes["user_state"] = UserState.model_validate(
+                        {**current.user_state.document(), **mutation.changes}
+                    )
+                elif action in {"delete", "restore"}:
+                    changes["deleted_at"] = (
+                        (current.deleted_at or datetime.now(UTC).isoformat())
+                        if action == "delete"
+                        else None
+                    )
+                else:
+                    raise LibraryError("Invalid asset mutation")
+                snapshot = Manifest.model_validate(
+                    {
+                        **current.model_dump(),
+                        "schema_version": 2,
+                        "revision": current.revision + 1,
+                        "previous_revision": current.revision,
+                        "operation_id": operation_id,
+                        "mutation": mutation,
+                        **changes,
+                    }
+                )
+                self._apply(connection, snapshot)
+            else:
+                if action == "create" and current:
+                    raise LibraryError("Album already exists")
+                values = (
+                    current.document()
+                    if current
+                    else {
+                        "libraryId": connection.scalar(
+                            select(library.c.library_id).where(library.c.singleton == 1)
+                        ),
+                        "albumId": entity_id,
+                    }
+                )
+                if action in {"create", "patch"}:
+                    values.update(mutation.changes)
+                elif action in {"delete", "restore"}:
+                    values["deletedAt"] = (
+                        (current.deleted_at or datetime.now(UTC).isoformat())
+                        if action == "delete"
+                        else None
+                    )
+                else:
+                    raise LibraryError("Invalid album mutation")
+                for asset_id in values.get("assetIds", []):
+                    asset_value = connection.scalar(
+                        select(assets.c.manifest).where(assets.c.id == str(asset_id))
+                    )
+                    asset = Manifest.model_validate(asset_value) if asset_value else None
+                    if asset is None:
+                        raise LibraryError(f"Album asset does not exist: {asset_id}")
+                    if asset.deleted_at and (
+                        not current or UUID(str(asset_id)) not in current.asset_ids
+                    ):
+                        raise LibraryError(f"Restore asset before adding it to an album: {asset_id}")
+                snapshot = Album.model_validate(
+                    {
+                        **values,
+                        "revision": current.revision + 1 if current else 1,
+                        "previousRevision": current.revision if current else None,
+                        "operationId": str(operation_id),
+                        "mutation": mutation.document(),
+                    }
+                )
+                self._apply_album(connection, snapshot)
+
+            result = mutation_result(snapshot)
+            connection.execute(
+                insert(operations).values(
+                    id=str(operation_id), request=mutation.document(), result=result
+                )
+            )
+            return result
+
+    def migrate_legacy_user_state(self) -> int:
+        """Move Phase 2 rating/favorite columns into authoritative asset snapshots."""
+        with self.engine.connect() as connection:
+            rows = list(
+                connection.execute(
+                    select(assets.c.id, assets.c.rating, assets.c.favorite, assets.c.manifest).where(
+                        assets.c.state_revision == 1,
+                        (assets.c.rating != 0) | assets.c.favorite,
+                    )
+                ).mappings()
+            )
+        migrated = 0
+        for row in rows:
+            manifest = Manifest.model_validate(row["manifest"])
+            operation_id = uuid5(
+                manifest.library_id, f"postgres-authority-migration:{manifest.asset_id}"
+            )
+            self.commit_mutation(
+                operation_id,
+                Mutation(
+                    action="asset.migrate",
+                    entity_id=manifest.asset_id,
+                    changes={"rating": row["rating"], "favorite": row["favorite"]},
+                ),
+            )
+            migrated += 1
+        return migrated
+
+    def library_id(self) -> UUID:
+        with self.engine.connect() as connection:
+            value = connection.scalar(select(library.c.library_id).where(library.c.singleton == 1))
+        if value is None:
+            raise LibraryError("Database library identity is missing")
+        return UUID(value)
+
+    def record_operation(self, snapshot: Manifest | Album):
+        from photo_server.state import mutation_result
+
+        if snapshot.mutation is None:
+            return
+        values = dict(
+            id=str(snapshot.operation_id),
+            request=snapshot.mutation.document(),
+            result=mutation_result(snapshot),
+        )
+        with self.engine.begin() as connection:
+            connection.execute(insert(operations).values(**values).on_conflict_do_nothing())
+            row = (
+                connection.execute(select(operations).where(operations.c.id == values["id"]))
+                .mappings()
+                .one()
+            )
+            if dict(row) != values:
+                raise LibraryError(f"Conflicting operation ID: {snapshot.operation_id}")
+
+    def get_album(self, album_id: str) -> Album | None:
+        with self.engine.connect() as connection:
+            value = connection.scalar(select(albums.c.state).where(albums.c.id == album_id))
+        return Album.model_validate(value) if value else None
+
+    def list_albums(self, deleted: bool = False) -> list[dict]:
+        with self.engine.connect() as connection:
+            return list(
+                connection.scalars(
+                    select(albums.c.state)
+                    .where(
+                        albums.c.deleted_at.is_not(None)
+                        if deleted
+                        else albums.c.deleted_at.is_(None)
+                    )
+                    .order_by(albums.c.id)
+                )
+            )
+
+    def all_albums(self) -> list[Album]:
+        with self.engine.connect() as connection:
+            values = list(connection.scalars(select(albums.c.state).order_by(albums.c.id)))
+        return [Album.model_validate(value) for value in values]
+
+    def apply_album(self, album: Album):
+        with self.engine.begin() as connection:
+            self._apply_album(connection, album)
+
+    def _apply_album(self, connection, album: Album):
+        current = connection.scalar(
+            select(albums.c.state).where(albums.c.id == str(album.album_id)).with_for_update()
+        )
+        if current and current["revision"] >= album.revision:
+            if current["revision"] == album.revision and current != album.document():
+                raise LibraryError(f"Conflicting album revision: {album.album_id}")
+            return
+        connection.execute(
+            insert(albums)
+            .values(
+                id=str(album.album_id),
+                state_revision=album.revision,
+                state=album.document(),
+                deleted_at=album.deleted_at,
+            )
+            .on_conflict_do_update(
+                index_elements=[albums.c.id],
+                set_={
+                    "state_revision": album.revision,
+                    "state": album.document(),
+                    "deleted_at": album.deleted_at,
+                },
+            )
+        )
+        connection.execute(
+            album_assets.delete().where(album_assets.c.album_id == str(album.album_id))
+        )
+        if album.asset_ids:
+            connection.execute(
+                insert(album_assets),
+                [
+                    dict(album_id=str(album.album_id), asset_id=str(asset_id), position=position)
+                    for position, asset_id in enumerate(album.asset_ids)
+                ],
+            )
 
     def claim_job(self) -> str | None:
         with self.engine.begin() as connection:

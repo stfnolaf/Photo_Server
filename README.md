@@ -1,17 +1,17 @@
 # Photo Server
 
-Phases 1 and 2 of the [system design](self_hosted_photo_organizer_design.md): a Python/FastAPI backend that accepts network uploads, queues onboarding in PostgreSQL, and stores originals plus recoverable JSON manifests in S3. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals. The independently deployed web frontend provides a timeline, metadata, search, filters, ratings, and favorites.
+Phases 1–3 of the [system design](self_hosted_photo_organizer_design.md): a Python/FastAPI backend that accepts network uploads, queues onboarding in PostgreSQL, and stores originals plus recoverable JSON manifests in S3. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals. The independently deployed web frontend provides a timeline, search, metadata editing, albums, and trash/restore. User changes are saved as immutable S3 revisions before success is returned; PostgreSQL is a recoverable projection.
 
-See the [Phase 1](docs/verification.md) and [Phase 2](docs/phase-2-verification.md) verification reports for storage, recovery, API, and browser checks.
+See the [Phase 1](docs/verification.md), [Phase 2](docs/phase-2-verification.md), and [Phase 3](docs/phase-3-verification.md) verification reports for storage, recovery, API, and browser checks.
 
 ## Project structure
 
 ```text
-backend/             Python package, API, worker, upload client, and tests
-frontend/
-└── web/             Current static browser application and nginx runtime
-docs/                Verification reports
-compose.yaml         Development/deployment composition
+backend/                              Python backend and tests
+└── src/photo_server/db_migrations/   Ordered PostgreSQL migration SQL
+frontend/web/                         Static browser application and nginx runtime
+docs/                                 Verification reports
+compose.yaml                          Development/deployment composition
 ```
 
 The backend has no dependency on a frontend build. Each frontend owns its source and runtime and communicates through the published API. The web frontend uses an nginx `/api` proxy to the backend, keeping browser requests on one origin. See the [backend](backend/README.md) and [frontend](frontend/README.md) notes for their individual boundaries.
@@ -41,6 +41,39 @@ docker compose up --build -d
 The API and web frontend bind to all interfaces by default. V1 has no API authentication, so expose ports 8000 and 3000 only on a trusted network. Set `PHOTO_API_BIND=127.0.0.1` and/or `PHOTO_WEB_BIND=127.0.0.1` when a configured reverse proxy is the only entry point.
 
 `docker compose down` stops services while retaining the volumes. Avoid `down -v` unless intentionally discarding the local catalog and cache.
+
+### Upgrade an existing Phase 2 library
+
+Stop the old API and worker before starting the new version so that local-only writes cannot race migration:
+
+```bash
+docker compose stop api worker
+docker compose build api worker web
+docker compose up -d postgres
+docker compose run --rm --no-deps api photo-server migrate
+docker compose up -d api worker web
+```
+
+The explicit `migrate` command applies PostgreSQL schema migrations and then reconciles durable S3 state. API and worker startup run the same checks automatically, but the command makes upgrades observable before serving traffic. It also migrates existing non-default ratings/favorites into revision 2 in S3, reading each new revision back before applying it to PostgreSQL. Interrupted migration resumes on retry. Keep the existing PostgreSQL volume until this completes: S3 cannot recover Phase 2 metadata that was lost before migration. Default ratings/favorites are already represented by the original import's defaults.
+
+### Database migrations
+
+PostgreSQL DDL and data backfills live in numbered SQL files under [`backend/src/photo_server/db_migrations`](backend/src/photo_server/db_migrations). The current sequence is:
+
+| Version | File | Purpose |
+|---:|---|---|
+| 000 | `000_migration_tracking.sql` | Bootstrap the migration ledger |
+| 001 | `001_initial_catalog.sql` | Initial asset, blob, job, and upload catalog |
+| 002 | `002_browsing.sql` | Browse fields, ratings/favorites, backfill, constraints, and indexes |
+| 003 | `003_durable_user_state.sql` | Albums, operation replay records, and asset tombstones |
+
+Every file is idempotent: table, column, constraint, and index creation is guarded, and the browsing backfill can run repeatedly. Normal operation still executes each version once. The `schema_migrations` table records its version, name, SHA-256 checksum, and application time; startup refuses gaps, checksum changes, version disagreement, a database from another library, or a database newer than the application. Add a new numbered file for every schema change instead of editing an applied file.
+
+The runner holds a PostgreSQL transaction-level advisory lock, applies all pending SQL and ledger updates in one transaction, and updates the compatibility field `library.schema_version`. API and worker processes can start together; one migrates while the other waits and then observes the completed version. New databases run 001 through the current version. Pre-ledger databases are adopted from their existing `library.schema_version`: versions already present are entered in the ledger using the canonical file checksums, then only newer migrations run.
+
+[`catalog.py`](backend/src/photo_server/catalog.py) still declares SQLAlchemy table mappings because application queries need column metadata. Those mappings no longer create or alter tables: `MetaData.create_all()` and inline DDL have been removed. The SQL files are the schema source of truth, while [`migrations.py`](backend/src/photo_server/migrations.py) only discovers, validates, locks, and executes them.
+
+Database schema migration and durable-state migration are separate steps. SQL migrations change PostgreSQL's rebuildable query schema. The following S3 reconciliation restores asset/album state and migrates Phase 2 ratings/favorites outside PostgreSQL. `photo-server migrate` runs both and exits unsuccessfully if either layer needs attention.
 
 ### Configuration
 
@@ -126,7 +159,15 @@ Use `/docs` for the full schemas.
 | `GET /assets?limit=100&offset=0` | List paginated manifests |
 | `GET /library/assets` | Search/filter the capture-time timeline with cursor pagination |
 | `GET /assets/{id}` | Get a manifest and preview-job status |
-| `PATCH /assets/{id}/user-state` | Set a local rating (0–5) and/or favorite flag |
+| `PATCH /assets/{id}/user-state` or `/metadata` | Durably edit rating, favorite, caption, keywords, or location |
+| `DELETE /assets/{id}` | Write a tombstone and move a photo to trash |
+| `POST /assets/{id}/restore` | Restore a trashed photo |
+| `GET /albums?deleted=false` | List active or trashed albums |
+| `POST /albums` | Create an album with ordered membership |
+| `GET /albums/{id}` | Read album state, including ordered asset IDs |
+| `PATCH /albums/{id}` | Rename, describe, add/remove members, or reorder an album |
+| `DELETE /albums/{id}` | Move an album to trash without deleting its photos |
+| `POST /albums/{id}/restore` | Restore a trashed album |
 | `GET /assets/{id}/original` | Stream the original |
 | `GET /assets/{id}/preview` | Get a JPEG preview, or `202` while pending |
 | `GET /assets/{id}/thumbnail` | Get a JPEG thumbnail, or `202` while pending |
@@ -139,11 +180,33 @@ Open `http://SERVER_IP:3000/`. The responsive browser UI includes:
 
 - A capture-time timeline grouped by month. Photos without a usable capture time use their import time and are identified as such in the API.
 - Incremental loading with stable cursor pagination, newest/oldest sorting, and filters for date, media format, minimum rating, and favorites.
-- Case-insensitive literal search across original filenames, camera make/model, and lens metadata.
+- Case-insensitive literal search across original filenames, camera make/model, lens metadata, captions, keywords, and location names.
 - Lazy, bounded thumbnail loading and explicit pending, unavailable, and failed preview states.
 - A full preview viewer with recorded EXIF metadata, original download, arrow-key navigation, `F` for favorite, and `0`–`5` for ratings.
 
-Ratings and favorites persist in PostgreSQL across normal service restarts and reconciliation. They are intentionally local prototype state in Phase 2: rebuilding PostgreSQL from S3 resets them. Phase 3 will migrate this state to revisioned durable objects before providing database-loss recovery.
+The photo viewer edits captions, keywords, named locations and coordinates, and album membership. The album editor supports names, descriptions, membership removal, and ordering. Album collections retain the capture-time timeline; the album editor and API expose their saved membership order. Trash hides photos from normal browsing and supports restore; it never removes originals. Trashing an album leaves its photos in the library. Membership survives photo deletion and restore.
+
+### Durable mutation protocol
+
+Every metadata, album, trash, or restore request requires a client-generated UUID `operationId` in the JSON body. Retain the same ID and body when retrying an interrupted request. For example:
+
+```json
+{
+  "operationId": "23f6cd22-bedd-443f-927c-d977d779fc06",
+  "rating": 5,
+  "caption": "Evening at the coast",
+  "keywords": ["holiday"],
+  "location": {"name": "North shore", "latitude": 45.5, "longitude": -122.5}
+}
+```
+
+Use `caption: ""`, `keywords: []`, or `location: null` to clear those fields. Album creation requires `name`; `assetIds` replaces the ordered member list in one revision. Delete/restore bodies need only `operationId`. An optional `expectedRevision` rejects edits based on stale state with HTTP 409. Browse trash using `/library/assets?deleted=true` and filter an album using `album_id=UUID`.
+
+A shared PostgreSQL advisory lock serializes mutations, migration, reconciliation, and onboarding commits. The coordinator reconciles before writing, creates an immutable S3 revision, verifies its contents, then applies PostgreSQL. Unknown S3 PUT outcomes are inspected at the intended key. After a database failure, further mutations cannot proceed until reconciliation succeeds. Replaying an older revision never moves the catalog backward.
+
+An already committed operation returns its original result, even if newer revisions exist or PostgreSQL has been rebuilt. Reusing its ID for a different request returns HTTP 409. Fetch current state separately after retry if other changes have happened. The web frontend stores pending requests in browser local storage, scoped to the library ID, and offers **Retry save** after failures or reloads.
+
+Asset revisions live at `state/assets/<id>/<revision>.json`; schema 1 revision 1 imports remain unchanged, and schema 2 revisions contain the original identity plus complete user state and tombstones. Album revisions live at `state/albums/<id>/<revision>.json` and exclusively own membership/order. Retain all revisions: recovery rebuilds retry records from their operation IDs and request/result snapshots.
 
 A minimal one-file sequence is:
 
@@ -174,7 +237,7 @@ Rebuild or reconcile the asset catalog from S3:
 docker compose run --rm api photo-server recover --verify
 ```
 
-Without `--verify`, recovery checks each blob's existence and size. With it, recovery downloads and hashes every blob. Both modes validate manifest schemas, ownership, and references. Unsupported newest revisions cause errors; recovery does not silently fall back to older revisions.
+Without `--verify`, recovery checks each blob's existence and size. With it, recovery downloads and hashes every blob. Both modes validate revision schemas, complete histories, ownership, immutable original identity, and album references. Recovery restores metadata, albums, tombstones, and operation results, and reports `recovered`, `albumsRecovered`, `migrated`, and `errors`. Missing, unreadable, or unsupported revisions cause errors; recovery does not silently fall back to older state.
 
 API startup also reconciles upload declarations, completed staged objects, seal markers, and onboarding receipts. The worker uses PostgreSQL leases so a job interrupted while running becomes claimable again.
 
@@ -186,7 +249,7 @@ docker compose run --rm --no-deps \
   -v "$PWD/.runtime/export:/export" api photo-server export /export
 ```
 
-Export writes `<asset-id>/<original-filename>` plus `manifest.json` into an empty destination. It retains imported XMP files. Generating interoperable XMP from user metadata is future work.
+Export writes active originals to `<asset-id>/<original-filename>` plus their latest `manifest.json`, including user metadata, into an empty destination. `library-state.json` preserves all album definitions, ordering, and trashed asset metadata. Add `--include-trash` to also download trashed originals. Export retains imported XMP files; generating interoperable XMP remains optional future work.
 
 ## Worker
 
@@ -219,15 +282,15 @@ docker compose run --rm --no-deps \
   api python -m pytest -q tests -p no:cacheprovider
 ```
 
-The tests create random `photo-test-*` buckets and `photo_test_*` databases and clean up only those resources. They exercise multipart HTTP upload, RAW companion selection, PostgreSQL-backed onboarding, durable queue recovery, immutable writes, duplicate handling, corruption detection, standalone export, and cache reconstruction.
+The tests create random `photo-test-*` buckets and `photo_test_*` databases and clean up only those resources. They exercise multipart HTTP upload, RAW companion selection, durable queues, immutable writes, duplicate handling, corruption detection, standalone export, cache reconstruction, Phase 2 migration, metadata crash/retry recovery, concurrent changes, album ordering, and tombstones.
 
 ## Current boundaries
 
 - One client/user per library is the supported V1 usage.
 - V1 has no API authentication or TLS termination; keep it on a trusted LAN or place it behind a configured reverse proxy.
 - Completed files and queue state survive service restarts. An individual client-to-API PUT is streamed and must restart from byte zero if its network connection fails.
-- Immutable revision-1 manifests and original imports are implemented. Phase 2 ratings/favorites are local PostgreSQL state. Albums, people, generated XMP, and durable user-state revisions remain in later phases.
+- Originals, revisioned user metadata, albums, and tombstones are durable in S3. People assignments, AI analysis, photo editing, and generated XMP remain future work.
 - No automatic source-folder watcher or mass migration exists. The network client enumerates only paths explicitly provided by the user.
-- Recovery currently enumerates manifests on explicit reconciliation/startup. Incremental reconciliation can follow measurements on a larger library.
+- Reconciliation currently enumerates complete revision histories at startup, before mutations/onboarding commits, and on explicit recovery. Its work grows with library history; incremental reconciliation is deferred pending measurements on a larger library. One application database and one API process per library remain the supported deployment.
 - No automatic garbage collection or original deletion is implemented.
 - Application-server recovery is implemented. This repo does not administer or independently back up the SeaweedFS deployment on the NAS.

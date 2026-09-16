@@ -23,14 +23,20 @@
       <nav>
         <button id="nav-all" class="nav-button active" aria-current="page"><span aria-hidden="true">▦</span> All photos</button>
         <button id="nav-favorites" class="nav-button"><span aria-hidden="true">♡</span> Favorites</button>
+        <button id="nav-trash" class="nav-button"><span aria-hidden="true">♲</span> Trash</button>
       </nav>
-      <div class="sidebar-note"><span class="status-dot" aria-hidden="true"></span> Your originals, at home.<p>Ratings and favorites are stored on this server. Recovery after database loss is coming in Phase 3.</p></div>
+      <p class="eyebrow">ALBUMS</p>
+      <nav id="album-list" aria-label="Albums"></nav>
+      <button id="new-album" class="button secondary">+ New album</button>
+      <div class="sidebar-note"><span class="status-dot" aria-hidden="true"></span> Your originals, at home.<p>Your metadata and albums are saved with your library. Trashed photos remain recoverable.</p></div>
     </aside>
     <main id="main" tabindex="-1">
       <div class="page-heading">
         <div><p class="eyebrow">THE MOMENTS YOU KEEP</p><h1 id="page-title">All photos</h1><p id="collection-count" class="muted" aria-live="polite">Loading your library…</p></div>
         <button id="refresh" class="button secondary" title="Refresh library">↻ <span>Refresh</span></button>
       </div>
+      <div id="pending-mutation" class="notice" role="status" hidden><span id="pending-message">A change is awaiting retry.</span> <button id="retry-mutation" class="button secondary">Retry save</button><button id="discard-mutation" class="button secondary">Discard request</button></div>
+      <button id="edit-album" class="button secondary" hidden>Edit album</button>
       <form id="filters" role="search" aria-label="Search and filter photos">
         <div class="search-row">
           <label class="search-box"><span aria-hidden="true">⌕</span><input id="search" name="q" type="search" maxlength="200" placeholder="Search filename, camera, or lens" aria-label="Search filename, camera, or lens"></label>
@@ -69,12 +75,33 @@
           <button data-rating="1" aria-label="Rate 1 star" aria-pressed="false">★</button><button data-rating="2" aria-label="Rate 2 stars" aria-pressed="false">★</button><button data-rating="3" aria-label="Rate 3 stars" aria-pressed="false">★</button><button data-rating="4" aria-label="Rate 4 stars" aria-pressed="false">★</button><button data-rating="5" aria-label="Rate 5 stars" aria-pressed="false">★</button><button data-rating="0" class="clear-rating" aria-label="Clear rating">Clear</button>
         </div>
         <p id="save-status" class="save-status muted" role="status"></p>
+        <form id="metadata-editor" class="metadata-editor">
+          <label>Caption<textarea id="edit-caption" maxlength="10000" rows="3"></textarea></label>
+          <label>Keywords, one per line<textarea id="edit-keywords" rows="2"></textarea></label>
+          <label>Location name<input id="edit-location" maxlength="500"></label>
+          <div class="coordinate-fields"><label>Latitude<input id="edit-latitude" type="number" min="-90" max="90" step="any"></label><label>Longitude<input id="edit-longitude" type="number" min="-180" max="180" step="any"></label></div>
+          <button class="button secondary" id="save-metadata">Save metadata</button>
+        </form>
+        <label class="album-picker">Album<select id="photo-album"></select></label>
+        <button id="toggle-membership" class="button secondary">Add to album</button>
+        <button id="trash-photo" class="button secondary">Move to trash</button>
         <dl id="metadata" class="metadata"></dl>
         <details id="exif-details"><summary>All recorded metadata</summary><dl id="exif" class="metadata raw-metadata"></dl></details>
         <a id="download-original" class="button secondary download" download>↓ Download original</a>
         <p class="keyboard-help">← → Navigate · F Favorite · 0–5 Rate · Esc Close</p>
       </aside>
     </div>
+  </dialog>
+  <dialog id="album-editor" aria-labelledby="album-editor-title">
+    <form id="album-form" class="metadata-editor">
+      <h2 id="album-editor-title">New album</h2>
+      <label>Name<input id="album-name" required maxlength="200"></label>
+      <label>Description<textarea id="album-description" maxlength="10000" rows="3"></textarea></label>
+      <p class="muted">Use the arrows to order photos. Removing a photo here keeps it in your library.</p>
+      <ol id="album-members"></ol>
+      <p id="album-status" role="status"></p>
+      <div class="album-actions"><button id="save-album" class="button">Save album</button><button id="trash-album" type="button" class="button secondary" hidden>Move album to trash</button><button id="close-album" type="button" class="button secondary">Close</button></div>
+    </form>
   </dialog>
   <div id="toast" role="status" class="toast" hidden></div>
   <noscript><div class="notice">Enable JavaScript to browse your library. The <a href="/docs">API documentation</a> is also available.</div></noscript>
