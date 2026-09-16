@@ -15,6 +15,7 @@ x-backend: &backend
     PHOTO_MAX_FILE_BYTES: ${PHOTO_MAX_FILE_BYTES:-536870912}
     PHOTO_UPLOAD_WORKERS: ${PHOTO_UPLOAD_WORKERS:-4}
     PHOTO_WORKER_THREADS: ${PHOTO_WORKER_THREADS:-4}
+    PHOTO_POSTGRES_BACKUP_PREFIX: ${PHOTO_POSTGRES_BACKUP_PREFIX:-backups/postgres}
     PHOTO_UPLOAD_PART_BYTES: ${PHOTO_UPLOAD_PART_BYTES:-8388608}
     PHOTO_CORS_ORIGINS: ${PHOTO_CORS_ORIGINS:-}
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
@@ -41,6 +42,27 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+  backup:
+    build: ./ops/postgres-backup
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-photo}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-photo}
+      PHOTO_S3_ENDPOINT: ${PHOTO_S3_ENDPOINT:?Set PHOTO_S3_ENDPOINT in .env}
+      PHOTO_S3_BUCKET: ${PHOTO_S3_BUCKET:-photo-library}
+      PHOTO_S3_ANONYMOUS: ${PHOTO_S3_ANONYMOUS:-true}
+      PHOTO_POSTGRES_BACKUP_PREFIX: ${PHOTO_POSTGRES_BACKUP_PREFIX:-backups/postgres}
+      PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS: ${PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS:-3600}
+      PHOTO_POSTGRES_BACKUP_RETENTION: ${PHOTO_POSTGRES_BACKUP_RETENTION:-168}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
   api:
     <<: *backend
     ports:

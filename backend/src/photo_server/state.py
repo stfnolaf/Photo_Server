@@ -20,8 +20,6 @@ def import_identity(manifest: Manifest) -> dict:
             "primaryBlobId",
             "blobs",
             "importedAt",
-            "captureTime",
-            "metadata",
         }
     }
 

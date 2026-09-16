@@ -11,6 +11,7 @@ import pillow_heif
 from PIL import Image, ImageOps
 
 from photo_server.models import Manifest
+from photo_server.processing import run_stage
 from photo_server.service import Service
 from photo_server.uploads import process_onboarding_job
 
@@ -92,6 +93,29 @@ def run_once(service: Service) -> dict | None:
                 pass
             result = {"status": "failed", "error": str(error)}
         return {"jobType": "onboarding", "jobId": onboarding["id"], **result}
+
+    processing = service.catalog.claim_processing_job()
+    if processing is not None:
+        asset_id = processing["asset_id"]
+        job_type = processing["job_type"]
+        try:
+            result = run_stage(service, asset_id, job_type)
+            service.catalog.finish_processing_job(asset_id, job_type, "ready")
+            return {
+                "jobType": "processing",
+                "stage": job_type,
+                "assetId": asset_id,
+                **result,
+            }
+        except Exception as error:
+            service.catalog.finish_processing_job(asset_id, job_type, "failed", str(error))
+            return {
+                "jobType": "processing",
+                "stage": job_type,
+                "assetId": asset_id,
+                "status": "failed",
+                "error": str(error),
+            }
 
     asset_id = service.catalog.claim_job()
     if asset_id is None:

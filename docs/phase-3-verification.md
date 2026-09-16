@@ -1,5 +1,7 @@
 # Phase 3 verification — 2026-09-16
 
+> Historical report: the later [PostgreSQL-authority decision](postgres-authority-verification.md) replaced S3 revision histories with PostgreSQL as the single source of truth plus scheduled backups. The behavior below is not the current persistence model.
+
 ## Delivered behavior
 
 Phase 3 stores complete asset metadata and album snapshots in immutable S3 revisions. It adds captions, keywords, named locations/coordinates, ordered album membership, tombstones, and restore to the API and web frontend. Existing revision 1 imports remain unchanged. Originals and imported sidecars are retained through deletion and restore.

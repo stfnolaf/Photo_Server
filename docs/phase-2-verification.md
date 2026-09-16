@@ -1,5 +1,7 @@
 # Phase 2 verification — 2026-09-15
 
+> Historical report: persistence behavior described here was superseded by the [PostgreSQL-authority decision](postgres-authority-verification.md).
+
 ## Delivered behavior
 
 Phase 2 adds a responsive photo-library web frontend, backed by an indexed PostgreSQL browsing projection. It provides a capture-time timeline, preview viewing, metadata display, original downloads, ratings/favorites, and basic search and filters. The frontend now lives and deploys independently under `frontend/web`; the Python application and tests live under `backend`.

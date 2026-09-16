@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "photo-server"
-version = "0.3.0"
-description = "Recoverable, RAW-first personal photo library"
+version = "0.5.0"
+description = "PostgreSQL-backed, RAW-first personal photo library"
 requires-python = ">=3.12"
 dependencies = [
   "boto3>=1.40,<2",

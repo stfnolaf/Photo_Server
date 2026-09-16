@@ -8,9 +8,9 @@ from uuid import UUID, uuid4, uuid5
 
 from botocore.exceptions import ClientError
 
-from photo_server import metadata
 from photo_server.config import LibraryError
 from photo_server.models import Blob, Manifest
+from photo_server.processing import extract_metadata
 from photo_server.selection import plan_names, role
 
 
@@ -330,7 +330,7 @@ def process_onboarding_job(service, job: dict) -> dict:
 
 
 def _delete_staging(service, job: dict):
-    """Cleanup is best-effort because final objects and the receipt are already durable."""
+    """Cleanup is best-effort after final objects and PostgreSQL state commit."""
     for file_id in [job["primary_file_id"], *job["sidecar_file_ids"]]:
         try:
             service.storage.delete(job["files"][file_id]["staging_key"])
@@ -369,7 +369,7 @@ def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> di
                 status = "duplicate"
                 replayed = False
             else:
-                info, mime = metadata.extract(files[0][0], service.settings.exiftool)
+                info, mime = extract_metadata(service, files[0][0])
                 imported_blobs = []
                 for index, (path, digest, size) in enumerate(files):
                     blob = Blob(

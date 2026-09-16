@@ -1,5 +1,7 @@
 # Phase 1 verification — 2026-09-15
 
+> Historical report: database-free recovery described here was superseded by the [PostgreSQL-authority decision](postgres-authority-verification.md).
+
 ## Automated tests
 
 **27 passed:** 14 unit tests and 13 integration tests using the actual SeaweedFS endpoint, disposable PostgreSQL databases, and ExifTool in Docker.

@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from photo_server.metadata import lens_display, technical_fields
 from photo_server.models import DurableModel, Location, Manifest, UserState
 
 
@@ -39,8 +40,7 @@ def browse_fields(manifest: Manifest) -> dict:
                 manifest.primary.original_filename,
                 metadata.get("Make", ""),
                 metadata.get("Model", ""),
-                metadata.get("LensModel", ""),
-                metadata.get("LensID", ""),
+                lens_display(metadata) or "",
                 manifest.user_state.caption,
                 " ".join(manifest.user_state.keywords),
                 manifest.user_state.location.name if manifest.user_state.location else "",
@@ -171,7 +171,8 @@ def asset_summary(row) -> dict:
         "height": metadata.get("ImageHeight"),
         "cameraMake": metadata.get("Make"),
         "cameraModel": metadata.get("Model"),
-        "lens": metadata.get("LensModel") or metadata.get("LensID"),
+        "lens": lens_display(metadata),
+        "technical": technical_fields(metadata),
         "sizeBytes": manifest.primary.size_bytes,
         "rating": row["rating"],
         "favorite": row["favorite"],

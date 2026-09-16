@@ -89,7 +89,7 @@ def test_storage_refuses_overwrite(backend):
     assert b"".join(storage.chunks("probe")) == b"first"
 
 
-def test_import_duplicate_retry_sidecar_and_empty_database_recovery(backend):
+def test_import_duplicate_retry_sidecar_and_postgres_authority(backend):
     service = backend.service
     original = photo(backend.root)
     sidecar = backend.root / "sample.xmp"
@@ -99,21 +99,19 @@ def test_import_duplicate_retry_sidecar_and_empty_database_recovery(backend):
     paths = [original.name, sidecar.name]
     result = service.import_batch(paths, operation)
     assert result["results"][0]["status"] == "imported", result
-    asset_id = result["results"][0]["assetId"]
     assert service.catalog.counts() == {"assets": 1, "blobs": 2}
     assert service.import_batch(paths, operation)["results"][0]["replayed"]
     assert service.import_batch(paths, uuid4())["results"][0]["status"] == "duplicate"
     assert len(list(service.storage.keys("originals/"))) == 2
+    assert list(service.storage.keys("state/")) == []
     fresh = backend.fresh_catalog()
     assert fresh.catalog.counts() == {"assets": 0, "blobs": 0}
-    assert fresh.recover(full=True) == {
-        "recovered": 1,
-        "albumsRecovered": 0,
-        "migrated": 0,
+    assert fresh.verify(full=True) == {
+        "assetsChecked": 0,
+        "blobsChecked": 0,
         "verification": "sha256",
         "errors": [],
     }
-    assert fresh.catalog.get(asset_id).document() == service.catalog.get(asset_id).document()
     assert (original.read_bytes(), sidecar.read_bytes()) == before
     photo(backend.root, color="blue")
     retry = service.import_batch(paths, operation)
@@ -121,43 +119,43 @@ def test_import_duplicate_retry_sidecar_and_empty_database_recovery(backend):
     assert "changed file content" in retry["results"][0]["error"]
 
 
-def test_crash_after_manifest_before_database_is_recoverable(backend, monkeypatch):
+def test_crash_after_original_before_database_reuses_immutable_object(backend, monkeypatch):
     service = backend.service
     path = photo(backend.root)
     operation = uuid4()
     with monkeypatch.context() as patch:
 
         def crash(_manifest):
-            raise RuntimeError("simulated database failure after S3 commit")
+            raise RuntimeError("simulated database failure after object commit")
 
         patch.setattr(service.catalog, "apply", crash)
         result = service.import_batch([path.name], operation)
     assert result["results"][0]["status"] == "failed"
     assert service.catalog.counts()["assets"] == 0
-    assert len(list(service.storage.keys("state/assets/"))) == 1
-    assert service.recover(full=True)["recovered"] == 1
+    assert len(list(service.storage.keys("originals/"))) == 1
+    assert list(service.storage.keys("state/")) == []
     retry = service.import_batch([path.name], operation)
-    assert retry["results"][0]["replayed"]
+    assert retry["results"][0]["status"] == "imported"
     assert service.catalog.counts()["assets"] == 1
 
 
-def test_crash_after_original_before_manifest_reuses_original(backend, monkeypatch):
+def test_changed_retry_cannot_replace_orphaned_original(backend, monkeypatch):
     service = backend.service
     path = photo(backend.root)
     operation = uuid4()
-    real_put = service.storage.put_json
     with monkeypatch.context() as patch:
-
-        def crash(key, value):
-            if key.startswith("state/assets/"):
-                raise RuntimeError("simulated process failure before manifest")
-            real_put(key, value)
-
-        patch.setattr(service.storage, "put_json", crash)
+        patch.setattr(
+            service.catalog,
+            "apply",
+            lambda _manifest: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+        )
         result = service.import_batch([path.name], operation)
     assert result["results"][0]["status"] == "failed"
     assert len(list(service.storage.keys("originals/"))) == 1
-    assert service.import_batch([path.name], operation)["results"][0]["status"] == "imported"
+    photo(backend.root, color="blue")
+    retry = service.import_batch([path.name], operation)
+    assert retry["results"][0]["status"] == "failed"
+    assert "Checksum verification failed" in retry["results"][0]["error"]
     assert len(list(service.storage.keys("originals/"))) == 1
 
 
@@ -172,7 +170,7 @@ def test_failed_raw_does_not_claim_companion_was_imported(backend):
     assert backend.service.catalog.counts()["assets"] == 0
 
 
-def test_corruption_is_detected_without_indexing_into_new_database(backend):
+def test_storage_verification_detects_corruption(backend):
     service = backend.service
     path = photo(backend.root)
     result = service.import_batch([path.name], uuid4())
@@ -182,27 +180,12 @@ def test_corruption_is_detected_without_indexing_into_new_database(backend):
     service.storage.client.put_object(
         Bucket=service.storage.bucket, Key=manifest.primary.object_key, Body=bytes(corrupted)
     )
-    fresh = backend.fresh_catalog()
-    result = fresh.recover(full=True)
-    assert result["recovered"] == 0
+    result = service.verify(full=True)
+    assert result["blobsChecked"] == 0
     assert "Checksum verification failed" in result["errors"][0]["error"]
-    assert fresh.catalog.counts()["assets"] == 0
 
 
-def test_newer_unsupported_manifest_does_not_fall_back(backend):
-    service = backend.service
-    result = service.import_batch([photo(backend.root).name], uuid4())
-    manifest = service.catalog.get(result["results"][0]["assetId"])
-    document = manifest.document()
-    document["revision"] = 2
-    document["schemaVersion"] = 999
-    service.storage.put_json(f"state/assets/{manifest.asset_id}/00000002.json", document)
-    fresh = backend.fresh_catalog()
-    assert fresh.recover()["errors"]
-    assert fresh.catalog.counts()["assets"] == 0
-
-
-def test_export_without_database_and_preview_cache_rebuild(backend, tmp_path):
+def test_database_backed_export_and_preview_cache_rebuild(backend, tmp_path):
     service = backend.service
     source = photo(backend.root)
     result = service.import_batch([source.name], uuid4())
@@ -213,16 +196,13 @@ def test_export_without_database_and_preview_cache_rebuild(backend, tmp_path):
     targets["thumbnail"].unlink()
     service.catalog.queue_preview(str(manifest.asset_id))
     assert run_once(service)["status"] == "ready"
-    broken_db = service.settings.model_copy(
-        update={"database_url": "postgresql+psycopg://invalid@localhost:1/absent"}
-    )
     destination = tmp_path / "export"
-    assert export_library(broken_db, destination)["exported"] == 1
+    assert export_library(service.settings, destination)["exported"] == 1
     exported = destination / str(manifest.asset_id) / source.name
     assert hashlib.sha256(exported.read_bytes()).hexdigest() == manifest.primary.sha256
 
 
-def test_api_upload_queue_onboarding_recovery_and_preview(backend):
+def test_api_upload_queue_onboarding_restart_and_preview(backend):
     from photo_server.api import create_app
 
     source = photo(backend.root)
@@ -261,11 +241,7 @@ def test_api_upload_queue_onboarding_recovery_and_preview(backend):
         assert client.get(f"/assets/{asset_id}/thumbnail").headers["content-type"] == "image/jpeg"
         assert client.post(f"/assets/{asset_id}/preview/retry").json()["status"] == "pending"
 
-    fresh = backend.fresh_catalog()
-    assert fresh.catalog.counts() == {"assets": 0, "blobs": 0}
-    replayed = run_once(fresh)
-    assert replayed["jobType"] == "onboarding" and replayed["replayed"]
-    assert replayed["assetId"] == asset_id
+    assert backend.service.catalog.counts() == {"assets": 1, "blobs": 1}
 
 
 def test_api_batch_does_not_request_raw_companions(backend):
@@ -387,7 +363,6 @@ def catalog_fixture(
         metadata={"Make": camera, "Model": "Camera", "LensModel": "35mm Prime"},
     )
     service.storage.put(blob.object_key, str(number).encode().ljust(100, b"0"), "image/jpeg")
-    service.storage.put_json(manifest.key, manifest.document())
     service.catalog.apply(manifest)
     return manifest
 
@@ -469,14 +444,13 @@ def test_browse_timeline_search_filters_and_cursor_stability(backend):
         )
 
 
-def test_ratings_favorites_survive_restart_reconcile_and_database_loss(backend):
+def test_ratings_favorites_survive_restart_and_storage_verify(backend):
     from photo_server.api import create_app
     from photo_server.models import UserState
 
     service = backend.service
     result = service.import_batch([photo(backend.root).name], uuid4())
     asset_id = result["results"][0]["assetId"]
-    original = service.catalog.get(asset_id)
     settings = service.settings.model_copy(update={"cors_origins": "http://library.example"})
     with TestClient(create_app(settings)) as client:
         assert client.get(f"/assets/{asset_id}").json()["userState"] == UserState().document()
@@ -512,16 +486,12 @@ def test_ratings_favorites_survive_restart_reconcile_and_database_loss(backend):
             preflight.status_code == 200
             and "DELETE" in preflight.headers["access-control-allow-methods"]
         )
-        assert client.post("/maintenance/reconcile").json()["errors"] == []
+        assert client.post("/maintenance/verify").json()["errors"] == []
     expected = UserState(rating=5, favorite=True).document()
     with TestClient(create_app(service.settings)) as client:
         assert client.get(f"/assets/{asset_id}").json()["userState"] == expected
         assert client.get("/library/assets?favorite=true&rating_min=5").json()["total"] == 1
-    assert service.storage.get_json(original.key) == original.document()
-    assert len(list(service.storage.keys(f"state/assets/{asset_id}/"))) == 3
-    recovered = backend.fresh_catalog()
-    assert recovered.recover()["errors"] == []
-    assert recovered.catalog.user_state(asset_id) == expected
+    assert list(service.storage.keys("state/")) == []
 
 
 def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend):

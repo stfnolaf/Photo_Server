@@ -297,7 +297,8 @@ function appendCard(item) {
   frame.append(element("span", "format-badge", item.mediaType));
   open.append(frame, element("span", "card-caption", item.originalFilename));
   const bottom = element("div", "card-bottom");
-  const description = element("span", "card-description", item.cameraModel ||
+  const equipment = [item.cameraModel, item.lens].filter(Boolean).join(" · ");
+  const description = element("span", "card-description", equipment ||
     `${formatDate(item.timelineTime)}${item.dateSource === "import" ? " · imported" : ""}`);
   description.title = description.textContent;
   const actions = element("div", "card-actions");
@@ -400,17 +401,27 @@ async function openViewer(assetId, replace = false, fromURL = false) {
 
 function renderMetadata(detail, primary) {
   const m = detail.metadata;
-  const exposure = Number(m.ExposureTime);
+  const technical = detail.technical || {};
+  const exposure = Number(technical.exposureTime ?? m.ExposureTime);
+  const shutter = exposure
+    ? exposure < 1 ? `1/${Math.round(1 / exposure)} s` : `${exposure} s`
+    : technical.shutterSpeed || m.ShutterSpeed;
   const fields = [
     ["Captured", formatDate(detail.captureTime, true)],
     ["Imported", formatDate(detail.importedAt, true)],
     ["Camera", [m.Make, m.Model].filter(Boolean).join(" · ")],
-    ["Lens", m.LensModel || m.LensID],
+    ["Lens", technical.lens || m.lensDisplay || m.LensModel || m.LensID],
     ["Dimensions", m.ImageWidth && m.ImageHeight ? `${m.ImageWidth} × ${m.ImageHeight}` : null],
-    ["Exposure", exposure ? exposure < 1 ? `1/${Math.round(1 / exposure)} s` : `${exposure} s` : null],
-    ["Aperture", m.FNumber ? `ƒ/${m.FNumber}` : null],
-    ["ISO", m.ISO],
-    ["Focal length", m.FocalLength ? `${m.FocalLength} mm` : null],
+    ["Shutter speed", shutter],
+    ["Aperture", technical.aperture ? `ƒ/${technical.aperture}` : null],
+    ["ISO", technical.iso],
+    ["Focal length", technical.focalLength ? `${technical.focalLength} mm` : null],
+    ["35mm equivalent", technical.focalLength35mm ? `${technical.focalLength35mm} mm` : null],
+    ["Exposure compensation", technical.exposureCompensation != null ? `${technical.exposureCompensation} EV` : null],
+    ["Exposure program", technical.exposureProgram],
+    ["Metering", technical.meteringMode],
+    ["Flash", technical.flash],
+    ["White balance", technical.whiteBalance],
     ["Location", m.GPSLatitude != null && m.GPSLongitude != null ? `${m.GPSLatitude}, ${m.GPSLongitude}` : null],
     ["File size", sizeLabel(primary.sizeBytes)],
     ["Sidecars", detail.blobs.filter((blob) => blob.role === "SIDECAR").map((blob) => blob.originalFilename).join(", ")],

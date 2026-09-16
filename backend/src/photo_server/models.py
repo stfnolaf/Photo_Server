@@ -56,6 +56,7 @@ class Mutation(DurableModel):
         "asset.delete",
         "asset.restore",
         "asset.migrate",
+        "asset.metadata",
         "album.create",
         "album.patch",
         "album.delete",
@@ -128,11 +129,6 @@ class Manifest(DurableModel):
     def primary(self) -> Blob:
         return next(blob for blob in self.blobs if blob.blob_id == self.primary_blob_id)
 
-    @property
-    def key(self) -> str:
-        return f"state/assets/{self.asset_id}/{self.revision:08d}.json"
-
-
 class Album(DurableModel):
     schema_version: Literal[1] = 1
     library_id: UUID
@@ -158,7 +154,3 @@ class Album(DurableModel):
         if len(set(self.asset_ids)) != len(self.asset_ids):
             raise ValueError("Album membership cannot contain duplicates")
         return self
-
-    @property
-    def key(self) -> str:
-        return f"state/albums/{self.album_id}/{self.revision:08d}.json"

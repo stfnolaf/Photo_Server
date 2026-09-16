@@ -1,11 +1,12 @@
+import json
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from photo_server.browsing import AlbumPatch, UserStatePatch
-from photo_server.models import Album, Blob, Manifest, Mutation
-from photo_server.state import asset_revision, histories
+from photo_server.metadata import extract, lens_display, technical_fields
 
 
 @pytest.mark.parametrize(
@@ -41,78 +42,71 @@ def test_album_patch_rejects_ambiguous_membership_and_empty_changes(changes):
         AlbumPatch(operation_id=uuid4(), **changes)
 
 
-class MemoryStorage:
-    def __init__(self, documents):
-        self.documents = documents
-
-    def keys(self, prefix):
-        return (key for key in self.documents if key.startswith(prefix))
-
-    def get_json(self, key):
-        return self.documents[key]
-
-
-def sample_manifest():
-    asset_id = uuid4()
-    blob = Blob(
-        blob_id=uuid4(),
-        role="ORIGINAL_JPEG",
-        original_filename="a.JPG",
-        object_key=f"originals/{asset_id}/a.JPG",
-        sha256="0" * 64,
-        size_bytes=1,
-        mime_type="image/jpeg",
-    )
-    return Manifest(
-        library_id=uuid4(),
-        asset_id=asset_id,
-        operation_id=uuid4(),
-        primary_blob_id=blob.blob_id,
-        blobs=[blob],
-        imported_at="2025-01-01T00:00:00Z",
-    )
-
-
 @pytest.mark.parametrize(
-    "corruption", ["gap", "original", "ancestry", "schema", "missing_state", "library"]
+    ("metadata", "expected"),
+    [
+        ({"LensModel": "FE 35mm F1.4 GM"}, "FE 35mm F1.4 GM"),
+        ({"LensMake": "Sigma", "LensType": "24-70mm F2.8 DG DN"}, "Sigma 24-70mm F2.8 DG DN"),
+        ({"LensID": "Canon EF 50mm f/1.8 STM"}, "Canon EF 50mm f/1.8 STM"),
+        ({"LensID": 0}, None),
+    ],
 )
-def test_history_integrity_errors_never_return_older_state(corruption):
-    original = sample_manifest()
-    revision = asset_revision(
-        original, uuid4(), Mutation(action="asset.patch", entity_id=original.asset_id)
-    )
-    document = revision.document()
-    key = revision.key
-    if corruption == "gap":
-        document.update(revision=3, previousRevision=2)
-        key = key.replace("00000002", "00000003")
-    elif corruption == "original":
-        document["blobs"][0]["sha256"] = "1" * 64
-    elif corruption == "ancestry":
-        document["previousRevision"] = None
-    elif corruption == "schema":
-        document["schemaVersion"] = 999
-    elif corruption == "library":
-        document["libraryId"] = str(uuid4())
-    else:
-        document.pop("userState")
-    storage = MemoryStorage({original.key: original.document(), key: document})
-    chains, errors = histories(storage, original.library_id, "assets")
-    assert chains == []
-    assert len(errors) == 1
+def test_lens_display_uses_camera_vendor_fallbacks(metadata, expected):
+    assert lens_display(metadata) == expected
 
 
-def test_album_history_validates_ancestry_and_key():
-    library_id, album_id = uuid4(), uuid4()
-    album = Album(
-        library_id=library_id,
-        album_id=album_id,
-        operation_id=uuid4(),
-        revision=1,
-        mutation=Mutation(action="album.create", entity_id=album_id),
-        name="Trip",
-    )
-    document = album.document()
-    document["previousRevision"] = 1
-    chains, errors = histories(MemoryStorage({album.key: document}), library_id, "albums")
-    assert not chains and errors
+def test_technical_fields_normalize_common_exposure_metadata():
+    assert technical_fields(
+        {
+            "LensModel": "35mm Prime",
+            "FNumber": 2.8,
+            "FocalLength": 35,
+            "FocalLengthIn35mmFormat": 52,
+            "ISO": 400,
+            "ExposureTime": 0.008,
+        }
+    ) == {
+        "lens": "35mm Prime",
+        "aperture": 2.8,
+        "focalLength": 35,
+        "focalLength35mm": 52,
+        "iso": 400,
+        "exposureTime": 0.008,
+        "shutterSpeed": None,
+        "exposureCompensation": None,
+        "exposureProgram": None,
+        "meteringMode": None,
+        "flash": None,
+        "whiteBalance": None,
+    }
+
+
+def test_extraction_requests_and_normalizes_lens_and_exposure_fields(tmp_path, monkeypatch):
+    path = tmp_path / "sample.JPG"
+    path.write_bytes(b"fixture")
+    recorded = {}
+    document = {
+        "SourceFile": str(path),
+        "FileType": "JPEG",
+        "MIMEType": "image/jpeg",
+        "LensMake": "Sigma",
+        "LensModel": "24-70mm F2.8 DG DN",
+        "FNumber": 2.8,
+        "FocalLength": 50,
+        "FocalLengthIn35mmFormat": 50,
+        "ISO": 800,
+        "ExposureTime": 0.004,
+    }
+
+    def run(arguments, **kwargs):
+        recorded["arguments"] = arguments
+        return SimpleNamespace(stdout=json.dumps([document]).encode())
+
+    monkeypatch.setattr("photo_server.metadata.subprocess.run", run)
+    metadata, mime = extract(path, "exiftool")
+    assert mime == "image/jpeg"
+    assert metadata["lensDisplay"] == "Sigma 24-70mm F2.8 DG DN"
+    assert technical_fields(metadata)["exposureTime"] == 0.004
+    assert "-LensSpecification" in recorded["arguments"]
+    assert "-FocalLengthIn35mmFormat#" in recorded["arguments"]
+    assert "-ExposureCompensation#" in recorded["arguments"]

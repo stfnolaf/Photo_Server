@@ -145,7 +145,7 @@ class Catalog:
 
     @contextmanager
     def writer(self):
-        # Serializes the CLI, API, and recovery against the same PostgreSQL database.
+        # Serializes CLI, API, and onboarding writers across processes.
         with self._writer_lock, self.engine.connect() as connection:
             connection.execute(text("SELECT pg_advisory_lock(7046868301)"))
             connection.commit()
@@ -263,6 +263,19 @@ class Catalog:
             )
             .on_conflict_do_nothing()
         )
+        if not existing or (manifest.mutation and manifest.mutation.action == "asset.metadata"):
+            # New imports already ran this stage locally. Worker reruns reach here
+            # through asset.metadata before the claimed job is marked ready.
+            connection.execute(
+                insert(jobs)
+                .values(
+                    asset_id=str(manifest.asset_id),
+                    job_type="metadata-v1",
+                    status="ready",
+                    attempts=1,
+                )
+                .on_conflict_do_nothing()
+            )
 
     def find_hash(self, digest: str) -> Manifest | None:
         with self.engine.connect() as connection:
@@ -382,33 +395,6 @@ class Catalog:
         state = Manifest.model_validate(row["manifest"]).user_state.document()
         return {**state, "rating": row["rating"], "favorite": row["favorite"]}
 
-    def legacy_states(self) -> list[tuple[Manifest, UserState]]:
-        with self.engine.connect() as connection:
-            rows = (
-                connection.execute(
-                    select(assets).where(
-                        assets.c.state_revision == 1,
-                        (assets.c.rating != 0) | assets.c.favorite,
-                    )
-                )
-                .mappings()
-                .all()
-            )
-        return [
-            (
-                Manifest.model_validate(row["manifest"]),
-                UserState(rating=row["rating"], favorite=row["favorite"]),
-            )
-            for row in rows
-        ]
-
-    def state_ids(self) -> dict[str, set[str]]:
-        with self.engine.connect() as connection:
-            return {
-                "assets": set(connection.scalars(select(assets.c.id))),
-                "albums": set(connection.scalars(select(albums.c.id))),
-            }
-
     def operation(self, operation_id: UUID) -> dict | None:
         with self.engine.connect() as connection:
             row = (
@@ -469,6 +455,9 @@ class Catalog:
                     changes["user_state"] = UserState.model_validate(
                         {**current.user_state.document(), **mutation.changes}
                     )
+                elif action == "metadata":
+                    changes["metadata"] = mutation.changes["metadata"]
+                    changes["capture_time"] = mutation.changes.get("captureTime")
                 elif action in {"delete", "restore"}:
                     changes["deleted_at"] = (
                         (current.deleted_at or datetime.now(UTC).isoformat())
@@ -577,26 +566,6 @@ class Catalog:
             raise LibraryError("Database library identity is missing")
         return UUID(value)
 
-    def record_operation(self, snapshot: Manifest | Album):
-        from photo_server.state import mutation_result
-
-        if snapshot.mutation is None:
-            return
-        values = dict(
-            id=str(snapshot.operation_id),
-            request=snapshot.mutation.document(),
-            result=mutation_result(snapshot),
-        )
-        with self.engine.begin() as connection:
-            connection.execute(insert(operations).values(**values).on_conflict_do_nothing())
-            row = (
-                connection.execute(select(operations).where(operations.c.id == values["id"]))
-                .mappings()
-                .one()
-            )
-            if dict(row) != values:
-                raise LibraryError(f"Conflicting operation ID: {snapshot.operation_id}")
-
     def get_album(self, album_id: str) -> Album | None:
         with self.engine.connect() as connection:
             value = connection.scalar(select(albums.c.state).where(albums.c.id == album_id))
@@ -620,10 +589,6 @@ class Catalog:
         with self.engine.connect() as connection:
             values = list(connection.scalars(select(albums.c.state).order_by(albums.c.id)))
         return [Album.model_validate(value) for value in values]
-
-    def apply_album(self, album: Album):
-        with self.engine.begin() as connection:
-            self._apply_album(connection, album)
 
     def _apply_album(self, connection, album: Album):
         current = connection.scalar(
@@ -683,6 +648,124 @@ class Catalog:
                 {"asset_id": row[0]},
             )
             return row[0]
+
+    def claim_processing_job(self) -> dict | None:
+        """Claim the next versioned processing stage before derived previews."""
+        from photo_server.processing import PROCESSING_JOB_TYPES
+
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(
+                    select(jobs.c.asset_id, jobs.c.job_type)
+                    .where(
+                        jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
+                        (jobs.c.status == "pending")
+                        | ((jobs.c.status == "running") & (jobs.c.lease_until < int(time()))),
+                    )
+                    .order_by(jobs.c.job_type, jobs.c.asset_id)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            connection.execute(
+                jobs.update()
+                .where(
+                    jobs.c.asset_id == row["asset_id"],
+                    jobs.c.job_type == row["job_type"],
+                )
+                .values(
+                    status="running",
+                    attempts=jobs.c.attempts + 1,
+                    lease_until=int(time()) + 900,
+                    error=None,
+                )
+            )
+            return dict(row)
+
+    def finish_processing_job(
+        self, asset_id: str, job_type: str, status: str, error: str | None = None
+    ):
+        with self.engine.begin() as connection:
+            connection.execute(
+                jobs.update()
+                .where(jobs.c.asset_id == asset_id, jobs.c.job_type == job_type)
+                .values(status=status, error=error, lease_until=None)
+            )
+
+    def queue_processing(
+        self,
+        asset_ids: list[str] | None,
+        job_types: list[str],
+        include_deleted: bool = False,
+    ) -> dict:
+        """Queue stages for explicit assets, or every eligible library asset."""
+        with self.engine.begin() as connection:
+            statement = select(assets.c.id)
+            if asset_ids is not None:
+                requested = set(asset_ids)
+                if not requested:
+                    raise LibraryError("Provide at least one asset ID or process the whole library")
+                selected = set(connection.scalars(statement.where(assets.c.id.in_(requested))))
+                missing = requested - selected
+                if missing:
+                    raise FileNotFoundError(f"Assets not found: {', '.join(sorted(missing))}")
+            else:
+                if not include_deleted:
+                    statement = statement.where(assets.c.deleted_at.is_(None))
+                selected = set(connection.scalars(statement))
+
+            queued = 0
+            already_running = 0
+            for asset_id in sorted(selected):
+                for job_type in job_types:
+                    current_status = connection.scalar(
+                        select(jobs.c.status)
+                        .where(
+                            jobs.c.asset_id == asset_id,
+                            jobs.c.job_type == job_type,
+                        )
+                        .with_for_update()
+                    )
+                    if current_status == "running":
+                        already_running += 1
+                        continue
+                    connection.execute(
+                        insert(jobs)
+                        .values(
+                            asset_id=asset_id,
+                            job_type=job_type,
+                            status="pending",
+                            attempts=0,
+                        )
+                        .on_conflict_do_update(
+                            index_elements=[jobs.c.asset_id, jobs.c.job_type],
+                            set_={"status": "pending", "error": None, "lease_until": None},
+                            where=jobs.c.status != "running",
+                        )
+                    )
+                    queued += 1
+        return {
+            "assets": len(selected),
+            "jobsQueued": queued,
+            "jobsAlreadyRunning": already_running,
+            "jobTypes": job_types,
+        }
+
+    def processing_status(self, asset_id: str) -> list[dict]:
+        from photo_server.processing import PROCESSING_JOB_TYPES
+
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(jobs.c.job_type, jobs.c.status, jobs.c.attempts, jobs.c.error).where(
+                    jobs.c.asset_id == asset_id,
+                    jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
+                )
+            ).mappings()
+            return [dict(row) for row in rows]
 
     def finish_job(self, asset_id: str, status: str, error: str | None = None):
         with self.engine.begin() as connection:
@@ -1035,6 +1118,8 @@ class Catalog:
             )
 
     def queue_counts(self) -> dict:
+        from photo_server.processing import PROCESSING_JOB_TYPES
+
         with self.engine.connect() as connection:
             return {
                 "uploadBatchesQueued": connection.scalar(
@@ -1056,5 +1141,29 @@ class Catalog:
                     select(func.count())
                     .select_from(onboarding_jobs)
                     .where(onboarding_jobs.c.status == "failed")
+                ),
+                "processingPending": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(
+                        jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
+                        jobs.c.status == "pending",
+                    )
+                ),
+                "processingRunning": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(
+                        jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
+                        jobs.c.status == "running",
+                    )
+                ),
+                "processingFailed": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(
+                        jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
+                        jobs.c.status == "failed",
+                    )
                 ),
             }

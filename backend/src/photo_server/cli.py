@@ -2,6 +2,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from uuid import UUID
 
 from photo_server.config import Settings
 from photo_server.export import export_library
@@ -20,6 +21,15 @@ def main():
         help="Download and hash every blob, in addition to checking its size",
     )
     commands.add_parser("list", help="List up to 100 indexed assets")
+    refresh = commands.add_parser(
+        "refresh-metadata", help="Queue metadata reprocessing from immutable originals"
+    )
+    refresh.add_argument(
+        "--asset", type=UUID, action="append", help="Asset to process; repeat for many"
+    )
+    refresh.add_argument(
+        "--include-deleted", action="store_true", help="Include trash when processing the library"
+    )
     export = commands.add_parser(
         "export", help="Export the PostgreSQL catalog and its original S3 objects"
     )
@@ -45,6 +55,12 @@ def main():
                 result = service.verify(args.full)
             elif args.command == "list":
                 result = service.catalog.list_assets()
+            elif args.command == "refresh-metadata":
+                result = service.queue_processing(
+                    args.asset,
+                    ["metadata"],
+                    args.include_deleted,
+                )
             else:
                 from photo_server.worker import run, run_once
 

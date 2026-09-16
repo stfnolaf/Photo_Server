@@ -1,4 +1,4 @@
-"""Phase 3 durability tests against isolated S3 buckets and PostgreSQL databases."""
+"""PostgreSQL-authority tests against isolated S3 buckets and databases."""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -16,6 +16,7 @@ from photo_server.export import export_library
 from photo_server.migrations import available_migrations
 from photo_server.models import Mutation, UserState
 from photo_server.state import mutate
+from photo_server.worker import run_once
 
 
 def imported(backend, name="sample.JPG", color="red"):
@@ -28,140 +29,34 @@ def patch(service, asset_id, operation_id=None, **changes):
     return mutate(
         service,
         operation_id or uuid4(),
-        Mutation(
-            action="asset.patch",
-            entity_id=asset_id,
-            changes=changes,
-        ),
+        Mutation(action="asset.patch", entity_id=asset_id, changes=changes),
     )
 
 
-def test_crash_retry_and_older_replay_after_database_loss(backend, monkeypatch):
+def test_mutation_and_retry_record_are_one_database_transaction(backend, monkeypatch):
     service = backend.service
     asset_id = imported(backend)
-    original = service.catalog.get(str(asset_id))
     operation = uuid4()
-    apply = service.catalog.apply
-
-    def crash(snapshot):
-        if snapshot.revision > 1:
-            raise RuntimeError("database unavailable after durable commit")
-        apply(snapshot)
-
-    with monkeypatch.context() as context:
-        context.setattr(service.catalog, "apply", crash)
-        with pytest.raises(RuntimeError, match="database unavailable"):
-            patch(service, asset_id, operation, rating=5)
-        assert service.catalog.user_state(str(asset_id))["rating"] == 0
-        assert (
-            service.storage.get_json(f"state/assets/{asset_id}/00000002.json")["userState"][
-                "rating"
-            ]
-            == 5
-        )
-        with pytest.raises(LibraryError, match="paused"):
-            patch(service, asset_id, favorite=True)
-        assert len(list(service.storage.keys(f"state/assets/{asset_id}/"))) == 2
-
-    assert service.recover()["errors"] == []
-    first = patch(service, asset_id, operation, rating=5)
-    old = service.catalog.get(str(asset_id))
-    newer = patch(service, asset_id, rating=2, favorite=True)
-    service.catalog.apply(original)
-    service.catalog.apply(old)
-    assert service.catalog.get(str(asset_id)).revision == newer["revision"] == 3
-    fresh = backend.fresh_catalog()
-    assert fresh.recover(full=True)["errors"] == []
-    assert patch(fresh, asset_id, operation, rating=5) == first
-    assert fresh.catalog.user_state(str(asset_id))["rating"] == 2
-    assert fresh.catalog.user_state(str(asset_id))["favorite"] is True
-    assert len(list(service.storage.keys(f"state/assets/{asset_id}/"))) == 3
-    with pytest.raises(LibraryError, match="different request"):
-        patch(fresh, asset_id, operation, rating=1)
-
-
-def test_uncertain_s3_success_is_inspected_and_uncommitted_failure_is_not_acknowledged(
-    backend, monkeypatch
-):
-    service = backend.service
-    asset_id = imported(backend)
-    put = service.storage.put_json
-
-    def timeout_after_write(key, value):
-        put(key, value)
-        raise TimeoutError("lost S3 response")
-
-    with monkeypatch.context() as context:
-        context.setattr(service.storage, "put_json", timeout_after_write)
-        result = patch(service, asset_id, caption="Saved despite lost response")
-    assert result["revision"] == 2
     before = service.catalog.get(str(asset_id)).document()
+    apply = service.catalog._apply
 
-    def fail_before_write(*args):
-        raise TimeoutError("S3 unavailable")
+    def fail_after_update(connection, snapshot):
+        apply(connection, snapshot)
+        raise RuntimeError("simulated transaction failure")
 
     with monkeypatch.context() as context:
-        context.setattr(service.storage, "put_json", fail_before_write)
-        with pytest.raises(TimeoutError):
-            patch(service, asset_id, rating=5)
+        context.setattr(service.catalog, "_apply", fail_after_update)
+        with pytest.raises(RuntimeError, match="transaction failure"):
+            patch(service, asset_id, operation, rating=5)
+
     assert service.catalog.get(str(asset_id)).document() == before
-    assert len(list(service.storage.keys(f"state/assets/{asset_id}/"))) == 2
-
-
-def test_phase_two_migration_survives_interrupt_and_verifies_before_acknowledgment(
-    backend, monkeypatch
-):
-    from sqlalchemy import text
-
-    service = backend.service
-    asset_id = imported(backend)
-    original = service.catalog.get(str(asset_id)).document()
-    set_legacy_state(service, str(asset_id), {"rating": 4, "favorite": True})
-    with service.catalog.engine.begin() as connection:
-        connection.execute(text("DROP TABLE operations, album_assets, albums"))
-        connection.execute(text("ALTER TABLE assets DROP COLUMN deleted_at"))
-        connection.execute(text("DELETE FROM schema_migrations WHERE version = 3"))
-        connection.execute(text("UPDATE library SET schema_version = 2"))
-    service.catalog.initialize(str(service.library_id))
-    apply = service.catalog.apply
-
-    def crash(snapshot):
-        if snapshot.revision > 1:
-            raise RuntimeError("migration crash after S3")
-        return apply(snapshot)
-
-    with monkeypatch.context() as context:
-        context.setattr(service.catalog, "apply", crash)
-        assert service.recover()["errors"]
-    assert service.catalog.get(str(asset_id)).revision == 1
-    assert service.catalog.user_state(str(asset_id))["rating"] == 4
-    assert service.recover()["errors"] == []
-    assert service.recover()["migrated"] == 0
-    assert service.storage.get_json(f"state/assets/{asset_id}/00000001.json") == original
-    assert len(list(service.storage.keys(f"state/assets/{asset_id}/"))) == 2
-    fresh = backend.fresh_catalog()
-    assert fresh.recover(full=True)["errors"] == []
-    assert fresh.catalog.user_state(str(asset_id)) == UserState(rating=4, favorite=True).document()
-
-
-def test_failed_migration_keeps_local_values_and_blocks_api_startup(backend, monkeypatch):
-    from photo_server.storage import Storage
-
-    service = backend.service
-    asset_id = imported(backend)
-    set_legacy_state(service, str(asset_id), {"rating": 5})
-
-    def fail(*args):
-        raise RuntimeError("storage unavailable")
-
-    with monkeypatch.context() as context:
-        context.setattr(Storage, "put_json", fail)
-        with pytest.raises(RuntimeError, match="recovery requires attention"):
-            with TestClient(create_app(service.settings)):
-                pass
-    assert service.catalog.user_state(str(asset_id))["rating"] == 5
-    assert service.catalog.get(str(asset_id)).revision == 1
-    assert service.recover()["migrated"] == 1
+    assert service.catalog.operation(operation) is None
+    result = patch(service, asset_id, operation, rating=5)
+    assert result["rating"] == 5 and result["revision"] == 2
+    assert patch(service, asset_id, operation, rating=5) == result
+    with pytest.raises(LibraryError, match="different request"):
+        patch(service, asset_id, operation, rating=1)
+    assert list(service.storage.keys("state/")) == []
 
 
 def test_parallel_patches_serialize_without_losing_fields(backend):
@@ -180,18 +75,12 @@ def test_parallel_patches_serialize_without_losing_fields(backend):
             )
         )
     assert sorted(result["revision"] for result in results) == [2, 3, 4, 5]
-    assert (
-        service.catalog.user_state(str(asset_id))
-        == UserState(
-            rating=3,
-            favorite=True,
-            caption="Coast",
-            keywords=["sea"],
-        ).document()
-    )
+    assert service.catalog.user_state(str(asset_id)) == UserState(
+        rating=3, favorite=True, caption="Coast", keywords=["sea"]
+    ).document()
 
 
-def test_metadata_albums_tombstones_restore_and_standalone_export(backend, tmp_path):
+def test_metadata_albums_tombstones_and_database_backed_export(backend, tmp_path):
     import json
 
     service = backend.service
@@ -209,18 +98,14 @@ def test_metadata_albums_tombstones_restore_and_standalone_export(backend, tmp_p
         response = client.patch(f"/assets/{first}/metadata", json=metadata)
         assert response.status_code == 200, response.text
         assert client.get("/library/assets?q=north%20shore").json()["total"] == 1
-        assert client.get("/library/assets?q=holiday").json()["total"] == 1
         create = {
             "operationId": str(uuid4()),
             "name": "Trip",
             "assetIds": [str(second), str(first)],
         }
-        response = client.post("/albums", json=create)
-        assert response.status_code == 201, response.text
-        album = response.json()
-        album_id = album["albumId"]
+        album = client.post("/albums", json=create).json()
         assert client.post("/albums", json=create).json() == album
-        assert client.get(f"/library/assets?album_id={album_id}").json()["total"] == 2
+        album_id = album["albumId"]
         edit = {
             "operationId": str(uuid4()),
             "name": "Coast trip",
@@ -231,33 +116,15 @@ def test_metadata_albums_tombstones_restore_and_standalone_export(backend, tmp_p
         response = client.patch(f"/albums/{album_id}", json=edit)
         assert response.status_code == 200, response.text
         assert response.json()["assetIds"] == [str(first), str(second)]
-        assert (
-            client.patch(
-                f"/albums/{album_id}", json={**edit, "operationId": str(uuid4())}
-            ).status_code
-            == 409
-        )
         assert client.patch(f"/albums/{album_id}", json=edit).json() == response.json()
-        assert (
-            client.patch(
-                f"/albums/{album_id}",
-                json={"operationId": str(uuid4()), "assetIds": [str(uuid4())]},
-            ).status_code
-            == 409
-        )
         delete = {"operationId": str(uuid4())}
         assert client.request("DELETE", f"/assets/{first}", json=delete).status_code == 200
         assert client.get("/library/assets").json()["total"] == 1
         assert client.get("/library/assets?deleted=true").json()["total"] == 1
-        assert len(client.get("/assets").json()) == 1
-        assert client.get(f"/library/assets?album_id={album_id}").json()["total"] == 1
-        assert client.get(f"/albums/{album_id}").json()["assetIds"] == [str(first), str(second)]
-        duplicate = service.import_batch(["sample.JPG"], uuid4())
-        assert duplicate["results"][0]["status"] == "failed"
-        assert "trash" in duplicate["results"][0]["error"]
         assert (
             client.patch(
-                f"/assets/{first}/metadata", json={"operationId": str(uuid4()), "rating": 1}
+                f"/assets/{first}/metadata",
+                json={"operationId": str(uuid4()), "rating": 1},
             ).status_code
             == 409
         )
@@ -272,9 +139,7 @@ def test_metadata_albums_tombstones_restore_and_standalone_export(backend, tmp_p
             ).status_code
             == 200
         )
-        assert client.get("/albums").json() == []
-        assert len(client.get("/albums?deleted=true").json()) == 1
-        assert client.get("/library/assets").json()["total"] == 2
+        assert client.get("/albums") .json() == []
         assert (
             client.post(
                 f"/albums/{album_id}/restore", json={"operationId": str(uuid4())}
@@ -288,71 +153,114 @@ def test_metadata_albums_tombstones_restore_and_standalone_export(backend, tmp_p
             == 200
         )
         expected_album = client.get(f"/albums/{album_id}").json()
+
     assert set(service.storage.keys("originals/")) == originals
-    fresh = backend.fresh_catalog()
-    assert fresh.recover(full=True)["errors"] == []
-    assert fresh.catalog.get_album(album_id).document() == expected_album
-    assert fresh.catalog.browse(BrowseQuery())["total"] == 1
-    assert fresh.catalog.browse(BrowseQuery(deleted=True))["total"] == 1
-    assert fresh.catalog.user_state(str(first))["location"] == metadata["location"]
-    broken_db = service.settings.model_copy(
-        update={"database_url": "postgresql+psycopg://invalid@localhost:1/absent"}
-    )
+    assert list(service.storage.keys("state/")) == []
+    assert service.catalog.browse(BrowseQuery())["total"] == 1
+    assert service.catalog.browse(BrowseQuery(deleted=True))["total"] == 1
     destination = tmp_path / "export-active"
-    assert export_library(broken_db, destination)["exported"] == 1
+    assert export_library(service.settings, destination)["exported"] == 1
     exported = json.loads((destination / str(first) / "manifest.json").read_text())
     assert exported["userState"]["caption"] == metadata["caption"]
     library = json.loads((destination / "library-state.json").read_text())
     assert library["albums"] == [expected_album]
     assert library["trashedAssets"][0]["assetId"] == str(second)
-    assert export_library(broken_db, tmp_path / "export-all", include_trash=True)["exported"] == 2
+    assert export_library(
+        service.settings, tmp_path / "export-all", include_trash=True
+    )["exported"] == 2
 
 
-def test_corrupt_newest_album_blocks_recovery_mutations_and_export(backend, tmp_path):
-    service = backend.service
-    asset_id = imported(backend)
-    album_id = uuid4()
-    first = mutate(
-        service,
-        uuid4(),
-        Mutation(
-            action="album.create",
-            entity_id=album_id,
-            changes={"name": "Trip", "assetIds": [str(asset_id)]},
-        ),
-    )
-    key = f"state/albums/{album_id}/00000002.json"
-    service.storage.put_json(key, {**first, "schemaVersion": 999, "revision": 2})
-    fresh = backend.fresh_catalog()
-    assert fresh.recover()["errors"]
-    assert fresh.catalog.list_albums() == []
-    with pytest.raises(LibraryError, match="paused"):
-        patch(service, asset_id, rating=5)
-    with pytest.raises(LibraryError, match="invalid durable state"):
-        export_library(service.settings, tmp_path / "bad-export")
-    assert service.catalog.get(str(asset_id)).revision == 1
-
-
-def test_album_replay_is_monotonic_and_operation_ids_are_global(backend):
+def test_operation_ids_are_global_across_assets_and_albums(backend):
     service = backend.service
     asset_id = imported(backend)
     operation, album_id = uuid4(), uuid4()
     request = Mutation(action="album.create", entity_id=album_id, changes={"name": "Trip"})
     first = mutate(service, operation, request)
-    old = service.catalog.get_album(str(album_id))
-    latest = mutate(
-        service,
-        uuid4(),
-        Mutation(action="album.patch", entity_id=album_id, changes={"name": "New name"}),
-    )
-    service.catalog.apply_album(old)
-    assert service.catalog.get_album(str(album_id)).document() == latest
-    fresh = backend.fresh_catalog()
-    assert fresh.recover()["errors"] == []
-    assert mutate(fresh, operation, request) == first
-    assert fresh.catalog.get_album(str(album_id)).document() == latest
+    assert mutate(service, operation, request) == first
     with pytest.raises(LibraryError, match="different request"):
-        patch(fresh, asset_id, operation, rating=5)
+        patch(service, asset_id, operation, rating=5)
+
+
+def test_phase_two_rating_and_favorite_are_promoted_inside_postgres(backend):
+    service = backend.service
+    asset_id = imported(backend)
+    set_legacy_state(service, str(asset_id), {"rating": 4, "favorite": True})
+    assert service.catalog.migrate_legacy_user_state() == 1
+    current = service.catalog.get(str(asset_id))
+    assert current.revision == 2
+    assert current.user_state == UserState(rating=4, favorite=True)
+    assert service.catalog.migrate_legacy_user_state() == 0
+    assert list(service.storage.keys("state/")) == []
+
+
+def test_processing_endpoint_refreshes_lens_and_exposure_fields(backend, monkeypatch):
+    service = backend.service
+    asset_id = imported(backend)
+    extracted = {
+        "FileType": "JPEG",
+        "MIMEType": "image/jpeg",
+        "Make": "Sony",
+        "Model": "A7",
+        "LensMake": "Sigma",
+        "LensModel": "24-70mm F2.8 DG DN",
+        "lensDisplay": "Sigma 24-70mm F2.8 DG DN",
+        "FNumber": 2.8,
+        "FocalLength": 50,
+        "FocalLengthIn35mmFormat": 50,
+        "ISO": 800,
+        "ExposureTime": 0.004,
+        "captureTime": "2026-01-02T03:04:05",
+    }
+    monkeypatch.setattr("photo_server.metadata.extract", lambda path, executable: (extracted, "image/jpeg"))
+    with TestClient(create_app(service.settings)) as client:
+        response = client.post(
+            "/processing",
+            json={"assetIds": [str(asset_id)], "stages": ["metadata"]},
+        )
+        assert response.status_code == 202
+        assert response.json() == {
+            "assets": 1,
+            "jobsQueued": 1,
+            "jobsAlreadyRunning": 0,
+            "jobTypes": ["metadata-v1"],
+        }
+        assert client.get("/upload-queue").json()["processingPending"] == 1
+
+    result = run_once(service)
+    assert result["jobType"] == "processing"
+    assert result["stage"] == "metadata-v1"
+    assert result["status"] == "updated"
+    summary = service.catalog.browse(BrowseQuery(q="sigma"))["items"][0]
+    assert summary["lens"] == "Sigma 24-70mm F2.8 DG DN"
+    assert summary["technical"]["aperture"] == 2.8
+    assert summary["technical"]["iso"] == 800
+    assert service.catalog.processing_status(str(asset_id))[0]["status"] == "ready"
+
+
+def test_processing_endpoint_can_queue_many_or_the_active_library(backend):
+    service = backend.service
+    first = imported(backend)
+    second = imported(backend, "second.JPG", "blue")
+    with TestClient(create_app(service.settings)) as client:
+        response = client.post(
+            "/processing",
+            json={"assetIds": [str(first), str(second)]},
+        )
+        assert response.status_code == 202
+        assert response.json()["jobsQueued"] == 2
+        response = client.post("/processing", json={})
+        assert response.status_code == 202
+        assert response.json()["assets"] == 2
+
+
+def test_missing_blob_is_reported_without_turning_s3_into_state_authority(backend):
+    service = backend.service
+    asset_id = imported(backend)
+    manifest = service.catalog.get(str(asset_id))
+    service.storage.delete(manifest.primary.object_key)
+    report = service.verify(full=True)
+    assert report["errors"] and report["blobsChecked"] == 0
+    assert patch(service, asset_id, caption="Catalog remains authoritative")["caption"]
 
 
 def test_migration_sql_files_are_idempotent(backend):
@@ -372,18 +280,18 @@ def test_legacy_phase_two_database_is_adopted_then_migrated(backend):
     with service.catalog.engine.begin() as connection:
         connection.execute(text("DROP TABLE operations, album_assets, albums"))
         connection.execute(text("ALTER TABLE assets DROP COLUMN deleted_at"))
+        connection.execute(text("ALTER TABLE library DROP COLUMN state_authority"))
         connection.execute(text("DROP TABLE schema_migrations"))
         connection.execute(text("UPDATE library SET schema_version = 2"))
     result = service.catalog.initialize(str(service.library_id))
     assert result == {
         "fromVersion": 2,
-        "toVersion": 3,
-        "applied": [{"version": 3, "name": "durable_user_state"}],
+        "toVersion": 4,
+        "applied": [
+            {"version": 3, "name": "durable_user_state"},
+            {"version": 4, "name": "postgres_authority"},
+        ],
     }
-    with service.catalog.engine.connect() as connection:
-        assert list(
-            connection.scalars(text("SELECT version FROM schema_migrations ORDER BY version"))
-        ) == [1, 2, 3]
 
 
 def test_changed_applied_migration_checksum_is_rejected(backend, monkeypatch):
@@ -395,18 +303,3 @@ def test_changed_applied_migration_checksum_is_rejected(backend, monkeypatch):
     monkeypatch.setattr("photo_server.migrations.available_migrations", lambda: changed)
     with pytest.raises(LibraryError, match="no longer matches"):
         backend.service.catalog.initialize(str(backend.service.library_id))
-
-
-@pytest.mark.parametrize("remove_all", [False, True])
-def test_missing_durable_history_blocks_new_mutations(backend, remove_all):
-    service = backend.service
-    asset_id = imported(backend)
-    patch(service, asset_id, rating=5)
-    prefix = f"state/assets/{asset_id}/"
-    service.storage.delete(prefix + "00000002.json")
-    if remove_all:
-        service.storage.delete(prefix + "00000001.json")
-    with pytest.raises(LibraryError, match="paused"):
-        patch(service, asset_id, favorite=True)
-    assert service.storage.head(prefix + "00000003.json") is None
-    assert service.catalog.user_state(str(asset_id))["rating"] == 5

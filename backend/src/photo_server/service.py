@@ -6,10 +6,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4, uuid5
 
-from photo_server import metadata
 from photo_server.catalog import Catalog
 from photo_server.config import LibraryError, Settings
 from photo_server.models import Blob, Manifest
+from photo_server.processing import STAGE_JOBS, extract_metadata
 from photo_server.selection import plan_import, role
 from photo_server.storage import CHUNK, Storage
 
@@ -118,6 +118,35 @@ class Service:
             "errors": errors,
         }
 
+    def backup_status(self) -> dict:
+        keys = list(self.storage.keys(self.settings.postgres_backup_prefix.rstrip("/") + "/"))
+        if not keys:
+            return {"postgresBackupKey": None, "postgresBackupAt": None}
+        key = max(keys)
+        head = self.storage.head(key)
+        modified = head.get("LastModified") if head else None
+        return {
+            "postgresBackupKey": key,
+            "postgresBackupAt": modified.isoformat() if modified else None,
+        }
+
+    def queue_processing(
+        self,
+        asset_ids: list[UUID] | None = None,
+        stages: list[str] | None = None,
+        include_deleted: bool = False,
+    ) -> dict:
+        """Queue reusable processing stages for selected assets or the library."""
+        selected_stages = list(dict.fromkeys(stages or STAGE_JOBS))
+        unknown = set(selected_stages) - set(STAGE_JOBS)
+        if unknown:
+            raise LibraryError(f"Unsupported processing stages: {', '.join(sorted(unknown))}")
+        return self.catalog.queue_processing(
+            [str(asset_id) for asset_id in asset_ids] if asset_ids is not None else None,
+            [STAGE_JOBS[stage] for stage in selected_stages],
+            include_deleted,
+        )
+
     def import_batch(self, paths: list[str], operation_id: UUID) -> dict:
         plan = self.plan(paths)
         with self.catalog.writer():
@@ -187,7 +216,7 @@ class Service:
                     )
                 status = "duplicate"
             else:
-                info, mime = metadata.extract(files[0][0], self.settings.exiftool)
+                info, mime = extract_metadata(self, files[0][0])
                 imported_blobs = []
                 for index, (path, digest, size) in enumerate(files):
                     blob = Blob(

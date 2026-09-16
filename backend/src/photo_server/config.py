@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     max_file_bytes: int = Field(default=512 * 1024 * 1024, ge=1)
     upload_workers: int = Field(default=4, ge=1, le=32)
     worker_threads: int = Field(default=4, ge=1, le=32)
+    postgres_backup_prefix: str = "backups/postgres"
     upload_part_bytes: int = Field(
         default=8 * 1024 * 1024,
         ge=5 * 1024 * 1024,

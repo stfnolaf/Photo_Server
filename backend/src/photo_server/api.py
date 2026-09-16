@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid5
 
@@ -11,6 +11,7 @@ from pydantic.alias_generators import to_camel
 
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
+from photo_server.metadata import technical_fields
 from photo_server.models import Mutation
 from photo_server.service import Service
 from photo_server.state import mutate
@@ -39,6 +40,18 @@ class UploadBatchRequest(BaseModel):
     files: list[UploadFileDeclaration] = Field(min_length=1, max_length=10000)
 
 
+class ProcessingRequest(BaseModel):
+    """Select processing stages and either explicit assets or the active library."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    asset_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=10000)
+    stages: list[Literal["metadata"]] = Field(
+        default_factory=lambda: ["metadata"], min_length=1
+    )
+    include_deleted: bool = False
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     service = Service(settings or Settings())
     upload_gate = UploadGate(service.settings.upload_workers)
@@ -51,7 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         service.catalog.engine.dispose()
 
-    app = FastAPI(title="Photo Server", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="Photo Server", version="0.5.0", lifespan=lifespan)
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -84,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             **service.catalog.counts(),
             **service.catalog.queue_counts(),
             **upload_gate.status(),
+            **service.backup_status(),
         }
 
     @app.post("/upload-batches", status_code=201)
@@ -151,9 +165,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         manifest = find(asset_id)
         return {
             **manifest.document(),
+            "technical": technical_fields(manifest.metadata),
+            "processing": service.catalog.processing_status(str(asset_id)),
             "preview": service.catalog.preview_status(str(asset_id)),
             "userState": service.catalog.user_state(str(asset_id)),
         }
+
+    @app.post("/processing", status_code=202)
+    def queue_processing(body: ProcessingRequest):
+        return service.queue_processing(
+            body.asset_ids,
+            body.stages,
+            body.include_deleted,
+        )
 
     @app.patch("/assets/{asset_id}/user-state")
     @app.patch("/assets/{asset_id}/metadata")

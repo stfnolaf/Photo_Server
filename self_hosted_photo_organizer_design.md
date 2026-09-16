@@ -1,5 +1,22 @@
 # Self-Hosted Photo Organizer: System Design
 
+## Current persistence decision (2026-09-16)
+
+This decision supersedes earlier sections of this document wherever they describe PostgreSQL as a disposable projection or per-asset/per-album JSON in S3 as canonical state. Those sections are retained as design history.
+
+- PostgreSQL is the single source of truth for all structured library state: assets, blob references, extracted metadata, ratings, captions, keywords, locations, albums, tombstones, operation retries, and queues.
+- S3 is the source of truth for immutable original bytes and imported sidecars. It also holds transient upload objects, generated artifacts when appropriate, and PostgreSQL backup files.
+- Normal imports and mutations do not create state manifests, revision histories, upload declarations, seal markers, or result receipts in S3.
+- Ingestion and reprocessing share versioned processing stages. New uploads run metadata extraction from their verified local file; `POST /processing` queues the same stage against immutable S3 originals for one, many, or all assets. PostgreSQL job types are the extension point for later face and object detection.
+- The bundled backup service writes hourly PostgreSQL custom-format dumps to S3 and retains 168 by default. This gives a one-hour default recovery-point objective; continuous WAL archiving is a future improvement.
+- Recovery restores PostgreSQL from a verified backup, verifies referenced S3 objects, and regenerates caches. An empty database cannot reconstruct library metadata from media objects alone.
+- A portable application export remains available, but it is an export artifact rather than a second live source of truth.
+- The S3/NAS system needs its own independent backup. Keeping the database dump beside the media protects against application-server/database-volume loss, not loss of that shared storage system.
+
+The current invariant is:
+
+> PostgreSQL says what the library is; S3 holds its files; tested backups protect both.
+
 ## 1. Purpose
 
 Build a self-hosted photo organizer for a large RAW-centric library without a subscription service.
@@ -21,9 +38,7 @@ The most important architectural invariant is:
 
 > The application server may be destroyed and rebuilt without losing irreplaceable library state.
 
-A second important invariant is:
-
-> PostgreSQL must make the library fast and useful, but it must not be the only map capable of identifying and recovering the objects stored in S3.
+A second important invariant is that a committed database record never reference unverified, mutable media bytes. Originals are written and verified under immutable S3 keys before the PostgreSQL asset transaction commits.
 
 ### V1 scope
 
@@ -35,7 +50,7 @@ A second important invariant is:
 - Use embedded RAW previews. Photo editing and RAW rendering are future work.
 - Keep stable IDs and storage boundaries that permit later scaling, but defer distributed coordination and multi-client behavior.
 
-The durability invariants describe the completed functionality. Phase 1 preserves originals and manifests; Phase 2 is a browsing prototype with local user metadata; Phase 3 makes that user metadata durable outside the app server.
+The durability guarantee now comes from PostgreSQL backup/restore plus immutable S3 originals, rather than application-maintained JSON mirrors.
 
 ### Development environment
 
@@ -1102,7 +1117,7 @@ ZFS snapshots are useful for accidental deletion and rollback but do not replace
 
 ## 25. PostgreSQL Backup Strategy
 
-There are three practical levels.
+PostgreSQL is canonical, so database backup is mandatory rather than an optimization. There are three practical levels.
 
 ### Level 1: periodic logical backup
 
@@ -1110,7 +1125,7 @@ There are three practical levels.
 pg_dump -> S3
 ```
 
-Simple and adequate early in development.
+Implemented: the Compose backup service creates a custom-format dump immediately and hourly, stores its SHA-256 in S3 object metadata, retains 168 backups, and provides a guarded restore command. The default RPO is one hour while backup and S3 remain healthy.
 
 ### Level 2: periodic physical base backups
 
@@ -1120,9 +1135,7 @@ Better for larger databases and faster recovery.
 
 Allows point-in-time recovery and minimizes metadata loss.
 
-WAL archiving is optional in V1 and can reduce the work needed to restore the database. Archiving may lag committed transactions; durable S3 revisions provide preservation of acknowledged human changes from Phase 3 onward. Database backups accelerate restoration, followed by reconciliation of any newer S3 state.
-
-Even with WAL archiving, the S3-native durable state remains valuable because it prevents PostgreSQL from becoming the only semantic map of the library.
+WAL archiving is not implemented yet. It is the next step if the one-hour logical-backup RPO is insufficient. Because there is no second live state representation, changes committed after the newest usable backup are not recoverable after total PostgreSQL-volume loss.
 
 ---
 
@@ -1135,7 +1148,7 @@ Expected result:
 ```text
 reinstall app
 connect to S3
-restore or rebuild PostgreSQL
+restore PostgreSQL backup
 regenerate caches
 resume
 ```
@@ -1148,8 +1161,7 @@ Expected result:
 
 ```text
 restore DB backup
-or
-create empty DB and rebuild from S3
+verify referenced S3 objects
 ```
 
 ### Thumbnail cache disappears
@@ -1793,22 +1805,22 @@ Expected: the committed change survives, its retry does not apply it again, and 
 | Original storage | SeaweedFS S3 on TrueNAS/ZFS |
 | Original mutation | Immutable after import |
 | Asset identity | UUID/ULID, independent of filename |
-| Manifest | One logical asset with a list of owned blobs, hashes, and original filenames |
+| Asset record | PostgreSQL snapshot with owned blobs, hashes, original filenames, and metadata |
 | Import selection | Prefer one RAW over same-stem JPEG/HEIF in the same folder and batch |
 | Exact duplicates | Reuse the existing active asset; no blobs shared between distinct assets |
 | V1 previews | Embedded RAW previews; decode standalone JPEG/HEIF; no RAW rendering |
 | Photo editing | Deferred; V1 metadata only |
 | Live database | PostgreSQL on app-server local NVMe |
-| DB durability | Durable user state from Phase 3; DB backups in Phase 4; WAL optional |
-| DB role | Fast relational/indexed view, not sole recovery map |
-| Durable metadata | Canonical revisioned JSON in S3; XMP optional for metadata export |
+| DB durability | Hourly custom-format backup to S3; 168 retained; WAL future work |
+| DB role | Single source of truth for structured library state |
+| Durable metadata | Canonical PostgreSQL records; XMP optional for metadata export |
 | AI/face output | S3, indexed by PostgreSQL |
 | Thumbnails/cache | Local app-server NVMe, regenerable |
 | Human RW NAS access | Separate import share only |
 | S3 backing storage | Never manually mutated over SMB |
 | SeaweedFS deployment | Persistent NAS paths for storage/catalog/configuration; verify container recreation |
 | NAS disaster recovery | Independent backup deferred in V1 |
-| Export | Supported through S3 API and app-level human-friendly export |
+| Export | Database-backed app export with S3 checksum verification |
 | Scale-out | Hidden behind S3; SeaweedFS/worker concern |
 | Internet access | Through photo API, not directly to storage |
 | Disaster-recovery target | App server may be wiped without losing durable state |
@@ -1824,14 +1836,14 @@ The system has three layers.
           Photo API / UI / search / jobs
                         |
                         v
-                 INDEXING LAYER
+               STRUCTURED STATE
                     PostgreSQL
-             fast, relational, rebuildable
+          canonical, relational, backed up
                         |
                         v
-                 DURABLE LAYER
+                  FILE LAYER
                 SeaweedFS / S3
-        originals + durable state + AI output
+       originals + sidecars + DB backups
                         |
                         v
                     TrueNAS/ZFS
@@ -1839,11 +1851,11 @@ The system has three layers.
 
 PostgreSQL answers:
 
-> "What photos match this query right now?"
+> "What is in this library, and what matches this query?"
 
 S3 answers:
 
-> "What durable objects and state does this library actually contain?"
+> "Where are the immutable file bytes and database backups?"
 
 ZFS answers:
 
@@ -1857,8 +1869,8 @@ The design should preserve this separation.
 
 If the application server disappears, the durable library remains.
 
-If PostgreSQL disappears, the durable library can reconstruct it.
+If the PostgreSQL volume disappears, restore the newest verified database backup from S3.
 
-If the application is abandoned, S3 still exposes the original bytes.
+If the application is abandoned, S3 still exposes original bytes and PostgreSQL can be restored with standard tools. A portable export should be created before abandoning the application if ordinary filesystem metadata is desired.
 
 If additional compute or storage is added later, it can join behind existing S3 and API boundaries without changing the identity of the photo library.
