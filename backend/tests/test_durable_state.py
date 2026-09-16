@@ -221,6 +221,7 @@ def test_processing_endpoint_refreshes_lens_and_exposure_fields(backend, monkeyp
         assert response.json() == {
             "assets": 1,
             "jobsQueued": 1,
+            "jobsAlreadyQueued": 0,
             "jobsAlreadyRunning": 0,
             "jobTypes": ["metadata-v1"],
         }
@@ -251,6 +252,8 @@ def test_processing_endpoint_can_queue_many_or_the_active_library(backend):
         response = client.post("/processing", json={})
         assert response.status_code == 202
         assert response.json()["assets"] == 2
+        assert response.json()["jobsQueued"] == 0
+        assert response.json()["jobsAlreadyQueued"] == 2
 
 
 def test_missing_blob_is_reported_without_turning_s3_into_state_authority(backend):
@@ -286,10 +289,12 @@ def test_legacy_phase_two_database_is_adopted_then_migrated(backend):
     result = service.catalog.initialize(str(service.library_id))
     assert result == {
         "fromVersion": 2,
-        "toVersion": 4,
+        "toVersion": 6,
         "applied": [
             {"version": 3, "name": "durable_user_state"},
             {"version": 4, "name": "postgres_authority"},
+            {"version": 5, "name": "ai_analysis"},
+            {"version": 6, "name": "abandoned_upload_cleanup"},
         ],
     }
 

@@ -90,11 +90,13 @@ The relevant queue settings are:
 | `PHOTO_MAX_BATCH_FILES` | 1000 | Maximum declarations in one complete batch |
 | `PHOTO_MAX_FILE_BYTES` | 512 MiB | Maximum size of one uploaded file |
 | `PHOTO_UPLOAD_WORKERS` | 4 | Simultaneous API-to-S3 transfers; extra requests wait asynchronously |
+| `PHOTO_UPLOAD_ABANDON_SECONDS` | 86400 | Idle time before an unsealed upload and its staging objects are discarded |
 | `PHOTO_WORKER_THREADS` | 4 | Concurrent onboarding/preview jobs in the worker process |
 | `PHOTO_UPLOAD_PART_BYTES` | 8 MiB | Memory and S3 multipart chunk size per active upload |
 | `PHOTO_AI_MODEL` | `qwen3-vl:8b-instruct-q4_K_M` | Local Ollama vision model and quantization |
 | `PHOTO_AI_CONTEXT_TOKENS` | 4096 | Bounded VLM context to retain GPU headroom |
-| `PHOTO_AI_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to AdaFace and Qwen |
+| `PHOTO_AI_FACE_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to YuNet/AdaFace |
+| `PHOTO_AI_VLM_MAX_IMAGE_SIDE` | 1280 | Longest image edge supplied to Qwen |
 | `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into the AI worker |
 | `PHOTO_FACE_DETECTION_THRESHOLD` | 0.8 | YuNet face detection threshold |
 | `PHOTO_FACE_MATCH_THRESHOLD` | 0.4 | AdaFace centroid similarity starting point |
@@ -158,6 +160,8 @@ accepting -> queued -> processing -> complete
 
 PostgreSQL preserves queue state across service restarts. A staged or final object written immediately before a process failure is safely reused on retry because object keys are immutable and bytes are verified. Recovery after PostgreSQL loss uses a database backup; uploads newer than the restored backup may need to be resubmitted.
 
+Unsealed batches with no activity for `PHOTO_UPLOAD_ABANDON_SECONDS` are automatically removed from PostgreSQL and S3 staging. The web queue's **Dismiss** action performs the same cleanup immediately after active transfers stop. Sealed batches are never removed by this cleanup, including failed onboarding batches that remain available for retry.
+
 ## API
 
 Use `/docs` for the full schemas.
@@ -165,9 +169,11 @@ Use `/docs` for the full schemas.
 | Endpoint | Purpose |
 |---|---|
 | `POST /upload-batches` | Declare a complete batch and receive per-file upload URLs |
+| `GET /upload-batches` | List active and failed batches for queue recovery after a page reload |
 | `PUT /upload-batches/{batch}/files/{file}` | Stream one required file to durable S3 staging |
 | `POST /upload-batches/{batch}/seal` | Close uploads and enqueue background onboarding |
 | `GET /upload-batches/{batch}` | Inspect file/job status and results |
+| `DELETE /upload-batches/{batch}` | Discard an inactive, unsealed batch and its staged data |
 | `POST /upload-batches/{batch}/retry` | Requeue failed onboarding jobs |
 | `GET /upload-queue` | Inspect active/waiting transfers and durable job counts |
 | `GET /assets?limit=100&offset=0` | List paginated asset records |

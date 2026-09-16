@@ -13,7 +13,7 @@ from PIL import Image, ImageOps
 from photo_server.models import Manifest
 from photo_server.processing import run_stage
 from photo_server.service import Service
-from photo_server.uploads import process_onboarding_job
+from photo_server.uploads import cleanup_abandoned_batches, process_onboarding_job
 
 pillow_heif.register_heif_opener()
 
@@ -151,13 +151,25 @@ def _worker_loop(service: Service):
             time.sleep(2)
 
 
+def _cleanup_loop(service: Service):
+    while True:
+        try:
+            result = cleanup_abandoned_batches(service)
+            if result["batchesDeleted"]:
+                print(json.dumps({"status": "upload_cleanup", **result}), flush=True)
+        except Exception as error:
+            print(json.dumps({"status": "upload_cleanup_error", "error": str(error)}), flush=True)
+        time.sleep(60)
+
+
 def run(service: Service):
     with ThreadPoolExecutor(
-        max_workers=service.settings.worker_threads,
+        max_workers=service.settings.worker_threads + 1,
         thread_name_prefix="photo-worker",
     ) as executor:
         futures = [
             executor.submit(_worker_loop, service) for _ in range(service.settings.worker_threads)
         ]
+        futures.append(executor.submit(_cleanup_loop, service))
         for future in futures:
             future.result()

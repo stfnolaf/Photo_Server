@@ -229,10 +229,15 @@ def test_api_upload_queue_onboarding_restart_and_preview(backend):
         assert client.put(upload["uploadUrl"], content=source.read_bytes()).status_code == 200
         response = client.post(f"/upload-batches/{batch_id}/seal")
         assert response.status_code == 202 and response.json()["status"] == "queued"
+        listed = client.get("/upload-batches").json()
+        assert [(batch["batchId"], batch["status"]) for batch in listed] == [
+            (str(batch_id), "queued")
+        ]
+        assert client.delete(f"/upload-batches/{batch_id}").status_code == 409
         assert client.get("/upload-queue").json()["onboardingPending"] == 1
 
         onboarded = run_once(backend.service)
-        assert onboarded["jobType"] == "onboarding" and onboarded["status"] == "imported"
+        assert onboarded["jobType"] == "onboarding" and onboarded["status"] == "imported", onboarded
         asset_id = onboarded["assetId"]
         assert client.get(f"/upload-batches/{batch_id}").json()["status"] == "complete"
         assert client.get("/assets").json()[0]["assetId"] == asset_id
@@ -243,6 +248,50 @@ def test_api_upload_queue_onboarding_restart_and_preview(backend):
         assert client.post(f"/assets/{asset_id}/preview/retry").json()["status"] == "pending"
 
     assert backend.service.catalog.counts() == {"assets": 1, "blobs": 1}
+
+
+def test_unsealed_uploads_can_be_discarded_or_expire(backend):
+    from sqlalchemy import text
+
+    from photo_server.api import create_app
+    from photo_server.uploads import cleanup_abandoned_batches
+
+    source = photo(backend.root)
+
+    def start_and_upload(client, batch_id):
+        response = client.post(
+            "/upload-batches",
+            json={
+                "batchId": str(batch_id),
+                "files": [{"path": source.name, "sizeBytes": source.stat().st_size}],
+            },
+        )
+        upload = response.json()["files"][0]
+        assert client.put(upload["uploadUrl"], content=source.read_bytes()).status_code == 200
+        assert list(backend.service.storage.keys(f"incoming/{batch_id}/"))
+
+    with TestClient(create_app(backend.service.settings)) as client:
+        discarded = uuid4()
+        start_and_upload(client, discarded)
+        assert client.get("/upload-batches").json()[0]["batchId"] == str(discarded)
+        response = client.delete(f"/upload-batches/{discarded}")
+        assert response.status_code == 200
+        assert response.json()["status"] == "deleted"
+        assert backend.service.catalog.upload_batch(discarded) is None
+        assert client.get("/upload-batches").json() == []
+        assert list(backend.service.storage.keys(f"incoming/{discarded}/")) == []
+
+        expired = uuid4()
+        start_and_upload(client, expired)
+        with backend.service.catalog.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE upload_batches SET updated_at = 0 WHERE id = :id"),
+                {"id": str(expired)},
+            )
+        result = cleanup_abandoned_batches(backend.service)
+        assert result["batchesDeleted"] == 1
+        assert backend.service.catalog.upload_batch(expired) is None
+        assert list(backend.service.storage.keys(f"incoming/{expired}/")) == []
 
 
 def test_ai_analysis_is_separate_searchable_durable_and_requeueable(backend):
@@ -304,6 +353,10 @@ def test_ai_analysis_is_separate_searchable_durable_and_requeueable(backend):
         assert queued.status_code == 202 and queued.json()["jobsQueued"] == 1
         refreshed = client.get(f"/assets/{asset_id}").json()["analysis"]
         assert refreshed["status"] == "pending" and refreshed["runId"] == run_id
+        duplicate = client.post(f"/assets/{asset_id}/analysis/retry")
+        assert duplicate.status_code == 202
+        assert duplicate.json()["jobsQueued"] == 0
+        assert duplicate.json()["jobsAlreadyQueued"] == 1
 
 
 def test_api_batch_does_not_request_raw_companions(backend):

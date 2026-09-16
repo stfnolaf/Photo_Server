@@ -194,3 +194,64 @@ export interface PendingMutation {
   method: MutationMethod;
   body: Record<string, unknown> & { operationId: string };
 }
+
+export type UploadBatchStatus = "accepting" | "queued" | "processing" | "complete" | "failed";
+export type UploadFileStatus =
+  | "waiting"
+  | "uploading"
+  | "uploaded"
+  | "skipped"
+  | "queued"
+  | "processing"
+  | "imported"
+  | "duplicate"
+  | "failed";
+
+export interface UploadBatchFile {
+  fileId: string;
+  path: string;
+  sizeBytes: number;
+  mimeType: string | null;
+  required: boolean;
+  status: UploadFileStatus;
+  reason: string | null;
+  assetId: string | null;
+  error: string | null;
+  uploadUrl: string | null;
+}
+
+export interface UploadBatchJob {
+  jobId: string;
+  status: "pending" | "running" | "complete" | "failed";
+  attempts: number;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export interface UploadBatch {
+  batchId: string;
+  status: UploadBatchStatus;
+  createdAt: number;
+  sealedAt: number | null;
+  files: UploadBatchFile[];
+  jobs: UploadBatchJob[];
+}
+
+export interface UploadQueueStatus {
+  uploadWorkers: number;
+  uploadsActive: number;
+  uploadsWaiting: number;
+  uploadBatchesQueued: number;
+  onboardingPending: number;
+  onboardingRunning: number;
+  onboardingFailed: number;
+  processingPending: number;
+  processingRunning: number;
+  processingFailed: number;
+  previewPending: number;
+  previewRunning: number;
+  previewFailed: number;
+  analysisPending: number;
+  analysisRunning: number;
+  analysisFailed: number;
+}

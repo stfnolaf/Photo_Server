@@ -28,6 +28,7 @@ export function PhotoInspector({
 }) {
   const primary = primaryBlob(detail);
   const deleted = Boolean(detail.deletedAt);
+  const analysisActive = detail.analysis.status === "pending" || detail.analysis.status === "running";
   const metadataRows = technicalRows(detail).filter((row): row is [string, string] => Boolean(row[1]));
   return (
     <aside className="photo-inspector" aria-label="Photo information and organization">
@@ -77,8 +78,17 @@ export function PhotoInspector({
           ) : detail.analysis.status === "missing" ? (
             <p className="inspector-note">This photograph has not been analyzed.</p>
           ) : null}
-          <Button compact disabled={busy || detail.analysis.status === "running"} onClick={onReanalyze}>
-            <RefreshCw size={13} /> {detail.analysis.result ? "Analyze again" : detail.analysis.status === "failed" ? "Retry analysis" : "Queue analysis"}
+          <Button compact disabled={busy || analysisActive} onClick={onReanalyze}>
+            <RefreshCw className={detail.analysis.status === "running" ? "spin" : undefined} size={13} />
+            {detail.analysis.status === "pending"
+              ? "Queued for GPU analysis"
+              : detail.analysis.status === "running"
+                ? "Analysis in progress"
+                : detail.analysis.result
+                  ? "Analyze again"
+                  : detail.analysis.status === "failed"
+                    ? "Retry analysis"
+                    : "Queue analysis"}
           </Button>
         </div>
       </PanelSection>

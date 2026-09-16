@@ -8,6 +8,8 @@ import type {
   PhotoDetail,
   PendingMutation,
   PreviewStatus,
+  UploadBatch,
+  UploadQueueStatus,
 } from "./types";
 
 const API_ROOT = import.meta.env.VITE_API_ROOT ?? "/api";
@@ -46,6 +48,20 @@ export async function request<T>(
   return response.json() as Promise<T>;
 }
 
+function uploadError(status: number, responseText: string): ApiError {
+  let message = status ? `Upload failed (${status}).` : "The upload connection was interrupted.";
+  try {
+    const body = JSON.parse(responseText) as { detail?: string | Array<{ msg?: string }> };
+    if (typeof body.detail === "string") message = body.detail;
+    if (Array.isArray(body.detail)) {
+      message = body.detail.map((item) => item.msg ?? "Invalid value").join("; ");
+    }
+  } catch {
+    // Keep the useful transport-level fallback for non-JSON proxy responses.
+  }
+  return new ApiError(message, status);
+}
+
 export const api = {
   health: (signal?: AbortSignal) => request<Health>("/health", { signal }),
 
@@ -79,6 +95,60 @@ export const api = {
     return request<BrowsePage>(`/library/assets?${params}`, { signal });
   },
 
+  createUploadBatch: (
+    batchId: string,
+    files: Array<{ path: string; sizeBytes: number; mimeType: string }>,
+  ) =>
+    request<UploadBatch>("/upload-batches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ batchId, files }),
+    }),
+
+  uploadFile: (
+    path: string,
+    file: File,
+    onProgress: (progress: number) => void,
+  ) => new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", apiUrl(path));
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.upload.addEventListener("progress", (event) => {
+      onProgress(Math.min(1, event.loaded / file.size));
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(1);
+        resolve();
+      } else {
+        reject(uploadError(xhr.status, xhr.responseText));
+      }
+    });
+    xhr.addEventListener("error", () => reject(uploadError(xhr.status, xhr.responseText)));
+    xhr.addEventListener("abort", () => reject(new ApiError("Upload was cancelled.", 0)));
+    xhr.send(file);
+  }),
+
+  uploadBatch: (batchId: string, signal?: AbortSignal) =>
+    request<UploadBatch>(`/upload-batches/${batchId}`, { signal }),
+
+  activeUploadBatches: (signal?: AbortSignal) =>
+    request<UploadBatch[]>("/upload-batches", { signal }),
+
+  uploadQueue: (signal?: AbortSignal) =>
+    request<UploadQueueStatus>("/upload-queue", { signal }),
+
+  sealUploadBatch: (batchId: string) =>
+    request<UploadBatch>(`/upload-batches/${batchId}/seal`, { method: "POST" }),
+
+  retryUploadBatch: (batchId: string) =>
+    request<UploadBatch>(`/upload-batches/${batchId}/retry`, { method: "POST" }),
+
+  abandonUploadBatch: (batchId: string) =>
+    request<{ batchId: string; status: "deleted" }>(`/upload-batches/${batchId}`, {
+      method: "DELETE",
+    }),
+
   sendMutation: <T>(pending: PendingMutation) =>
     request<T>(pending.path, {
       method: pending.method,
@@ -92,7 +162,7 @@ export const api = {
     }),
 
   reanalyze: (assetId: string) =>
-    request<{ assets: number; jobsQueued: number }>(`/assets/${assetId}/analysis/retry`, {
+    request<{ assets: number; jobsQueued: number; jobsAlreadyQueued: number; jobsAlreadyRunning: number }>(`/assets/${assetId}/analysis/retry`, {
       method: "POST",
     }),
 };

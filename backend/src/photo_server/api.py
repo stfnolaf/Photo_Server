@@ -25,8 +25,10 @@ from photo_server.service import Service
 from photo_server.state import mutate
 from photo_server.uploads import (
     UploadGate,
+    abandon_batch,
     create_batch,
     describe_batch,
+    list_active_batches,
     receive_file,
     seal_batch,
 )
@@ -150,9 +152,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             body.batch_id,
         )
 
+    @app.get("/upload-batches")
+    def get_active_upload_batches(limit: int = Query(default=100, ge=1, le=1000)):
+        return list_active_batches(service, limit)
+
     @app.get("/upload-batches/{batch_id}")
     def get_upload_batch(batch_id: UUID):
         return describe_batch(service, batch_id)
+
+    @app.delete("/upload-batches/{batch_id}")
+    def discard_upload_batch(batch_id: UUID):
+        return abandon_batch(service, batch_id)
 
     @app.put("/upload-batches/{batch_id}/files/{file_id}")
     async def upload_file(batch_id: UUID, file_id: UUID, request: Request):

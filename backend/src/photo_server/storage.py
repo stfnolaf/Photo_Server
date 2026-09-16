@@ -95,6 +95,24 @@ class Storage:
     def delete(self, key: str):
         self.client.delete_object(Bucket=self.bucket, Key=key)
 
+    def abort_multipart_uploads(self, prefix: str) -> int:
+        """Abort incomplete multipart uploads below a staging prefix."""
+        aborted = 0
+        request = {"Bucket": self.bucket, "Prefix": prefix}
+        while True:
+            response = self.client.list_multipart_uploads(**request)
+            for upload in response.get("Uploads", []):
+                self.client.abort_multipart_upload(
+                    Bucket=self.bucket,
+                    Key=upload["Key"],
+                    UploadId=upload["UploadId"],
+                )
+                aborted += 1
+            if not response.get("IsTruncated"):
+                return aborted
+            request["KeyMarker"] = response["NextKeyMarker"]
+            request["UploadIdMarker"] = response["NextUploadIdMarker"]
+
     def chunks(self, key: str):
         with closing(self.client.get_object(Bucket=self.bucket, Key=key)["Body"]) as body:
             while chunk := body.read(CHUNK):

@@ -65,3 +65,19 @@ def test_s3_credentials_are_loaded_from_dotenv(monkeypatch, tmp_path):
     assert captured["aws_secret_access_key"] == "unit-test-secret"
     assert captured["aws_session_token"] == "unit-test-session"
     assert "unit-test-secret" not in repr(settings)
+
+
+def test_ai_image_sizes_have_separate_environment_overrides(monkeypatch, tmp_path):
+    clear_credentials(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text(
+        "PHOTO_AI_FACE_MAX_IMAGE_SIDE=1800\n"
+        "PHOTO_AI_VLM_MAX_IMAGE_SIDE=1024\n"
+    )
+    settings = Settings(
+        _env_file=env,
+        s3_endpoint="http://localhost:9000",
+        database_url="postgresql+psycopg://test@localhost/test",
+    )
+    assert settings.ai_face_max_image_side == 1800
+    assert settings.ai_vlm_max_image_side == 1024

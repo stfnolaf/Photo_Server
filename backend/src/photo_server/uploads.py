@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from time import time
 from uuid import UUID, uuid4, uuid5
 
 from botocore.exceptions import ClientError
@@ -148,6 +149,10 @@ def describe_batch(service, batch_id: UUID | str) -> dict:
             for row in value["jobs"]
         ],
     }
+
+
+def list_active_batches(service, limit: int = 100) -> list[dict]:
+    return [describe_batch(service, batch_id) for batch_id in service.catalog.active_upload_batch_ids(limit)]
 
 
 async def receive_file(
@@ -299,6 +304,45 @@ def seal_batch(service, batch_id: UUID) -> dict:
     )
     service.catalog.seal_upload_batch(batch_id, plan)
     return describe_batch(service, batch_id)
+
+
+def _delete_claimed_batch(service, claimed: dict) -> dict:
+    batch_id = claimed["batchId"]
+    prefix = f"incoming/{batch_id}/"
+    aborted = service.storage.abort_multipart_uploads(prefix)
+    for key in claimed["stagingKeys"]:
+        service.storage.delete(key)
+    service.catalog.finish_upload_batch_cleanup(batch_id)
+    return {
+        "batchId": batch_id,
+        "status": "deleted",
+        "filesDeleted": len(claimed["stagingKeys"]),
+        "multipartUploadsAborted": aborted,
+    }
+
+
+def abandon_batch(service, batch_id: UUID) -> dict:
+    """Immediately discard an unsealed batch after its active requests have stopped."""
+    return _delete_claimed_batch(service, service.catalog.claim_upload_batch_cleanup(batch_id))
+
+
+def cleanup_abandoned_batches(service, limit: int = 100) -> dict:
+    """Delete stale unsealed batches while retaining every sealed batch for retry."""
+    cutoff = int(time()) - service.settings.upload_abandon_seconds
+    batches = files = multipart = 0
+    for _ in range(limit):
+        claimed = service.catalog.claim_abandoned_upload_batch(cutoff)
+        if claimed is None:
+            break
+        result = _delete_claimed_batch(service, claimed)
+        batches += 1
+        files += result["filesDeleted"]
+        multipart += result["multipartUploadsAborted"]
+    return {
+        "batchesDeleted": batches,
+        "filesDeleted": files,
+        "multipartUploadsAborted": multipart,
+    }
 
 
 def process_onboarding_job(service, job: dict) -> dict:

@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     create_engine,
     func,
     or_,
@@ -105,6 +106,7 @@ upload_batches = Table(
     Column("id", String, primary_key=True),
     Column("status", String, nullable=False),
     Column("created_at", BigInteger, nullable=False),
+    Column("updated_at", BigInteger, nullable=False),
     Column("sealed_at", BigInteger),
     Column("error", Text),
 )
@@ -796,6 +798,7 @@ class Catalog:
                 selected = set(connection.scalars(statement))
 
             queued = 0
+            already_queued = 0
             already_running = 0
             for asset_id in sorted(selected):
                 for job_type in job_types:
@@ -807,6 +810,9 @@ class Catalog:
                         )
                         .with_for_update()
                     )
+                    if current_status == "pending":
+                        already_queued += 1
+                        continue
                     if current_status == "running":
                         already_running += 1
                         continue
@@ -828,6 +834,7 @@ class Catalog:
         return {
             "assets": len(selected),
             "jobsQueued": queued,
+            "jobsAlreadyQueued": already_queued,
             "jobsAlreadyRunning": already_running,
             "jobTypes": job_types,
         }
@@ -1369,7 +1376,7 @@ class Catalog:
         with self.engine.begin() as connection:
             connection.execute(
                 insert(upload_batches)
-                .values(id=str(batch_id), status="accepting", created_at=now)
+                .values(id=str(batch_id), status="accepting", created_at=now, updated_at=now)
                 .on_conflict_do_nothing()
             )
             for file in files:
@@ -1401,6 +1408,14 @@ class Catalog:
             }
             if expected != actual:
                 raise LibraryError("Batch ID was reused with a different file declaration")
+            connection.execute(
+                upload_batches.update()
+                .where(
+                    upload_batches.c.id == str(batch_id),
+                    upload_batches.c.status == "accepting",
+                )
+                .values(updated_at=now)
+            )
 
     def upload_batch(self, batch_id: UUID | str) -> dict | None:
         with self.engine.connect() as connection:
@@ -1433,6 +1448,21 @@ class Catalog:
             "jobs": [dict(row) for row in job_rows],
         }
 
+    def active_upload_batch_ids(self, limit: int = 100) -> list[str]:
+        with self.engine.connect() as connection:
+            return list(
+                connection.execute(
+                    select(upload_batches.c.id)
+                    .where(
+                        upload_batches.c.status.in_(
+                            ["accepting", "queued", "processing", "failed"]
+                        )
+                    )
+                    .order_by(upload_batches.c.created_at.desc(), upload_batches.c.id)
+                    .limit(limit)
+                ).scalars()
+            )
+
     def begin_upload(self, batch_id: UUID, file_id: UUID) -> dict:
         with self.engine.begin() as connection:
             row = (
@@ -1454,6 +1484,11 @@ class Catalog:
                 raise LibraryError("This companion was skipped by the batch selection rules")
             if row["batch_status"] != "accepting":
                 raise LibraryError("This batch is already sealed")
+            connection.execute(
+                upload_batches.update()
+                .where(upload_batches.c.id == str(batch_id))
+                .values(updated_at=int(time()))
+            )
             if row["status"] == "uploaded":
                 return dict(row)
             if row["status"] == "uploading":
@@ -1467,21 +1502,122 @@ class Catalog:
 
     def complete_upload(self, file_id: UUID | str, sha256: str | None):
         with self.engine.begin() as connection:
-            connection.execute(
+            batch_id = connection.execute(
                 upload_files.update()
                 .where(
                     upload_files.c.id == str(file_id),
                     upload_files.c.status.in_(["waiting", "uploading", "uploaded"]),
                 )
                 .values(status="uploaded", sha256=sha256, error=None)
-            )
+                .returning(upload_files.c.batch_id)
+            ).scalar_one_or_none()
+            if batch_id:
+                connection.execute(
+                    upload_batches.update()
+                    .where(upload_batches.c.id == batch_id)
+                    .values(updated_at=int(time()))
+                )
 
     def fail_upload(self, file_id: UUID | str, error: str):
         with self.engine.begin() as connection:
-            connection.execute(
+            batch_id = connection.execute(
                 upload_files.update()
                 .where(upload_files.c.id == str(file_id), upload_files.c.status == "uploading")
                 .values(status="waiting", error=error)
+                .returning(upload_files.c.batch_id)
+            ).scalar_one_or_none()
+            if batch_id:
+                connection.execute(
+                    upload_batches.update()
+                    .where(upload_batches.c.id == batch_id)
+                    .values(updated_at=int(time()))
+                )
+
+    def claim_upload_batch_cleanup(self, batch_id: UUID | str) -> dict:
+        """Lock an unsealed, inactive batch so its staged objects can be removed."""
+        with self.engine.begin() as connection:
+            batch = connection.execute(
+                select(upload_batches)
+                .where(upload_batches.c.id == str(batch_id))
+                .with_for_update()
+            ).mappings().one_or_none()
+            if batch is None:
+                raise LibraryError("Upload batch not found")
+            if batch["status"] not in {"accepting", "deleting"}:
+                raise LibraryError("A sealed upload batch cannot be discarded")
+            active = connection.scalar(
+                select(func.count())
+                .select_from(upload_files)
+                .where(
+                    upload_files.c.batch_id == str(batch_id),
+                    upload_files.c.status == "uploading",
+                )
+            )
+            if active:
+                raise LibraryError("Wait for active file transfers to stop before discarding")
+            files = list(
+                connection.execute(
+                    select(upload_files.c.staging_key)
+                    .where(upload_files.c.batch_id == str(batch_id))
+                ).scalars()
+            )
+            connection.execute(
+                upload_batches.update()
+                .where(upload_batches.c.id == str(batch_id))
+                .values(status="deleting", updated_at=int(time()))
+            )
+        return {"batchId": str(batch_id), "stagingKeys": files}
+
+    def claim_abandoned_upload_batch(self, cutoff: int) -> dict | None:
+        """Claim one stale unsealed batch without racing another cleanup worker."""
+        uploading = (
+            select(func.count())
+            .select_from(upload_files)
+            .where(
+                upload_files.c.batch_id == upload_batches.c.id,
+                upload_files.c.status == "uploading",
+            )
+            .scalar_subquery()
+        )
+        with self.engine.begin() as connection:
+            batch_id = connection.scalar(
+                select(upload_batches.c.id)
+                .where(
+                    or_(
+                        upload_batches.c.status == "deleting",
+                        and_(
+                            upload_batches.c.status == "accepting",
+                            upload_batches.c.updated_at < cutoff,
+                        ),
+                    ),
+                    uploading == 0,
+                )
+                .order_by(upload_batches.c.updated_at, upload_batches.c.id)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            if batch_id is None:
+                return None
+            files = list(
+                connection.execute(
+                    select(upload_files.c.staging_key)
+                    .where(upload_files.c.batch_id == batch_id)
+                ).scalars()
+            )
+            connection.execute(
+                upload_batches.update()
+                .where(upload_batches.c.id == batch_id)
+                .values(status="deleting", updated_at=int(time()))
+            )
+        return {"batchId": batch_id, "stagingKeys": files}
+
+    def finish_upload_batch_cleanup(self, batch_id: UUID | str):
+        with self.engine.begin() as connection:
+            connection.execute(
+                upload_batches.delete().where(
+                    upload_batches.c.id == str(batch_id),
+                    upload_batches.c.status == "deleting",
+                )
             )
 
     def seal_upload_batch(self, batch_id: UUID, plan: dict):
@@ -1535,7 +1671,7 @@ class Catalog:
             connection.execute(
                 upload_batches.update()
                 .where(upload_batches.c.id == str(batch_id))
-                .values(status="queued", sealed_at=int(time()))
+                .values(status="queued", sealed_at=int(time()), updated_at=int(time()))
             )
 
     def claim_onboarding_job(self, lease_seconds: int = 900) -> dict | None:
@@ -1642,7 +1778,7 @@ class Catalog:
             connection.execute(
                 upload_batches.update()
                 .where(upload_batches.c.id == str(batch_id))
-                .values(status=status)
+                .values(status=status, updated_at=int(time()))
             )
 
     def retry_upload_batch(self, batch_id: UUID):
@@ -1678,7 +1814,7 @@ class Catalog:
             connection.execute(
                 upload_batches.update()
                 .where(upload_batches.c.id == str(batch_id))
-                .values(status="queued")
+                .values(status="queued", updated_at=int(time()))
             )
 
     def queue_counts(self) -> dict:
@@ -1729,6 +1865,21 @@ class Catalog:
                         jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
                         jobs.c.status == "failed",
                     )
+                ),
+                "previewPending": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.job_type == "preview-v1", jobs.c.status == "pending")
+                ),
+                "previewRunning": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.job_type == "preview-v1", jobs.c.status == "running")
+                ),
+                "previewFailed": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.job_type == "preview-v1", jobs.c.status == "failed")
                 ),
                 "analysisPending": connection.scalar(
                     select(func.count())

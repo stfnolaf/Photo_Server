@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, LoaderCircle, Minus, PanelRightClose, PanelRightOpen, Plus, Scan } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Minus, PanelRightClose, PanelRightOpen, Plus, Scan, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../../api/client";
@@ -34,6 +34,10 @@ export function PhotoPage({
     queryKey: ["photo", assetId],
     queryFn: ({ signal }) => api.photo(assetId, signal),
     enabled: Boolean(assetId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.analysis.status;
+      return status === "pending" || status === "running" ? 2000 : false;
+    },
   });
   const { photos } = library;
   const index = photos.findIndex((photo) => photo.assetId === assetId);
@@ -193,6 +197,14 @@ export function PhotoPage({
             <PreviewImage src={`/assets/${assetId}/preview`} status={detail.preview.status} alt={primary.originalFilename} eager contain onRetry={() => api.retryPreview(assetId)} />
           </div>
         </div>
+        {(detail.analysis.status === "pending" || detail.analysis.status === "running") && (
+          <div className="photo-analysis-badge" role="status">
+            {detail.analysis.status === "pending"
+              ? <Sparkles size={13} />
+              : <LoaderCircle className="spin" size={13} />}
+            {detail.analysis.status === "pending" ? "Queued for GPU analysis" : "GPU analysis in progress"}
+          </div>
+        )}
         <button className="stage-nav stage-nav--previous" disabled={!previous} onClick={() => go(-1)} aria-label="Previous photograph"><ChevronLeft size={27} /></button>
         <button className="stage-nav stage-nav--next" disabled={!next && !library.hasNextPage} onClick={() => go(1)} aria-label="Next photograph"><ChevronRight size={27} /></button>
       </div>

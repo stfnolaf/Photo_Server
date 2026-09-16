@@ -46,11 +46,12 @@ class AIWorker:
             if not preview.is_file():
                 raise RuntimeError("Preview is marked ready but its cache file is missing")
 
-            jpeg = prepare_jpeg(preview, self.service.settings.ai_max_image_side)
+            face_jpeg = prepare_jpeg(preview, self.service.settings.ai_face_max_image_side)
+            vlm_jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
             # The stages are deliberately serialized: AdaFace finishes its short
             # CUDA batch before Ollama starts the much heavier VLM inference.
-            faces = self.faces.analyze(jpeg)
-            semantic, model_digest, metrics = analyze_semantics(self.service.settings, jpeg)
+            faces = self.faces.analyze(face_jpeg)
+            semantic, model_digest, metrics = analyze_semantics(self.service.settings, vlm_jpeg)
             run_id = str(uuid4())
             created_at = datetime.now(UTC).isoformat()
             public_result = {

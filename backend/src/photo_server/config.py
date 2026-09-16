@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     max_batch_files: int = Field(default=1000, ge=1, le=10000)
     max_file_bytes: int = Field(default=512 * 1024 * 1024, ge=1)
     upload_workers: int = Field(default=4, ge=1, le=32)
+    upload_abandon_seconds: int = Field(default=24 * 60 * 60, ge=300)
     worker_threads: int = Field(default=4, ge=1, le=32)
     postgres_backup_prefix: str = "backups/postgres"
     upload_part_bytes: int = Field(
@@ -40,7 +41,8 @@ class Settings(BaseSettings):
     ai_model: str = "qwen3-vl:8b-instruct-q4_K_M"
     ai_timeout_seconds: int = Field(default=600, ge=30, le=3600)
     ai_context_tokens: int = Field(default=4096, ge=2048, le=32768)
-    ai_max_image_side: int = Field(default=2000, ge=512, le=4096)
+    ai_face_max_image_side: int = Field(default=2000, ge=512, le=4096)
+    ai_vlm_max_image_side: int = Field(default=1280, ge=512, le=4096)
     face_models_dir: Path = Path("/models")
     face_detection_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
     face_match_threshold: float = Field(default=0.4, ge=0.0, le=1.0)

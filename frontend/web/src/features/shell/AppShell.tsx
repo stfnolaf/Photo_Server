@@ -8,6 +8,7 @@ import { Button } from "../../components/Button";
 import { useToast } from "../../components/Toast";
 import { writeFilters } from "../../domain/library";
 import { useLayoutStore } from "../../state/layout";
+import { UploadQueue } from "../uploads/UploadQueue";
 import { Sidebar } from "./Sidebar";
 
 export function AppShell({
@@ -77,7 +78,8 @@ export function AppShell({
         </div>
         <div className="topbar__right">
           <span className="library-count" title={`${health.blobs} stored files`}>{health.assets.toLocaleString()} originals</span>
-          <button className="icon-button" type="button" onClick={refresh} aria-label="Refresh library"><RotateCw size={16} /></button>
+          <UploadQueue />
+          <button className="icon-button refresh-button" type="button" onClick={refresh} aria-label="Refresh library"><RotateCw size={16} /></button>
           <a className="icon-button" href="/docs" target="_blank" rel="noreferrer" aria-label="Open API documentation"><CircleHelp size={17} /></a>
         </div>
       </header>
