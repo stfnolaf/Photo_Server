@@ -9,7 +9,7 @@ See the historical [Phase 1](docs/verification.md), [Phase 2](docs/phase-2-verif
 ```text
 backend/                              Python backend and tests
 └── src/photo_server/db_migrations/   Ordered PostgreSQL migration SQL
-frontend/web/                         Static browser application and nginx runtime
+frontend/web/                         React/TypeScript browser application and nginx runtime
 docs/                                 Verification reports
 compose.yaml                          Development/deployment composition
 ```
@@ -183,11 +183,12 @@ Use `/docs` for the full schemas.
 
 Open `http://SERVER_IP:3000/`. The responsive browser UI includes:
 
-- A capture-time timeline grouped by month. Photos without a usable capture time use their import time and are identified as such in the API.
+- A dense, virtualized capture-time timeline grouped by month, with adjustable thumbnail size and persistent workspace layout. Photos without a usable capture time use their import time and are identified in the interface.
 - Incremental loading with stable cursor pagination, newest/oldest sorting, and filters for date, media format, minimum rating, and favorites.
 - Case-insensitive literal search across original filenames, camera make/model, lens metadata, captions, keywords, and location names.
 - Lazy, bounded thumbnail loading and explicit pending, unavailable, and failed preview states.
-- A full preview viewer with camera, lens, aperture, focal length, ISO, shutter speed, exposure compensation, metering, flash, white balance, all recorded EXIF, original download, arrow-key navigation, `F` for favorite, and `0`–`5` for ratings.
+- A routed loupe workspace with zoom, a filmstrip, camera/exposure information, all recorded EXIF, original download, arrow-key navigation, `F` for favorite, and `0`–`5` for ratings.
+- A Lightroom-style desktop shell with library and album navigation, collapsible inspector panels, and phone-specific navigation and stacked detail controls.
 
 The photo viewer edits captions, keywords, named locations and coordinates, and album membership. The album editor supports names, descriptions, membership removal, and ordering. Album collections retain the capture-time timeline; the album editor and API expose their saved membership order. Trash hides photos from normal browsing and supports restore; it never removes originals. Trashing an album leaves its photos in the library. Membership survives photo deletion and restore.
 
@@ -309,7 +310,11 @@ python3 -m venv .venv
 .venv/bin/pip install --no-deps -e backend
 .venv/bin/ruff check backend/src backend/tests
 .venv/bin/pytest -q backend/tests
-node --check frontend/web/src/library.js
+cd frontend/web
+npm ci
+npm run check
+npm test
+npm run build
 ```
 
 Run the integration suite against the configured S3 service and local PostgreSQL:

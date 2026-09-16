@@ -4,4 +4,4 @@ Each frontend lives in its own directory and consumes the Photo Server backend A
 
 Current frontend:
 
-- [`web`](web/README.md): the responsive browser timeline and photo viewer.
+- [`web`](web/README.md): the responsive React library and photo workspaces. Its domain, API, durable-mutation, and design-token boundaries are suitable for reuse by a later desktop or mobile shell.

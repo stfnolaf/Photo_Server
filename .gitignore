@@ -232,3 +232,8 @@ secrets/
 *.p12
 *.pfx
 .DS_Store
+
+# Node / frontend build artifacts
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
