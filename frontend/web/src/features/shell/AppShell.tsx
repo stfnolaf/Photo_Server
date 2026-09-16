@@ -29,6 +29,7 @@ export function AppShell({
   const leftOpen = useLayoutStore((state) => state.leftPanelOpen);
   const toggleLeft = useLayoutStore((state) => state.toggleLeftPanel);
   const isPhoto = location.pathname.startsWith("/photo/");
+  const isPeople = location.pathname === "/people";
 
   const refresh = async () => {
     await queryClient.invalidateQueries();
@@ -56,7 +57,7 @@ export function AppShell({
 
   return (
     <div className={`app ${leftOpen ? "" : "app--sidebar-closed"}`}>
-      <a className="skip-link" href="#workspace">Skip to photographs</a>
+      <a className="skip-link" href="#workspace">Skip to workspace</a>
       <Sidebar filters={filters} knownPhotos={knownPhotos} />
       <header className="topbar">
         <div className="topbar__left">
@@ -69,7 +70,8 @@ export function AppShell({
             </button>
           )}
           <div className="module-switcher" aria-label="Workspace">
-            <Link to={{ pathname: "/", search: writeFilters(filters).toString() }} className={!isPhoto ? "is-active" : ""}>Library</Link>
+            <Link to={{ pathname: "/", search: writeFilters(filters).toString() }} className={!isPhoto && !isPeople ? "is-active" : ""}>Library</Link>
+            <Link to="/people" className={isPeople ? "is-active" : ""}>People</Link>
             <span className={isPhoto ? "is-active" : ""}>Photo</span>
           </div>
         </div>
@@ -90,6 +92,7 @@ export function AppShell({
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "all", albumId: null }).toString() })}>Library</button>
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "favorites", albumId: null }).toString() })}>Favorites</button>
+        <button onClick={() => navigate("/people")}>People</button>
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "trash", albumId: null }).toString() })}>Trash</button>
       </nav>
     </div>

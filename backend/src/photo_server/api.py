@@ -1,12 +1,20 @@
 from contextlib import asynccontextmanager
+from io import BytesIO
 from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid5
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
+from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
@@ -46,10 +54,44 @@ class ProcessingRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     asset_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=10000)
-    stages: list[Literal["metadata"]] = Field(
-        default_factory=lambda: ["metadata"], min_length=1
-    )
+    stages: list[Literal["metadata"]] = Field(default_factory=lambda: ["metadata"], min_length=1)
     include_deleted: bool = False
+
+
+class AnalysisRequest(BaseModel):
+    """Select explicit assets or the complete active library for AI analysis."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    asset_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=10000)
+    include_deleted: bool = False
+
+
+class PersonNameRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    operation_id: UUID
+    display_name: str = Field(default="", max_length=200)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return value.strip()
+
+
+class PersonMergeRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    operation_id: UUID
+    target_person_id: UUID
+
+
+class FaceMoveRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    operation_id: UUID
+    face_ids: list[UUID] = Field(min_length=1, max_length=1000)
+    target_person_id: UUID | None = None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -64,7 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         service.catalog.engine.dispose()
 
-    app = FastAPI(title="Photo Server", version="0.5.0", lifespan=lifespan)
+    app = FastAPI(title="Photo Server", version="0.6.0", lifespan=lifespan)
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -167,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             **manifest.document(),
             "technical": technical_fields(manifest.metadata),
             "processing": service.catalog.processing_status(str(asset_id)),
+            "analysis": service.catalog.analysis_status(str(asset_id)),
             "preview": service.catalog.preview_status(str(asset_id)),
             "userState": service.catalog.user_state(str(asset_id)),
         }
@@ -177,6 +220,117 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             body.asset_ids,
             body.stages,
             body.include_deleted,
+        )
+
+    @app.post("/analysis", status_code=202)
+    def queue_analysis(body: AnalysisRequest):
+        return service.queue_analysis(body.asset_ids, body.include_deleted)
+
+    @app.post("/assets/{asset_id}/analysis/retry", status_code=202)
+    def retry_analysis(asset_id: UUID):
+        find(asset_id)
+        return service.queue_analysis([asset_id])
+
+    @app.get("/people")
+    def list_people(
+        q: str = Query(default="", max_length=200),
+        limit: int = Query(default=500, ge=1, le=1000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        return service.catalog.list_people(q, limit, offset)
+
+    @app.get("/people/{person_id}")
+    def get_person(
+        person_id: UUID,
+        limit: int = Query(default=2000, ge=1, le=5000),
+        offset: int = Query(default=0, ge=0),
+    ):
+        person = service.catalog.person_detail(str(person_id), limit, offset)
+        if person is None:
+            raise HTTPException(404, "Person not found")
+        return person
+
+    @app.patch("/people/{person_id}")
+    def rename_person(person_id: UUID, body: PersonNameRequest):
+        return service.catalog.commit_face_operation(
+            body.operation_id,
+            {
+                "action": "person.rename",
+                "personId": str(person_id),
+                "displayName": body.display_name,
+            },
+        )
+
+    @app.post("/people/{person_id}/merge")
+    def merge_person(person_id: UUID, body: PersonMergeRequest):
+        return service.catalog.commit_face_operation(
+            body.operation_id,
+            {
+                "action": "person.merge",
+                "sourcePersonId": str(person_id),
+                "targetPersonId": str(body.target_person_id),
+            },
+        )
+
+    @app.post("/faces/move")
+    def move_faces(body: FaceMoveRequest):
+        face_ids = [str(face_id) for face_id in body.face_ids]
+        if len(set(face_ids)) != len(face_ids):
+            raise HTTPException(422, "Face IDs must be unique")
+        return service.catalog.commit_face_operation(
+            body.operation_id,
+            {
+                "action": "faces.move",
+                "faceIds": face_ids,
+                "targetPersonId": str(body.target_person_id) if body.target_person_id else None,
+            },
+        )
+
+    @app.get("/faces/{face_id}/thumbnail")
+    def face_thumbnail(face_id: UUID):
+        face = service.catalog.face(str(face_id))
+        if face is None:
+            raise HTTPException(404, "Face not found")
+        manifest = service.catalog.get(face["asset_id"])
+        if manifest is None:
+            raise HTTPException(404, "Photograph not found")
+        path = cache_paths(service, manifest)["preview"]
+        if not path.exists():
+            status = service.catalog.preview_status(str(manifest.asset_id))
+            if status["status"] == "unavailable":
+                raise HTTPException(404, "Photograph preview is unavailable")
+            if status["status"] == "failed":
+                raise HTTPException(503, "Photograph preview generation failed")
+            service.catalog.queue_preview(str(manifest.asset_id))
+            return JSONResponse(
+                status_code=202,
+                content={"status": "pending"},
+                headers={"Retry-After": "2"},
+            )
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+            x, y, width, height = [float(value) for value in face["bounding_box"]]
+            center_x, center_y = x + width / 2, y + height / 2
+            side = max(width, height) * 1.45
+            left = max(0.0, center_x - side / 2)
+            top = max(0.0, center_y - side / 2)
+            right = min(1.0, center_x + side / 2)
+            bottom = min(1.0, center_y + side / 2)
+            crop = image.crop(
+                (
+                    round(left * image.width),
+                    round(top * image.height),
+                    max(round(right * image.width), round(left * image.width) + 1),
+                    max(round(bottom * image.height), round(top * image.height) + 1),
+                )
+            )
+            crop.thumbnail((320, 320), Image.Resampling.LANCZOS)
+            output = BytesIO()
+            crop.save(output, format="JPEG", quality=88)
+        return Response(
+            output.getvalue(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=3600"},
         )
 
     @app.patch("/assets/{asset_id}/user-state")

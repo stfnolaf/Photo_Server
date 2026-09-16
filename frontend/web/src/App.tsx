@@ -6,6 +6,7 @@ import { DurableMutationProvider } from "./api/mutations";
 import { Button } from "./components/Button";
 import { ToastProvider } from "./components/Toast";
 import { LibraryPage } from "./features/library/LibraryPage";
+import { PeoplePage } from "./features/people/PeoplePage";
 import { PhotoPage } from "./features/photo/PhotoPage";
 import { AppShell } from "./features/shell/AppShell";
 import { useAlbums } from "./hooks/useAlbums";
@@ -56,6 +57,7 @@ function ConnectedApp() {
               path="/photo/:assetId"
               element={<PhotoPage filters={filters} albums={albums.active} library={library} />}
             />
+            <Route path="/people" element={<PeoplePage filters={filters} />} />
             <Route path="*" element={<Navigate to={{ pathname: "/", search: writeFilters(filters).toString() }} replace />} />
           </Routes>
         </AppShell>

@@ -5,6 +5,7 @@ The web client is a TypeScript/React single-page application for organizing and 
 ## Workspaces
 
 - **Library** is a virtualized, capture-time timeline with search, filters, adjustable density, favorites, albums, selection, and trash.
+- **People** is a face-catalog workspace for naming detected people, combining split groups, and moving incorrect faces into an existing or new group.
 - **Photo** is a routed loupe workspace with a filmstrip, zoom, keyboard navigation, ratings, favorites, metadata, album membership, technical metadata, and original download.
 - Phone layouts use compact navigation and stacked inspectors instead of shrinking the desktop sidebars.
 

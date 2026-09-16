@@ -1,4 +1,4 @@
-import { Download, Heart, RotateCcw, Trash2 } from "lucide-react";
+import { Download, Heart, RefreshCw, RotateCcw, Sparkles, Trash2, Users } from "lucide-react";
 import type { Album, LocationValue, MutationResult, PhotoDetail } from "../../api/types";
 import { apiUrl } from "../../api/client";
 import { Button } from "../../components/Button";
@@ -14,6 +14,7 @@ export function PhotoInspector({
   onState,
   onMetadata,
   onToggleAlbum,
+  onReanalyze,
   onDelete,
 }: {
   detail: PhotoDetail;
@@ -22,6 +23,7 @@ export function PhotoInspector({
   onState: (changes: Partial<MutationResult>) => Promise<void>;
   onMetadata: (changes: { caption: string; keywords: string[]; location: LocationValue | null }) => Promise<void>;
   onToggleAlbum: (album: Album) => Promise<void>;
+  onReanalyze: () => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
   const primary = primaryBlob(detail);
@@ -50,6 +52,34 @@ export function PhotoInspector({
             const checked = album.assetIds.includes(detail.assetId);
             return <label key={album.albumId}><input type="checkbox" checked={checked} disabled={busy || deleted} onChange={() => onToggleAlbum(album)} /><span>{album.name}</span><small>{album.assetIds.length}</small></label>;
           })}
+        </div>
+      </PanelSection>
+
+      <PanelSection title="AI analysis">
+        <div className="ai-analysis">
+          {detail.analysis.status === "pending" && <p className="analysis-status"><Sparkles size={13} /> Waiting for the background GPU worker</p>}
+          {detail.analysis.status === "running" && <p className="analysis-status"><RefreshCw className="spin" size={13} /> Analyzing locally</p>}
+          {detail.analysis.status === "failed" && <p className="form-error">{detail.analysis.error || "Analysis failed."}</p>}
+          {detail.analysis.result ? (
+            <>
+              <p className="analysis-summary">{detail.analysis.result.summary}</p>
+              <div className="analysis-tags">
+                {[...new Set([...detail.analysis.result.photoTypes, detail.analysis.result.scene, ...detail.analysis.result.tags].filter(Boolean))].map((tag) => <span key={tag}>{tag}</span>)}
+              </div>
+              <dl className="properties analysis-properties">
+                <div><dt>Objects</dt><dd>{detail.analysis.result.objects.map((item) => `${item.name}${item.count > 1 ? ` ×${item.count}` : ""}`).join(", ") || "None detected"}</dd></div>
+                <div><dt>People</dt><dd><Users size={12} /> {detail.analysis.result.faceCount} face{detail.analysis.result.faceCount === 1 ? "" : "s"} in {detail.analysis.result.personCount} group{detail.analysis.result.personCount === 1 ? "" : "s"}</dd></div>
+                {detail.analysis.result.activities.length > 0 && <div><dt>Activities</dt><dd>{detail.analysis.result.activities.join(", ")}</dd></div>}
+                {detail.analysis.result.visibleText.length > 0 && <div><dt>Visible text</dt><dd>{detail.analysis.result.visibleText.join(" · ")}</dd></div>}
+                {detail.analysis.analyzedAt && <div><dt>Analyzed</dt><dd>{formatDate(detail.analysis.analyzedAt, true)}</dd></div>}
+              </dl>
+            </>
+          ) : detail.analysis.status === "missing" ? (
+            <p className="inspector-note">This photograph has not been analyzed.</p>
+          ) : null}
+          <Button compact disabled={busy || detail.analysis.status === "running"} onClick={onReanalyze}>
+            <RefreshCw size={13} /> {detail.analysis.result ? "Analyze again" : detail.analysis.status === "failed" ? "Retry analysis" : "Queue analysis"}
+          </Button>
         </div>
       </PanelSection>
 

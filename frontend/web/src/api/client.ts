@@ -3,6 +3,8 @@ import type {
   BrowsePage,
   Health,
   LibraryFilters,
+  PeoplePage,
+  PersonDetail,
   PhotoDetail,
   PendingMutation,
   PreviewStatus,
@@ -53,6 +55,15 @@ export const api = {
   photo: (assetId: string, signal?: AbortSignal) =>
     request<PhotoDetail>(`/assets/${assetId}`, { signal }),
 
+  people: (q = "", signal?: AbortSignal) => {
+    const params = new URLSearchParams({ limit: "1000" });
+    if (q) params.set("q", q);
+    return request<PeoplePage>(`/people?${params}`, { signal });
+  },
+
+  person: (personId: string, signal?: AbortSignal) =>
+    request<PersonDetail>(`/people/${personId}`, { signal }),
+
   browse: (filters: LibraryFilters, cursor?: string | null, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (filters.q) params.set("q", filters.q);
@@ -77,6 +88,11 @@ export const api = {
 
   retryPreview: (assetId: string) =>
     request<{ status: PreviewStatus }>(`/assets/${assetId}/preview/retry`, {
+      method: "POST",
+    }),
+
+  reanalyze: (assetId: string) =>
+    request<{ assets: number; jobsQueued: number }>(`/assets/${assetId}/analysis/retry`, {
       method: "POST",
     }),
 };

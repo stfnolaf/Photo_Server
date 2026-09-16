@@ -147,6 +147,17 @@ class Service:
             include_deleted,
         )
 
+    def queue_analysis(
+        self,
+        asset_ids: list[UUID] | None = None,
+        include_deleted: bool = False,
+    ) -> dict:
+        """Queue local AI analysis independently from ingestion workers."""
+        return self.catalog.queue_ai(
+            [str(asset_id) for asset_id in asset_ids] if asset_ids is not None else None,
+            include_deleted,
+        )
+
     def import_batch(self, paths: list[str], operation_id: UUID) -> dict:
         plan = self.plan(paths)
         with self.catalog.writer():

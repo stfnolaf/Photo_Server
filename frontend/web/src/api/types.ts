@@ -78,6 +78,82 @@ export interface PhotoDetail {
   userState: UserState;
   deletedAt: string | null;
   preview: { status: PreviewStatus; error?: string | null };
+  analysis: PhotoAnalysis;
+}
+
+export interface AnalysisObject {
+  name: string;
+  count: number;
+}
+
+export interface AnalysisResult {
+  summary: string;
+  photoTypes: string[];
+  scene: string;
+  setting: "indoor" | "outdoor" | "mixed" | "unknown";
+  objects: AnalysisObject[];
+  activities: string[];
+  tags: string[];
+  visibleText: string[];
+  faceCount: number;
+  personCount: number;
+}
+
+export interface PhotoAnalysis {
+  status: "missing" | "pending" | "running" | "ready" | "failed";
+  attempts: number;
+  error: string | null;
+  runId: string | null;
+  model: string | null;
+  modelVersion: string | null;
+  pipelineVersion: string | null;
+  analyzedAt: string | null;
+  artifactKey: string | null;
+  result: AnalysisResult | null;
+  faces: Array<{
+    faceIndex: number;
+    box: number[];
+    confidence: number;
+    personId: string;
+    personName: string | null;
+  }>;
+}
+
+export interface FaceReference {
+  faceId: string;
+  assetId: string;
+  originalFilename: string;
+  box: number[];
+  confidence: number;
+  thumbnailUrl: string;
+}
+
+export interface PersonSummary {
+  personId: string;
+  displayName: string;
+  faceCount: number;
+  photoCount: number;
+  sampleFaces: FaceReference[];
+}
+
+export interface PeoplePage {
+  items: PersonSummary[];
+  total: number;
+  named: number;
+  unnamed: number;
+}
+
+export interface PersonDetail extends Omit<PersonSummary, "sampleFaces"> {
+  faces: FaceReference[];
+}
+
+export interface FaceMutationResult {
+  operationId: string;
+  personId: string;
+  displayName?: string;
+  mergedPersonId?: string;
+  movedFaces?: number;
+  createdPerson?: boolean;
 }
 
 export interface Album {

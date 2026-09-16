@@ -30,6 +30,13 @@ def main():
     refresh.add_argument(
         "--include-deleted", action="store_true", help="Include trash when processing the library"
     )
+    analyze = commands.add_parser(
+        "analyze", help="Queue local face and semantic analysis"
+    )
+    analyze.add_argument("--asset", type=UUID, action="append", help="Asset to analyze; repeat for many")
+    analyze.add_argument(
+        "--include-deleted", action="store_true", help="Include trash when analyzing the library"
+    )
     export = commands.add_parser(
         "export", help="Export the PostgreSQL catalog and its original S3 objects"
     )
@@ -39,6 +46,8 @@ def main():
     )
     worker = commands.add_parser("worker")
     worker.add_argument("--once", action="store_true", help="Process at most one queued job")
+    ai_worker = commands.add_parser("ai-worker")
+    ai_worker.add_argument("--once", action="store_true", help="Analyze at most one queued asset")
     args = parser.parse_args()
     settings = Settings()
     try:
@@ -47,7 +56,7 @@ def main():
         else:
             service = Service(settings)
             initialized = service.initialize(
-                recover_uploads=args.command not in {"worker", "migrate"}
+                recover_uploads=args.command not in {"worker", "ai-worker", "migrate"}
             )
             if args.command in {"init", "migrate"}:
                 result = initialized
@@ -61,6 +70,14 @@ def main():
                     ["metadata"],
                     args.include_deleted,
                 )
+            elif args.command == "analyze":
+                result = service.queue_analysis(args.asset, args.include_deleted)
+            elif args.command == "ai-worker":
+                from photo_server.ai_worker import run as run_ai
+
+                result = run_ai(service, args.once)
+                if not args.once:
+                    return
             else:
                 from photo_server.worker import run, run_once
 

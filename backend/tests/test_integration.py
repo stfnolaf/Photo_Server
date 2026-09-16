@@ -2,6 +2,7 @@ import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -244,6 +245,67 @@ def test_api_upload_queue_onboarding_restart_and_preview(backend):
     assert backend.service.catalog.counts() == {"assets": 1, "blobs": 1}
 
 
+def test_ai_analysis_is_separate_searchable_durable_and_requeueable(backend):
+    from photo_server.api import create_app
+
+    service = backend.service
+    source = photo(backend.root, "alpine-trip.JPG")
+    imported = service.import_batch([source.name], uuid4())
+    asset_id = imported["results"][0]["assetId"]
+    manifest = service.catalog.get(asset_id)
+
+    assert service.catalog.analysis_status(asset_id)["status"] == "pending"
+    assert run_once(service)["jobType"] == "preview"
+    claimed = service.catalog.claim_ai_job()
+    assert claimed == {"asset_id": asset_id, "preview_status": "ready"}
+
+    run_id = str(uuid4())
+    object_key = f"analysis/{asset_id}/photo-ai-v1/{run_id}.json"
+    service.storage.put_json(object_key, {"schemaVersion": 1, "runId": run_id})
+    result = {
+        "summary": "Two hikers beside an alpine lake",
+        "photoTypes": ["travel", "group"],
+        "scene": "mountain lake",
+        "setting": "outdoor",
+        "objects": [{"name": "backpack", "count": 2}],
+        "activities": ["hiking"],
+        "tags": ["mountains"],
+        "visibleText": [],
+        "faceCount": 2,
+    }
+    completed = service.catalog.complete_ai_analysis(
+        asset_id=asset_id,
+        run_id=run_id,
+        model_name="qwen-test",
+        model_version="sha256:model",
+        pipeline_version="photo-ai-v1",
+        input_hash=manifest.primary.sha256,
+        object_key=object_key,
+        result=result,
+        searchable="Two hikers alpine lake travel group backpack hiking mountains",
+        detected_faces=[
+            {"box": [0.1, 0.1, 0.2, 0.3], "confidence": 0.99, "embedding": [1.0, 0.0]},
+            {"box": [0.5, 0.1, 0.2, 0.3], "confidence": 0.98, "embedding": [1.0, 0.0]},
+        ],
+        match_threshold=0.4,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    assert completed == {"faceCount": 2, "personCount": 2}
+    assert service.storage.get_json(object_key)["runId"] == run_id
+
+    with TestClient(create_app(service.settings)) as client:
+        detail = client.get(f"/assets/{asset_id}").json()
+        assert detail["analysis"]["status"] == "ready"
+        assert detail["analysis"]["result"]["scene"] == "mountain lake"
+        assert len({face["personId"] for face in detail["analysis"]["faces"]}) == 2
+        search = client.get("/library/assets", params={"q": "backpack"}).json()
+        assert [item["assetId"] for item in search["items"]] == [asset_id]
+        queued = client.post(f"/assets/{asset_id}/analysis/retry")
+        assert queued.status_code == 202 and queued.json()["jobsQueued"] == 1
+        refreshed = client.get(f"/assets/{asset_id}").json()["analysis"]
+        assert refreshed["status"] == "pending" and refreshed["runId"] == run_id
+
+
 def test_api_batch_does_not_request_raw_companions(backend):
     from photo_server.api import create_app
 
@@ -265,6 +327,94 @@ def test_api_batch_does_not_request_raw_companions(backend):
     assert by_path[raw.name]["required"]
     assert by_path[jpeg.name]["status"] == "skipped"
     assert by_path[jpeg.name]["uploadUrl"] is None
+
+
+def test_people_api_names_combines_and_corrects_face_groups(backend):
+    from photo_server.api import create_app
+
+    service = backend.service
+    source = photo(backend.root, "people.JPG")
+    imported = service.import_batch([source.name], uuid4())
+    assert imported["results"][0]["status"] == "imported", imported
+    asset_id = imported["results"][0]["assetId"]
+    manifest = service.catalog.get(asset_id)
+    assert run_once(service)["status"] == "ready"
+    service.catalog.complete_ai_analysis(
+        asset_id=asset_id,
+        run_id=str(uuid4()),
+        model_name="test",
+        model_version="test",
+        pipeline_version="photo-ai-v1",
+        input_hash=manifest.primary.sha256,
+        object_key=f"analysis/{asset_id}/test.json",
+        result={"faceCount": 3},
+        searchable="people",
+        detected_faces=[
+            {"box": [0.05, 0.1, 0.2, 0.3], "confidence": 0.99, "embedding": [1.0, 0.0]},
+            {"box": [0.4, 0.1, 0.2, 0.3], "confidence": 0.98, "embedding": [1.0, 0.0]},
+            {"box": [0.72, 0.1, 0.2, 0.3], "confidence": 0.97, "embedding": [1.0, 0.0]},
+        ],
+        match_threshold=0.4,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+
+    with TestClient(create_app(service.settings)) as client:
+        groups = client.get("/people").json()
+        assert groups["total"] == 3
+        assert groups["unnamed"] == 3
+        target, move_source, merge_source = groups["items"]
+        face_id = move_source["sampleFaces"][0]["faceId"]
+        crop = client.get(f"/faces/{face_id}/thumbnail")
+        assert crop.status_code == 200
+        assert crop.headers["content-type"] == "image/jpeg"
+
+        operation_id = str(uuid4())
+        named = client.patch(
+            f"/people/{target['personId']}",
+            json={"operationId": operation_id, "displayName": "Alex"},
+        )
+        assert named.status_code == 200
+        assert named.json()["displayName"] == "Alex"
+        replay = client.patch(
+            f"/people/{target['personId']}",
+            json={"operationId": operation_id, "displayName": "Alex"},
+        )
+        assert replay.json() == named.json()
+
+        moved = client.post(
+            "/faces/move",
+            json={
+                "operationId": str(uuid4()),
+                "faceIds": [face_id],
+                "targetPersonId": target["personId"],
+            },
+        )
+        assert moved.status_code == 200
+        assert moved.json()["movedFaces"] == 1
+
+        merged = client.post(
+            f"/people/{merge_source['personId']}/merge",
+            json={"operationId": str(uuid4()), "targetPersonId": target["personId"]},
+        )
+        assert merged.status_code == 200
+        assert merged.json()["personId"] == target["personId"]
+        combined = client.get(f"/people/{target['personId']}").json()
+        assert combined["displayName"] == "Alex"
+        assert combined["faceCount"] == 3
+
+        separated = client.post(
+            "/faces/move",
+            json={
+                "operationId": str(uuid4()),
+                "faceIds": [combined["faces"][0]["faceId"]],
+                "targetPersonId": None,
+            },
+        )
+        assert separated.status_code == 200
+        assert separated.json()["createdPerson"] is True
+        refreshed = client.get("/people").json()
+        assert refreshed["total"] == 2
+        assert refreshed["named"] == 1
 
 
 def test_api_streams_a_file_as_multiple_s3_parts(backend):

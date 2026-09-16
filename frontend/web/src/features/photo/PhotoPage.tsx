@@ -142,6 +142,19 @@ export function PhotoPage({
     }
   };
 
+  const reanalyze = async () => {
+    setBusy(true);
+    try {
+      await api.reanalyze(assetId);
+      await queryClient.invalidateQueries({ queryKey: ["photo", assetId] });
+      toast.show("Local analysis queued");
+    } catch (error) {
+      toast.show(error instanceof Error ? error.message : "Analysis could not be queued", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.altKey || event.metaKey || /INPUT|TEXTAREA|SELECT/.test((event.target as HTMLElement)?.tagName)) return;
@@ -198,6 +211,7 @@ export function PhotoPage({
           onState={(changes) => saveState(changes)}
           onMetadata={(changes: { caption: string; keywords: string[]; location: LocationValue | null }) => saveState(changes)}
           onToggleAlbum={toggleAlbum}
+          onReanalyze={reanalyze}
           onDelete={toggleDeleted}
         />
       )}

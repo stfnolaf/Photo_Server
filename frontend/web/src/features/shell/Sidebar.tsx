@@ -1,4 +1,4 @@
-import { Aperture, Folder, Heart, Image, MoreHorizontal, Plus, Trash2 } from "lucide-react";
+import { Aperture, Folder, Heart, Image, MoreHorizontal, Plus, Trash2, UsersRound } from "lucide-react";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { Album, LibraryFilters, PhotoSummary } from "../../api/types";
@@ -31,10 +31,13 @@ export function Sidebar({ filters, knownPhotos }: { filters: LibraryFilters; kno
           <button className={location.pathname === "/" && filters.view === "all" && !filters.albumId ? "is-active" : ""} onClick={() => choose({ view: "all", albumId: null })}>
             <Image size={16} /> <span>All photographs</span>
           </button>
-          <button className={filters.view === "favorites" ? "is-active" : ""} onClick={() => choose({ view: "favorites", albumId: null })}>
+          <button className={location.pathname === "/" && filters.view === "favorites" ? "is-active" : ""} onClick={() => choose({ view: "favorites", albumId: null })}>
             <Heart size={16} /> <span>Favorites</span>
           </button>
-          <button className={filters.view === "trash" ? "is-active" : ""} onClick={() => choose({ view: "trash", albumId: null })}>
+          <button className={location.pathname === "/people" ? "is-active" : ""} onClick={() => navigate("/people")}>
+            <UsersRound size={16} /> <span>People</span>
+          </button>
+          <button className={location.pathname === "/" && filters.view === "trash" ? "is-active" : ""} onClick={() => choose({ view: "trash", albumId: null })}>
             <Trash2 size={16} /> <span>Recently deleted</span>
           </button>
         </nav>
@@ -46,7 +49,7 @@ export function Sidebar({ filters, knownPhotos }: { filters: LibraryFilters; kno
           </div>
           {active.length === 0 && <p className="sidebar__empty">No albums yet</p>}
           {active.map((album) => (
-            <div className={`sidebar__album ${filters.albumId === album.albumId ? "is-active" : ""}`} key={album.albumId}>
+            <div className={`sidebar__album ${location.pathname === "/" && filters.albumId === album.albumId ? "is-active" : ""}`} key={album.albumId}>
               <button onClick={() => choose({ albumId: album.albumId })}><Folder size={15} /><span>{album.name}</span><small>{album.assetIds.length}</small></button>
               <button className="sidebar__album-menu" onClick={() => setEditingAlbum(album)} aria-label={`Edit ${album.name}`}><MoreHorizontal size={15} /></button>
             </div>

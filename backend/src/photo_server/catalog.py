@@ -3,13 +3,14 @@ from datetime import UTC, datetime
 from datetime import time as day_time
 from threading import RLock
 from time import time
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     MetaData,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     func,
+    or_,
     select,
     text,
     tuple_,
@@ -136,6 +138,46 @@ onboarding_jobs = Table(
     Column("result", JSONB),
     Column("error", Text),
 )
+analysis_runs = Table(
+    "analysis_runs",
+    schema,
+    Column("id", String, primary_key=True),
+    Column("asset_id", String, ForeignKey("assets.id", ondelete="CASCADE"), nullable=False),
+    Column("analysis_type", String, nullable=False),
+    Column("model_name", Text, nullable=False),
+    Column("model_version", Text, nullable=False),
+    Column("pipeline_version", Text, nullable=False),
+    Column("input_hash", String(64), nullable=False),
+    Column("object_key", Text, nullable=False, unique=True),
+    Column("result", JSONB, nullable=False),
+    Column("searchable_text", Text, nullable=False),
+    Column("is_current", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+people = Table(
+    "people",
+    schema,
+    Column("id", String, primary_key=True),
+    Column("display_name", Text, nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+faces = Table(
+    "faces",
+    schema,
+    Column("id", String, primary_key=True),
+    Column("asset_id", String, ForeignKey("assets.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "analysis_run_id",
+        String,
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("person_id", String, ForeignKey("people.id"), nullable=False),
+    Column("face_index", Integer, nullable=False),
+    Column("bounding_box", JSONB, nullable=False),
+    Column("confidence", Float, nullable=False),
+    Column("embedding", JSONB, nullable=False),
+)
 
 
 class Catalog:
@@ -200,9 +242,7 @@ class Catalog:
     def _apply(self, connection, manifest: Manifest):
         """Project one authoritative asset snapshot using the caller's transaction."""
         existing = connection.execute(
-            select(assets.c.manifest)
-            .where(assets.c.id == str(manifest.asset_id))
-            .with_for_update()
+            select(assets.c.manifest).where(assets.c.id == str(manifest.asset_id)).with_for_update()
         ).scalar_one_or_none()
         if existing:
             current = Manifest.model_validate(existing)
@@ -258,6 +298,16 @@ class Catalog:
             .values(
                 asset_id=str(manifest.asset_id),
                 job_type="preview-v1",
+                status="pending",
+                attempts=0,
+            )
+            .on_conflict_do_nothing()
+        )
+        connection.execute(
+            insert(jobs)
+            .values(
+                asset_id=str(manifest.asset_id),
+                job_type="ai-v1",
                 status="pending",
                 attempts=0,
             )
@@ -338,7 +388,36 @@ class Catalog:
             )
         if query.q:
             # Literal substring search: '%' and '_' in filenames are not wildcards.
-            filters.append(assets.c.search_text.icontains(query.q, autoescape=True))
+            semantic_match = (
+                select(analysis_runs.c.id)
+                .where(
+                    analysis_runs.c.asset_id == assets.c.id,
+                    analysis_runs.c.is_current,
+                    analysis_runs.c.searchable_text.icontains(query.q, autoescape=True),
+                )
+                .exists()
+            )
+            person_match = (
+                select(faces.c.id)
+                .select_from(
+                    faces.join(analysis_runs, faces.c.analysis_run_id == analysis_runs.c.id).join(
+                        people, faces.c.person_id == people.c.id
+                    )
+                )
+                .where(
+                    faces.c.asset_id == assets.c.id,
+                    analysis_runs.c.is_current,
+                    people.c.display_name.icontains(query.q, autoescape=True),
+                )
+                .exists()
+            )
+            filters.append(
+                or_(
+                    assets.c.search_text.icontains(query.q, autoescape=True),
+                    semantic_match,
+                    person_match,
+                )
+            )
         if query.date_from:
             filters.append(assets.c.timeline_at >= datetime.combine(query.date_from, day_time.min))
         if query.date_to:
@@ -411,9 +490,7 @@ class Catalog:
         with self.writer(), self.engine.begin() as connection:
             previous = (
                 connection.execute(
-                    select(operations)
-                    .where(operations.c.id == str(operation_id))
-                    .with_for_update()
+                    select(operations).where(operations.c.id == str(operation_id)).with_for_update()
                 )
                 .mappings()
                 .one_or_none()
@@ -427,16 +504,12 @@ class Catalog:
             kind, action = mutation.action.split(".")
             if kind == "asset":
                 value = connection.scalar(
-                    select(assets.c.manifest)
-                    .where(assets.c.id == entity_id)
-                    .with_for_update()
+                    select(assets.c.manifest).where(assets.c.id == entity_id).with_for_update()
                 )
                 current = Manifest.model_validate(value) if value else None
             else:
                 value = connection.scalar(
-                    select(albums.c.state)
-                    .where(albums.c.id == entity_id)
-                    .with_for_update()
+                    select(albums.c.state).where(albums.c.id == entity_id).with_for_update()
                 )
                 current = Album.model_validate(value) if value else None
 
@@ -511,7 +584,9 @@ class Catalog:
                     if asset.deleted_at and (
                         not current or UUID(str(asset_id)) not in current.asset_ids
                     ):
-                        raise LibraryError(f"Restore asset before adding it to an album: {asset_id}")
+                        raise LibraryError(
+                            f"Restore asset before adding it to an album: {asset_id}"
+                        )
                 snapshot = Album.model_validate(
                     {
                         **values,
@@ -536,7 +611,9 @@ class Catalog:
         with self.engine.connect() as connection:
             rows = list(
                 connection.execute(
-                    select(assets.c.id, assets.c.rating, assets.c.favorite, assets.c.manifest).where(
+                    select(
+                        assets.c.id, assets.c.rating, assets.c.favorite, assets.c.manifest
+                    ).where(
                         assets.c.state_revision == 1,
                         (assets.c.rating != 0) | assets.c.favorite,
                     )
@@ -766,6 +843,493 @@ class Catalog:
                 )
             ).mappings()
             return [dict(row) for row in rows]
+
+    def claim_ai_job(self) -> dict | None:
+        """Claim AI only after the ordinary worker has resolved the preview."""
+        ai_jobs = jobs.alias("ai_jobs")
+        preview_jobs = jobs.alias("preview_jobs")
+        now = int(time())
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(
+                    select(
+                        ai_jobs.c.asset_id,
+                        preview_jobs.c.status.label("preview_status"),
+                    )
+                    .select_from(
+                        ai_jobs.join(
+                            preview_jobs,
+                            (preview_jobs.c.asset_id == ai_jobs.c.asset_id)
+                            & (preview_jobs.c.job_type == "preview-v1"),
+                        )
+                    )
+                    .where(
+                        ai_jobs.c.job_type == "ai-v1",
+                        (ai_jobs.c.status == "pending")
+                        | ((ai_jobs.c.status == "running") & (ai_jobs.c.lease_until < now)),
+                        preview_jobs.c.status.in_(["ready", "failed", "unavailable"]),
+                    )
+                    .order_by(ai_jobs.c.asset_id)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            connection.execute(
+                jobs.update()
+                .where(jobs.c.asset_id == row["asset_id"], jobs.c.job_type == "ai-v1")
+                .values(
+                    status="running",
+                    attempts=jobs.c.attempts + 1,
+                    lease_until=now + 1800,
+                    error=None,
+                )
+            )
+            return dict(row)
+
+    def finish_ai_job(self, asset_id: str, status: str, error: str | None = None):
+        with self.engine.begin() as connection:
+            connection.execute(
+                jobs.update()
+                .where(jobs.c.asset_id == asset_id, jobs.c.job_type == "ai-v1")
+                .values(status=status, error=error, lease_until=None)
+            )
+
+    def queue_ai(self, asset_ids: list[str] | None, include_deleted: bool = False) -> dict:
+        return self.queue_processing(asset_ids, ["ai-v1"], include_deleted)
+
+    def complete_ai_analysis(
+        self,
+        *,
+        asset_id: str,
+        run_id: str,
+        model_name: str,
+        model_version: str,
+        pipeline_version: str,
+        input_hash: str,
+        object_key: str,
+        result: dict,
+        searchable: str,
+        detected_faces: list[dict],
+        match_threshold: float,
+        created_at: str,
+    ) -> dict:
+        """Atomically publish a run, cluster its faces, and finish its job."""
+        from math import sqrt
+        from uuid import uuid4
+
+        def unit(vector):
+            length = sqrt(sum(value * value for value in vector)) or 1.0
+            return [value / length for value in vector]
+
+        with self.engine.begin() as connection:
+            # Face centroids and current-run replacement must be serialized even
+            # if an operator deliberately starts more than one AI worker.
+            connection.execute(text("SELECT pg_advisory_xact_lock(7046868303)"))
+            current_hash = connection.scalar(
+                select(assets.c.sha256).where(assets.c.id == asset_id).with_for_update()
+            )
+            if current_hash is None:
+                raise FileNotFoundError("AI job references a missing asset")
+            if current_hash != input_hash:
+                raise LibraryError("Asset changed while AI analysis was running")
+
+            face_table = faces
+            centroid_rows = connection.execute(
+                select(face_table.c.person_id, face_table.c.embedding)
+                .select_from(
+                    face_table.join(
+                        analysis_runs,
+                        face_table.c.analysis_run_id == analysis_runs.c.id,
+                    )
+                )
+                .where(analysis_runs.c.is_current)
+            )
+            sums: dict[str, list[float]] = {}
+            for person_id, embedding in centroid_rows:
+                vector = unit(embedding)
+                if person_id not in sums:
+                    sums[person_id] = [0.0] * len(vector)
+                sums[person_id] = [a + b for a, b in zip(sums[person_id], vector, strict=True)]
+
+            assigned = []
+            used: set[str] = set()
+            for index, face in enumerate(detected_faces):
+                vector = unit(face["embedding"])
+                best_person, best_score = None, -1.0
+                for person_id, total in sums.items():
+                    if person_id in used:
+                        continue
+                    center = unit(total)
+                    score = sum(a * b for a, b in zip(center, vector, strict=True))
+                    if score > best_score:
+                        best_person, best_score = person_id, score
+                if best_person is None or best_score <= match_threshold:
+                    best_person = str(uuid4())
+                    connection.execute(
+                        insert(people).values(
+                            id=best_person,
+                            display_name="",
+                            created_at=datetime.fromisoformat(created_at),
+                        )
+                    )
+                    sums[best_person] = [0.0] * len(vector)
+                sums[best_person] = [a + b for a, b in zip(sums[best_person], vector, strict=True)]
+                used.add(best_person)
+                assigned.append((index, best_person, face))
+
+            public_result = {**result, "personCount": len(used)}
+            connection.execute(
+                analysis_runs.update()
+                .where(
+                    analysis_runs.c.asset_id == asset_id,
+                    analysis_runs.c.analysis_type == "photo-ai",
+                    analysis_runs.c.is_current,
+                )
+                .values(is_current=False)
+            )
+            connection.execute(
+                insert(analysis_runs).values(
+                    id=run_id,
+                    asset_id=asset_id,
+                    analysis_type="photo-ai",
+                    model_name=model_name,
+                    model_version=model_version,
+                    pipeline_version=pipeline_version,
+                    input_hash=input_hash,
+                    object_key=object_key,
+                    result=public_result,
+                    searchable_text=searchable,
+                    is_current=True,
+                    created_at=datetime.fromisoformat(created_at),
+                )
+            )
+            if assigned:
+                connection.execute(
+                    insert(face_table),
+                    [
+                        {
+                            "id": str(uuid4()),
+                            "asset_id": asset_id,
+                            "analysis_run_id": run_id,
+                            "person_id": person_id,
+                            "face_index": index,
+                            "bounding_box": face["box"],
+                            "confidence": face["confidence"],
+                            "embedding": face["embedding"],
+                        }
+                        for index, person_id, face in assigned
+                    ],
+                )
+            connection.execute(
+                jobs.update()
+                .where(jobs.c.asset_id == asset_id, jobs.c.job_type == "ai-v1")
+                .values(status="ready", error=None, lease_until=None)
+            )
+        return {"faceCount": len(assigned), "personCount": len(used)}
+
+    def analysis_status(self, asset_id: str) -> dict:
+        face_table = faces
+        with self.engine.connect() as connection:
+            job = (
+                connection.execute(
+                    select(jobs.c.status, jobs.c.attempts, jobs.c.error).where(
+                        jobs.c.asset_id == asset_id, jobs.c.job_type == "ai-v1"
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            run = (
+                connection.execute(
+                    select(analysis_runs).where(
+                        analysis_runs.c.asset_id == asset_id,
+                        analysis_runs.c.analysis_type == "photo-ai",
+                        analysis_runs.c.is_current,
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            face_rows = []
+            if run:
+                face_rows = list(
+                    connection.execute(
+                        select(
+                            face_table.c.face_index,
+                            face_table.c.bounding_box,
+                            face_table.c.confidence,
+                            face_table.c.person_id,
+                            people.c.display_name,
+                        )
+                        .join(people, face_table.c.person_id == people.c.id)
+                        .where(face_table.c.analysis_run_id == run["id"])
+                        .order_by(face_table.c.face_index)
+                    ).mappings()
+                )
+        value = {
+            "status": job["status"] if job else "missing",
+            "attempts": job["attempts"] if job else 0,
+            "error": job["error"] if job else None,
+            "runId": run["id"] if run else None,
+            "model": run["model_name"] if run else None,
+            "modelVersion": run["model_version"] if run else None,
+            "pipelineVersion": run["pipeline_version"] if run else None,
+            "analyzedAt": run["created_at"].isoformat() if run else None,
+            "artifactKey": run["object_key"] if run else None,
+            "result": run["result"] if run else None,
+            "faces": [
+                {
+                    "faceIndex": row["face_index"],
+                    "box": row["bounding_box"],
+                    "confidence": row["confidence"],
+                    "personId": row["person_id"],
+                    "personName": row["display_name"] or None,
+                }
+                for row in face_rows
+            ],
+        }
+        return value
+
+    def list_people(self, query: str = "", limit: int = 500, offset: int = 0) -> dict:
+        """Return current face groups with a small representative contact sheet."""
+        pattern = f"%{query.strip()}%"
+        statement = text("""
+            WITH current_faces AS (
+                SELECT f.id, f.asset_id, f.person_id, f.bounding_box, f.confidence,
+                       a.original_filename
+                FROM faces f
+                JOIN analysis_runs ar ON ar.id = f.analysis_run_id AND ar.is_current
+                JOIN assets a ON a.id = f.asset_id AND a.deleted_at IS NULL
+            )
+            SELECT p.id, p.display_name, stats.face_count, stats.photo_count,
+                   COALESCE(samples.items, '[]'::jsonb) AS samples
+            FROM people p
+            JOIN LATERAL (
+                SELECT count(*)::integer AS face_count,
+                       count(DISTINCT cf.asset_id)::integer AS photo_count
+                FROM current_faces cf WHERE cf.person_id = p.id
+            ) stats ON stats.face_count > 0
+            LEFT JOIN LATERAL (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'faceId', sample.id,
+                    'assetId', sample.asset_id,
+                    'originalFilename', sample.original_filename,
+                    'box', sample.bounding_box,
+                    'confidence', sample.confidence,
+                    'thumbnailUrl', '/faces/' || sample.id || '/thumbnail'
+                ) ORDER BY sample.confidence DESC) AS items
+                FROM (
+                    SELECT cf.* FROM current_faces cf
+                    WHERE cf.person_id = p.id
+                    ORDER BY cf.confidence DESC, cf.id
+                    LIMIT 4
+                ) sample
+            ) samples ON true
+            WHERE (:query = '' OR p.display_name ILIKE :pattern OR EXISTS (
+                SELECT 1 FROM current_faces cf
+                WHERE cf.person_id = p.id AND cf.original_filename ILIKE :pattern
+            ))
+            ORDER BY (NULLIF(trim(p.display_name), '') IS NULL), stats.face_count DESC,
+                     lower(p.display_name), p.created_at, p.id
+        """)
+        with self.engine.connect() as connection:
+            rows = list(
+                connection.execute(
+                    statement, {"query": query.strip(), "pattern": pattern}
+                ).mappings()
+            )
+        page = rows[offset : offset + limit]
+        return {
+            "items": [
+                {
+                    "personId": row["id"],
+                    "displayName": row["display_name"],
+                    "faceCount": row["face_count"],
+                    "photoCount": row["photo_count"],
+                    "sampleFaces": row["samples"],
+                }
+                for row in page
+            ],
+            "total": len(rows),
+            "named": sum(bool(row["display_name"].strip()) for row in rows),
+            "unnamed": sum(not row["display_name"].strip() for row in rows),
+        }
+
+    def person_detail(self, person_id: str, limit: int = 2000, offset: int = 0) -> dict | None:
+        """Return the current, reviewable faces assigned to one person."""
+        with self.engine.connect() as connection:
+            person = (
+                connection.execute(select(people).where(people.c.id == person_id))
+                .mappings()
+                .one_or_none()
+            )
+            if person is None:
+                return None
+            filters = (
+                faces.c.person_id == person_id,
+                analysis_runs.c.is_current,
+                assets.c.deleted_at.is_(None),
+            )
+            source = faces.join(analysis_runs, faces.c.analysis_run_id == analysis_runs.c.id).join(
+                assets, faces.c.asset_id == assets.c.id
+            )
+            total = connection.scalar(select(func.count()).select_from(source).where(*filters))
+            photo_count = connection.scalar(
+                select(func.count(func.distinct(faces.c.asset_id)))
+                .select_from(source)
+                .where(*filters)
+            )
+            rows = list(
+                connection.execute(
+                    select(
+                        faces.c.id,
+                        faces.c.asset_id,
+                        faces.c.bounding_box,
+                        faces.c.confidence,
+                        assets.c.original_filename,
+                    )
+                    .select_from(source)
+                    .where(*filters)
+                    .order_by(assets.c.timeline_at.desc(), assets.c.id, faces.c.face_index)
+                    .limit(limit)
+                    .offset(offset)
+                ).mappings()
+            )
+        return {
+            "personId": person_id,
+            "displayName": person["display_name"],
+            "faceCount": total,
+            "photoCount": photo_count,
+            "faces": [
+                {
+                    "faceId": row["id"],
+                    "assetId": row["asset_id"],
+                    "originalFilename": row["original_filename"],
+                    "box": row["bounding_box"],
+                    "confidence": row["confidence"],
+                    "thumbnailUrl": f"/faces/{row['id']}/thumbnail",
+                }
+                for row in rows
+            ],
+        }
+
+    def face(self, face_id: str) -> dict | None:
+        """Resolve one current face for its cropped thumbnail."""
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(faces.c.asset_id, faces.c.bounding_box)
+                    .join(analysis_runs, faces.c.analysis_run_id == analysis_runs.c.id)
+                    .where(faces.c.id == face_id, analysis_runs.c.is_current)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return dict(row) if row else None
+
+    def commit_face_operation(self, operation_id: UUID, request: dict) -> dict:
+        """Apply a face-review edit and record its idempotent result atomically."""
+        with self.writer(), self.engine.begin() as connection:
+            previous = (
+                connection.execute(
+                    select(operations).where(operations.c.id == str(operation_id)).with_for_update()
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if previous:
+                if previous["request"] != request:
+                    raise LibraryError("Operation ID was reused with a different request")
+                return previous["result"]
+
+            connection.execute(text("SELECT pg_advisory_xact_lock(7046868303)"))
+            action = request.get("action")
+            if action == "person.rename":
+                person_id = request["personId"]
+                exists = connection.scalar(
+                    select(people.c.id).where(people.c.id == person_id).with_for_update()
+                )
+                if exists is None:
+                    raise FileNotFoundError("Person not found")
+                connection.execute(
+                    people.update()
+                    .where(people.c.id == person_id)
+                    .values(display_name=request["displayName"])
+                )
+                result = {
+                    "operationId": str(operation_id),
+                    "personId": person_id,
+                    "displayName": request["displayName"],
+                }
+            elif action == "person.merge":
+                source_id, target_id = request["sourcePersonId"], request["targetPersonId"]
+                if source_id == target_id:
+                    raise LibraryError("Choose two different people to combine")
+                found = set(
+                    connection.scalars(
+                        select(people.c.id).where(people.c.id.in_([source_id, target_id]))
+                    )
+                )
+                if found != {source_id, target_id}:
+                    raise FileNotFoundError("Person not found")
+                moved = connection.scalar(
+                    select(func.count()).select_from(faces).where(faces.c.person_id == source_id)
+                )
+                connection.execute(
+                    faces.update().where(faces.c.person_id == source_id).values(person_id=target_id)
+                )
+                connection.execute(people.delete().where(people.c.id == source_id))
+                result = {
+                    "operationId": str(operation_id),
+                    "personId": target_id,
+                    "mergedPersonId": source_id,
+                    "movedFaces": moved,
+                }
+            elif action == "faces.move":
+                face_ids = request["faceIds"]
+                rows = list(
+                    connection.execute(
+                        select(faces.c.id)
+                        .join(analysis_runs, faces.c.analysis_run_id == analysis_runs.c.id)
+                        .where(faces.c.id.in_(face_ids), analysis_runs.c.is_current)
+                        .with_for_update()
+                    ).scalars()
+                )
+                if set(rows) != set(face_ids):
+                    raise LibraryError("One or more selected faces are no longer current")
+                target_id = request.get("targetPersonId")
+                created = target_id is None
+                if target_id is None:
+                    target_id = str(uuid4())
+                    connection.execute(
+                        insert(people).values(
+                            id=target_id,
+                            display_name="",
+                            created_at=datetime.now(UTC),
+                        )
+                    )
+                elif connection.scalar(select(people.c.id).where(people.c.id == target_id)) is None:
+                    raise FileNotFoundError("Destination person not found")
+                connection.execute(
+                    faces.update().where(faces.c.id.in_(face_ids)).values(person_id=target_id)
+                )
+                result = {
+                    "operationId": str(operation_id),
+                    "personId": target_id,
+                    "movedFaces": len(face_ids),
+                    "createdPerson": created,
+                }
+            else:
+                raise LibraryError("Invalid face operation")
+
+            connection.execute(
+                insert(operations).values(id=str(operation_id), request=request, result=result)
+            )
+            return result
 
     def finish_job(self, asset_id: str, status: str, error: str | None = None):
         with self.engine.begin() as connection:
@@ -1165,5 +1729,20 @@ class Catalog:
                         jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
                         jobs.c.status == "failed",
                     )
+                ),
+                "analysisPending": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.job_type == "ai-v1", jobs.c.status == "pending")
+                ),
+                "analysisRunning": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.job_type == "ai-v1", jobs.c.status == "running")
+                ),
+                "analysisFailed": connection.scalar(
+                    select(func.count())
+                    .select_from(jobs)
+                    .where(jobs.c.job_type == "ai-v1", jobs.c.status == "failed")
                 ),
             }

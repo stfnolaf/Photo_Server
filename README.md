@@ -1,6 +1,6 @@
 # Photo Server
 
-This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, and jobs. S3 holds immutable originals, imported XMP sidecars, upload staging objects, and scheduled PostgreSQL backups. A separate threaded worker onboards uploads and generates JPEG previews from embedded RAW previews or JPEG/HEIF originals; the independently deployed web frontend provides a timeline, search, metadata editing, albums, and trash/restore.
+This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, jobs, and the current analysis index. S3 holds immutable originals, imported XMP sidecars, versioned AI artifacts, upload staging objects, and scheduled PostgreSQL backups. A threaded media worker keeps uploads and previews responsive; a separate single-concurrency CUDA worker performs face and semantic analysis without entering the ingestion critical path.
 
 See the historical [Phase 1](docs/verification.md), [Phase 2](docs/phase-2-verification.md), and [Phase 3](docs/phase-3-verification.md) reports, plus the current [PostgreSQL-authority verification](docs/postgres-authority-verification.md).
 
@@ -18,18 +18,20 @@ The backend has no dependency on a frontend build. Each frontend owns its source
 
 ## Start
 
-Docker and Docker Compose are sufficient; ExifTool and Python dependencies are installed in the backend image, and nginx serves the web image.
+Docker and Docker Compose are sufficient for the core service. Local AI also requires an NVIDIA driver, NVIDIA Container Toolkit, and the verified AdaFace model directory from the sibling face-scanner. Confirm `docker run --rm --gpus all ubuntu nvidia-smi` works before starting.
 
 ```bash
 cp -n .env.example .env
 chmod 600 .env
 ```
 
-Set the S3 endpoint and database password in `.env`, then start:
+Set the S3 endpoint and database password in `.env`. `PHOTO_FACE_MODEL_DIR` defaults to `../face-scanner/runtime/raw-jpeg/models`; it must contain `face_detection_yunet_2023mar.onnx`, `face_recognition_sface_2021dec.onnx`, `adaface-ir101.onnx`, and `adaface-ir101.json`. The worker verifies their provenance and checksums and refuses CPU fallback. Then start:
 
 ```bash
 docker compose up --build -d
 ```
+
+The first start pulls the approximately 6.1 GB `qwen3-vl:8b-instruct-q4_K_M` model into the persistent `ollama-data` volume. API, upload, and preview services can run while that one-time download completes. Ollama has no published host port; photographs are sent only over the private Compose network.
 
 - Photo library: **http://SERVER_IP:3000/**
 - Interactive API documentation: **http://SERVER_IP:8000/docs**
@@ -47,11 +49,11 @@ The API and web frontend bind to all interfaces by default. V1 has no API authen
 Stop the old API and worker before starting the new version so that local-only writes cannot race migration:
 
 ```bash
-docker compose stop api worker backup
-docker compose build api worker web backup
+docker compose stop api worker ai-worker backup
+docker compose build api worker ai-worker web backup
 docker compose up -d postgres
 docker compose run --rm --no-deps api photo-server migrate
-docker compose up -d api worker web backup
+docker compose up -d api worker ai-worker web backup
 ```
 
 The explicit `migrate` command applies PostgreSQL schema migrations before traffic resumes. Startup performs the same check automatically. Existing Phase 2 ratings/favorites are promoted into the PostgreSQL asset snapshot; no S3 state documents are created. Keep the existing PostgreSQL volume until a verified version-4 backup has completed because PostgreSQL is now authoritative.
@@ -67,6 +69,7 @@ PostgreSQL DDL and data backfills live in numbered SQL files under [`backend/src
 | 002 | `002_browsing.sql` | Browse fields, ratings/favorites, backfill, constraints, and indexes |
 | 003 | `003_durable_user_state.sql` | Albums, operation replay records, and asset tombstones |
 | 004 | `004_postgres_authority.sql` | Record PostgreSQL as the structured-state authority |
+| 005 | `005_ai_analysis.sql` | AI run artifacts, face embeddings/groups, current search index, and analysis queue |
 
 Every file is idempotent: table, column, constraint, and index creation is guarded, and the browsing backfill can run repeatedly. Normal operation still executes each version once. The `schema_migrations` table records its version, name, SHA-256 checksum, and application time; startup refuses gaps, checksum changes, version disagreement, a database from another library, or a database newer than the application. Add a new numbered file for every schema change instead of editing an applied file.
 
@@ -89,6 +92,12 @@ The relevant queue settings are:
 | `PHOTO_UPLOAD_WORKERS` | 4 | Simultaneous API-to-S3 transfers; extra requests wait asynchronously |
 | `PHOTO_WORKER_THREADS` | 4 | Concurrent onboarding/preview jobs in the worker process |
 | `PHOTO_UPLOAD_PART_BYTES` | 8 MiB | Memory and S3 multipart chunk size per active upload |
+| `PHOTO_AI_MODEL` | `qwen3-vl:8b-instruct-q4_K_M` | Local Ollama vision model and quantization |
+| `PHOTO_AI_CONTEXT_TOKENS` | 4096 | Bounded VLM context to retain GPU headroom |
+| `PHOTO_AI_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to AdaFace and Qwen |
+| `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into the AI worker |
+| `PHOTO_FACE_DETECTION_THRESHOLD` | 0.8 | YuNet face detection threshold |
+| `PHOTO_FACE_MATCH_THRESHOLD` | 0.4 | AdaFace centroid similarity starting point |
 | `PHOTO_CORS_ORIGINS` | empty | Comma-separated browser origins allowed to call the API |
 | `PHOTO_WEB_BIND` | `0.0.0.0` | Host interface for the web frontend |
 | `PHOTO_WEB_PORT` | `3000` | Host port for the web frontend |
@@ -145,6 +154,7 @@ accepting -> queued -> processing -> complete
 3. `POST /upload-batches/{id}/seal` creates PostgreSQL onboarding jobs.
 4. The worker thread pool claims jobs with PostgreSQL row locking and leases. Each job verifies the staged bytes, runs the reusable metadata processing stage, stores immutable originals, commits the asset to PostgreSQL, and removes its staged copy.
 5. The same worker pool runs explicitly queued processing stages and then generates previews. Processing can be safely queued again as extractors improve.
+6. Asset creation also adds an `ai-v1` job. The independent AI worker waits for a usable preview, then runs YuNet/AdaFace and Qwen sequentially. Upload completion never waits for this queue.
 
 PostgreSQL preserves queue state across service restarts. A staged or final object written immediately before a process failure is safely reused on retry because object keys are immutable and bytes are verified. Recovery after PostgreSQL loss uses a database backup; uploads newer than the restored backup may need to be resubmitted.
 
@@ -162,8 +172,15 @@ Use `/docs` for the full schemas.
 | `GET /upload-queue` | Inspect active/waiting transfers and durable job counts |
 | `GET /assets?limit=100&offset=0` | List paginated asset records |
 | `GET /library/assets` | Search/filter the capture-time timeline with cursor pagination |
-| `GET /assets/{id}` | Get a manifest plus processing and preview-job status |
+| `GET /assets/{id}` | Get a manifest plus processing, preview, and current AI-analysis status/results |
 | `POST /processing` | Queue metadata processing for one, many, or all active assets |
+| `POST /analysis` | Queue or requeue local AI analysis for one, many, or all active assets |
+| `POST /assets/{id}/analysis/retry` | Explicitly request analysis again for one photograph |
+| `GET /people` and `GET /people/{id}` | Browse detected face groups and review every current face assignment |
+| `PATCH /people/{id}` | Name or unname a detected person group |
+| `POST /people/{id}/merge` | Combine a split face group into another person |
+| `POST /faces/move` | Move selected faces to an existing or new group |
+| `GET /faces/{id}/thumbnail` | Get a local cropped face thumbnail from the photo preview cache |
 | `PATCH /assets/{id}/user-state` or `/metadata` | Durably edit rating, favorite, caption, keywords, or location |
 | `DELETE /assets/{id}` | Write a tombstone and move a photo to trash |
 | `POST /assets/{id}/restore` | Restore a trashed photo |
@@ -185,16 +202,19 @@ Open `http://SERVER_IP:3000/`. The responsive browser UI includes:
 
 - A dense, virtualized capture-time timeline grouped by month, with adjustable thumbnail size and persistent workspace layout. Photos without a usable capture time use their import time and are identified in the interface.
 - Incremental loading with stable cursor pagination, newest/oldest sorting, and filters for date, media format, minimum rating, and favorites.
-- Case-insensitive literal search across original filenames, camera make/model, lens metadata, captions, keywords, and location names.
+- Case-insensitive literal search across original metadata and AI summaries, photo types, scenes, objects, activities, tags, and visible text.
 - Lazy, bounded thumbnail loading and explicit pending, unavailable, and failed preview states.
 - A routed loupe workspace with zoom, a filmstrip, camera/exposure information, all recorded EXIF, original download, arrow-key navigation, `F` for favorite, and `0`–`5` for ratings.
+- A face-catalog workspace with contact sheets for naming people, combining groups, and selecting incorrect detections to move into another or a new group.
 - A Lightroom-style desktop shell with library and album navigation, collapsible inspector panels, and phone-specific navigation and stacked detail controls.
 
 The photo viewer edits captions, keywords, named locations and coordinates, and album membership. The album editor supports names, descriptions, membership removal, and ordering. Album collections retain the capture-time timeline; the album editor and API expose their saved membership order. Trash hides photos from normal browsing and supports restore; it never removes originals. Trashing an album leaves its photos in the library. Membership survives photo deletion and restore.
 
+The AI inspector shows queue/failure state, the structured description, scene and object terms, detected face/group counts, analysis time, and an explicit **Analyze again** action. Each successful run writes a new immutable artifact beneath `analysis/<asset-id>/photo-ai-v1/`; PostgreSQL atomically switches the current searchable run only after that object exists. Old artifacts remain available for recovery and audit.
+
 ### Durable mutation protocol
 
-Every metadata, album, trash, or restore request requires a client-generated UUID `operationId` in the JSON body. Retain the same ID and body when retrying an interrupted request. For example:
+Every metadata, album, trash, restore, or face-review request requires a client-generated UUID `operationId` in the JSON body. Retain the same ID and body when retrying an interrupted request. For example:
 
 ```json
 {
@@ -292,14 +312,17 @@ docker compose run --rm --no-deps \
 
 Export writes active originals to `<asset-id>/<original-filename>` plus a portable `manifest.json`, including current metadata, into an empty destination. `library-state.json` preserves album definitions, ordering, and trashed asset metadata. Add `--include-trash` to also download trashed originals. Export requires PostgreSQL because it is the source of truth, and it retains imported XMP files.
 
-## Worker
+## Workers
 
-The worker prioritizes onboarding jobs, versioned processing stages such as `metadata-v1`, and then preview jobs. The stage registry is the extension point for later face and object detection. RAW previews come from ExifTool's `JpgFromRaw`, `PreviewImage`, or `ThumbnailImage` tags; no RAW rendering occurs. JPEG and HEIF originals are decoded with Pillow/pillow-heif. Camera orientation is applied to derived previews.
+The media worker prioritizes onboarding jobs, versioned processing stages such as `metadata-v1`, and then preview jobs. RAW previews come from ExifTool's `JpgFromRaw`, `PreviewImage`, or `ThumbnailImage` tags; no RAW rendering occurs. JPEG and HEIF originals are decoded with Pillow/pillow-heif. Camera orientation is applied to derived previews.
+
+The AI worker has one queue consumer. YuNet detection and alignment complete first, AdaFace IR101 embeds faces on CUDA in batches of at most 32, and only then is the image submitted to Qwen through local Ollama. Qwen is restricted to one loaded model and one parallel request; requests use a 4096-token context by default (Ollama may reserve a larger internal KV allocation). The configured Q4 model plus AdaFace used about 13.1 GB together in the RTX 3090 deployment check, leaving about 11 GB free. Similarity scores are clustering heuristics rather than probabilities; `0.4` carries over the sibling scanner's reviewed starting point.
 
 Process one queued job manually:
 
 ```bash
 docker compose run --rm api photo-server worker --once
+docker compose run --rm ai-worker photo-server ai-worker --once
 ```
 
 ## Development and verification
@@ -335,7 +358,7 @@ The tests create random `photo-test-*` buckets and `photo_test_*` databases and 
 - V1 has no API authentication or TLS termination; keep it on a trusted LAN or place it behind a configured reverse proxy.
 - Completed files and queue state survive service restarts. An individual client-to-API PUT is streamed and must restart from byte zero if its network connection fails.
 - PostgreSQL is the only authoritative structured-state store. Its scheduled backups share the configured S3 failure domain unless that S3 data is independently replicated.
-- Originals and imported XMP files are immutable S3 blobs. People assignments, AI analysis, photo editing, and generated XMP remain future work.
+- Originals, imported XMP files, and completed AI run artifacts are immutable S3 blobs. Face naming/manual correction, photo editing, generated XMP, and semantic vector search remain future work.
 - No automatic source-folder watcher or mass migration exists. The network client enumerates only paths explicitly provided by the user.
 - One application database and one API process per library remain the supported deployment.
 - No automatic garbage collection or original deletion is implemented.

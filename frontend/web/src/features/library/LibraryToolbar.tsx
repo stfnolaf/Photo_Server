@@ -31,7 +31,7 @@ export function LibraryToolbar({
       <div className="library-tools__main">
         <label className="search-field">
           <Search size={16} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" maxLength={200} placeholder="Search photographs, cameras, lenses…" aria-label="Search library" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} type="search" maxLength={200} placeholder="Search scenes, objects, photographs…" aria-label="Search library" />
           {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={14} /></button>}
         </label>
         <Button compact tone={filterCount ? "default" : "ghost"} onClick={toggleFilters} aria-expanded={filtersOpen}>

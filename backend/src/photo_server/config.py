@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     )
     cors_origins: str = ""
     exiftool: str = "exiftool"
+    ai_ollama_url: str = "http://ollama:11434"
+    ai_model: str = "qwen3-vl:8b-instruct-q4_K_M"
+    ai_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    ai_context_tokens: int = Field(default=4096, ge=2048, le=32768)
+    ai_max_image_side: int = Field(default=2000, ge=512, le=4096)
+    face_models_dir: Path = Path("/models")
+    face_detection_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
+    face_match_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def configure_database(self):
