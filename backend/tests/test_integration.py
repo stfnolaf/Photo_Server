@@ -306,7 +306,7 @@ def test_ai_analysis_is_separate_searchable_durable_and_requeueable(backend):
     assert service.catalog.analysis_status(asset_id)["status"] == "pending"
     assert run_once(service)["jobType"] == "preview"
     claimed = service.catalog.claim_ai_job()
-    assert claimed == {"asset_id": asset_id, "preview_status": "ready"}
+    assert claimed == {"asset_id": asset_id, "preview_status": "ready", "force_full": False}
 
     run_id = str(uuid4())
     object_key = f"analysis/{asset_id}/photo-ai-v1/{run_id}.json"

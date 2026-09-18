@@ -37,6 +37,11 @@ def main():
     analyze.add_argument(
         "--include-deleted", action="store_true", help="Include trash when analyzing the library"
     )
+    analyze.add_argument(
+        "--force-full",
+        action="store_true",
+        help="Bypass semantic reuse for the queued analysis jobs",
+    )
     export = commands.add_parser(
         "export", help="Export the PostgreSQL catalog and its original S3 objects"
     )
@@ -71,7 +76,9 @@ def main():
                     args.include_deleted,
                 )
             elif args.command == "analyze":
-                result = service.queue_analysis(args.asset, args.include_deleted)
+                result = service.queue_analysis(
+                    args.asset, args.include_deleted, args.force_full
+                )
             elif args.command == "ai-worker":
                 from photo_server.ai_worker import run as run_ai
 

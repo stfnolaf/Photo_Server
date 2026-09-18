@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import time as day_time
 from threading import RLock
 from time import time
@@ -27,8 +27,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 
-from photo_server.browsing import BrowseQuery, asset_summary, browse_fields
-from photo_server.config import LibraryError
+from photo_server.browsing import BrowseQuery, asset_summary, browse_fields, camera_time
+from photo_server.config import LibraryError, Settings
+from photo_server.fingerprints import BURST_HASH_VERSION, Candidate, Fingerprint
 from photo_server.migrations import migrate
 from photo_server.models import Album, Manifest, Mutation, UserState
 
@@ -99,6 +100,7 @@ jobs = Table(
     Column("attempts", Integer, nullable=False, default=0),
     Column("error", Text),
     Column("lease_until", BigInteger),
+    Column("force_full", Boolean, nullable=False, server_default="false"),
 )
 upload_batches = Table(
     "upload_batches",
@@ -154,6 +156,10 @@ analysis_runs = Table(
     Column("result", JSONB, nullable=False),
     Column("searchable_text", Text, nullable=False),
     Column("is_current", Boolean, nullable=False, default=True),
+    Column("semantic_origin", String, nullable=False, server_default="computed"),
+    Column("source_run_id", String, ForeignKey("analysis_runs.id", ondelete="SET NULL")),
+    Column("reuse_policy_version", Text),
+    Column("similarity", JSONB),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 people = Table(
@@ -180,12 +186,58 @@ faces = Table(
     Column("confidence", Float, nullable=False),
     Column("embedding", JSONB, nullable=False),
 )
+image_fingerprints = Table(
+    "image_fingerprints",
+    schema,
+    Column("asset_id", String, ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True),
+    Column("algorithm_version", Text, primary_key=True),
+    Column("phash", String(16), nullable=False),
+    Column("dhash", String(16), nullable=False),
+    Column("width", Integer, nullable=False),
+    Column("height", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+burst_clusters = Table(
+    "burst_clusters",
+    schema,
+    Column("id", String, primary_key=True),
+    Column(
+        "representative_asset_id",
+        String,
+        ForeignKey("assets.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("policy_version", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+burst_members = Table(
+    "burst_members",
+    schema,
+    Column(
+        "cluster_id",
+        String,
+        ForeignKey("burst_clusters.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "asset_id",
+        String,
+        ForeignKey("assets.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
 
 
 class Catalog:
-    def __init__(self, url: str):
+    def __init__(self, url: str, settings: Settings | None = None):
         self.engine = create_engine(url, pool_pre_ping=True)
         self._writer_lock = RLock()
+        if settings is None:
+            self._burst_phash_max = 4
+            self._burst_dhash_max = 6
+        else:
+            self._burst_phash_max = settings.burst_cluster_phash_max_distance
+            self._burst_dhash_max = settings.burst_cluster_dhash_max_distance
 
     @contextmanager
     def writer(self):
@@ -430,9 +482,25 @@ class Catalog:
             filters.append(assets.c.rating >= query.rating_min)
         if query.favorite is not None:
             filters.append(assets.c.favorite == query.favorite)
+        member_count_alias = burst_members.alias("member_count")
+        member_count = (
+            select(func.count())
+            .select_from(member_count_alias)
+            .where(member_count_alias.c.cluster_id == burst_members.c.cluster_id)
+            .scalar_subquery()
+        )
         statement = select(
-            assets, jobs.c.status.label("preview_status"), jobs.c.error.label("preview_error")
-        ).outerjoin(jobs, (jobs.c.asset_id == assets.c.id) & (jobs.c.job_type == "preview-v1"))
+            assets,
+            jobs.c.status.label("preview_status"),
+            jobs.c.error.label("preview_error"),
+            burst_members.c.cluster_id.label("burst_id"),
+            burst_clusters.c.representative_asset_id.label("burst_representative"),
+            member_count.label("burst_size"),
+        ).outerjoin(
+            jobs, (jobs.c.asset_id == assets.c.id) & (jobs.c.job_type == "preview-v1")
+        ).outerjoin(burst_members, burst_members.c.asset_id == assets.c.id).outerjoin(
+            burst_clusters, burst_clusters.c.id == burst_members.c.cluster_id
+        )
         statement = statement.where(*filters)
         cursor = query.decode_cursor()
         position = tuple_(assets.c.timeline_at, assets.c.id)
@@ -487,6 +555,7 @@ class Catalog:
 
     def commit_mutation(self, operation_id: UUID, mutation: Mutation) -> dict:
         """Apply state and record its retry result in one PostgreSQL transaction."""
+        from photo_server.bursts import remove_member, set_representative
         from photo_server.state import mutation_result
 
         with self.writer(), self.engine.begin() as connection:
@@ -509,20 +578,23 @@ class Catalog:
                     select(assets.c.manifest).where(assets.c.id == entity_id).with_for_update()
                 )
                 current = Manifest.model_validate(value) if value else None
-            else:
+            elif kind == "album":
                 value = connection.scalar(
                     select(albums.c.state).where(albums.c.id == entity_id).with_for_update()
                 )
                 current = Album.model_validate(value) if value else None
+            else:
+                current = None
 
-            if current is None and mutation.action != "album.create":
-                raise FileNotFoundError("Entity not found")
-            if mutation.expected_revision is not None and (
-                current is None or current.revision != mutation.expected_revision
-            ):
-                raise LibraryError("Revision changed; reload before editing")
-            if current and current.deleted_at and action not in {"restore", "delete"}:
-                raise LibraryError("Restore this item before editing")
+            if kind != "burst":
+                if current is None and mutation.action != "album.create":
+                    raise FileNotFoundError("Entity not found")
+                if mutation.expected_revision is not None and (
+                    current is None or current.revision != mutation.expected_revision
+                ):
+                    raise LibraryError("Revision changed; reload before editing")
+                if current and current.deleted_at and action not in {"restore", "delete"}:
+                    raise LibraryError("Restore this item before editing")
 
             if kind == "asset":
                 changes = {}
@@ -553,6 +625,19 @@ class Catalog:
                     }
                 )
                 self._apply(connection, snapshot)
+                if action == "delete":
+                    remove_member(connection, entity_id)
+                elif action == "restore":
+                    self._join_burst(connection, entity_id)
+                result = mutation_result(snapshot)
+            elif kind == "burst":
+                if action != "setRepresentative":
+                    raise LibraryError("Invalid burst mutation")
+                result = set_representative(
+                    connection,
+                    entity_id,
+                    mutation.changes.get("representativeAssetId"),
+                )
             else:
                 if action == "create" and current:
                     raise LibraryError("Album already exists")
@@ -599,8 +684,8 @@ class Catalog:
                     }
                 )
                 self._apply_album(connection, snapshot)
+                result = mutation_result(snapshot)
 
-            result = mutation_result(snapshot)
             connection.execute(
                 insert(operations).values(
                     id=str(operation_id), request=mutation.document(), result=result
@@ -780,6 +865,7 @@ class Catalog:
         asset_ids: list[str] | None,
         job_types: list[str],
         include_deleted: bool = False,
+        force_full: bool = False,
     ) -> dict:
         """Queue stages for explicit assets, or every eligible library asset."""
         with self.engine.begin() as connection:
@@ -811,6 +897,14 @@ class Catalog:
                         .with_for_update()
                     )
                     if current_status == "pending":
+                        if force_full:
+                            # A forceFull retry must override an already-queued
+                            # job, or the worker would reuse instead of recomputing.
+                            connection.execute(
+                                jobs.update()
+                                .where(jobs.c.asset_id == asset_id, jobs.c.job_type == job_type)
+                                .values(force_full=True)
+                            )
                         already_queued += 1
                         continue
                     if current_status == "running":
@@ -823,10 +917,16 @@ class Catalog:
                             job_type=job_type,
                             status="pending",
                             attempts=0,
+                            force_full=force_full,
                         )
                         .on_conflict_do_update(
                             index_elements=[jobs.c.asset_id, jobs.c.job_type],
-                            set_={"status": "pending", "error": None, "lease_until": None},
+                            set_={
+                                "status": "pending",
+                                "error": None,
+                                "lease_until": None,
+                                "force_full": force_full,
+                            },
                             where=jobs.c.status != "running",
                         )
                     )
@@ -851,6 +951,203 @@ class Catalog:
             ).mappings()
             return [dict(row) for row in rows]
 
+    def upsert_fingerprint(self, asset_id: str, fingerprint: Fingerprint):
+        """Persist a fingerprint idempotently for (asset_id, algorithm_version)."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(image_fingerprints)
+                .values(
+                    asset_id=asset_id,
+                    algorithm_version=fingerprint.algorithm_version,
+                    phash=fingerprint.phash,
+                    dhash=fingerprint.dhash,
+                    width=fingerprint.width,
+                    height=fingerprint.height,
+                )
+                .on_conflict_do_nothing(index_elements=["asset_id", "algorithm_version"])
+            )
+            if fingerprint.algorithm_version == BURST_HASH_VERSION:
+                self._join_burst(connection, asset_id)
+
+    def _join_burst(self, connection, asset_id: str):
+        """Compute burst membership for one fingerprinted frame in the caller's transaction."""
+        from photo_server.bursts import join_or_create_cluster
+
+        row = (
+            connection.execute(
+                select(image_fingerprints).where(
+                    image_fingerprints.c.asset_id == asset_id,
+                    image_fingerprints.c.algorithm_version == BURST_HASH_VERSION,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return
+        fingerprint = Fingerprint(
+            algorithm_version=row["algorithm_version"],
+            phash=row["phash"],
+            dhash=row["dhash"],
+            width=row["width"],
+            height=row["height"],
+        )
+        join_or_create_cluster(
+            connection,
+            asset_id,
+            fingerprint,
+            self._burst_phash_max,
+            self._burst_dhash_max,
+        )
+
+    def get_fingerprint(self, asset_id: str, version: str) -> Fingerprint | None:
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    select(image_fingerprints).where(
+                        image_fingerprints.c.asset_id == asset_id,
+                        image_fingerprints.c.algorithm_version == version,
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        return Fingerprint(
+            algorithm_version=row["algorithm_version"],
+            phash=row["phash"],
+            dhash=row["dhash"],
+            width=row["width"],
+            height=row["height"],
+        )
+
+    def find_fingerprint_candidates(self, target_asset_id: str, version: str) -> list[Candidate]:
+        """Small candidate set for burst matching.
+
+        SQL filters on algorithm version, capture-time window, camera identity,
+        and dimensions; Hamming distance is applied in Python by the caller.
+        """
+        with self.engine.connect() as connection:
+            target = (
+                connection.execute(
+                    select(assets, image_fingerprints)
+                    .join_from(
+                        assets,
+                        image_fingerprints,
+                        (image_fingerprints.c.asset_id == assets.c.id)
+                        & (image_fingerprints.c.algorithm_version == version),
+                    )
+                    .where(assets.c.id == target_asset_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if target is None:
+                return []
+            manifest = Manifest.model_validate(target["manifest"])
+            capture = camera_time(manifest.capture_time)
+            if capture is None:
+                return []
+            filters = [
+                assets.c.id != target_asset_id,
+                assets.c.deleted_at.is_(None),
+                image_fingerprints.c.algorithm_version == version,
+                image_fingerprints.c.width == target["width"],
+                image_fingerprints.c.height == target["height"],
+                assets.c.manifest["captureTime"].astext.isnot(None),
+                assets.c.timeline_at >= capture - timedelta(seconds=3),
+                assets.c.timeline_at <= capture + timedelta(seconds=3),
+            ]
+            for field in ("Make", "Model"):
+                value = manifest.metadata.get(field)
+                if value is not None:
+                    filters.append(
+                        or_(
+                            assets.c.manifest["metadata"][field].astext == value,
+                            assets.c.manifest["metadata"][field].astext.is_(None),
+                        )
+                    )
+            rows = (
+                connection.execute(
+                    select(
+                        assets.c.id,
+                        image_fingerprints.c.phash,
+                        image_fingerprints.c.dhash,
+                        assets.c.timeline_at,
+                    )
+                    .select_from(
+                        assets.join(
+                            image_fingerprints,
+                            (image_fingerprints.c.asset_id == assets.c.id)
+                            & (image_fingerprints.c.algorithm_version == version),
+                        )
+                    )
+                    .where(*filters)
+                    .order_by(assets.c.id)
+                )
+                .mappings()
+                .all()
+            )
+        return [
+            Candidate(
+                asset_id=row["id"],
+                phash=row["phash"],
+                dhash=row["dhash"],
+                capture_time=row["timeline_at"],
+            )
+            for row in rows
+        ]
+
+    def burst_detail(self, asset_id: str) -> dict | None:
+        """The burst containing one asset: its ID, representative, and member frames."""
+        with self.engine.connect() as connection:
+            cluster = (
+                connection.execute(
+                    select(burst_clusters)
+                    .join_from(
+                        burst_members,
+                        burst_clusters,
+                        burst_clusters.c.id == burst_members.c.cluster_id,
+                    )
+                    .where(burst_members.c.asset_id == asset_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if cluster is None:
+                return None
+            cluster_id = cluster["id"]
+            representative = cluster["representative_asset_id"]
+            rows = (
+                connection.execute(
+                    select(
+                        assets,
+                        jobs.c.status.label("preview_status"),
+                        jobs.c.error.label("preview_error"),
+                    )
+                    .outerjoin(
+                        jobs,
+                        (jobs.c.asset_id == assets.c.id) & (jobs.c.job_type == "preview-v1"),
+                    )
+                    .where(
+                        assets.c.id.in_(
+                            select(burst_members.c.asset_id).where(
+                                burst_members.c.cluster_id == cluster_id
+                            )
+                        )
+                    )
+                    .order_by(assets.c.timeline_at, assets.c.id)
+                )
+                .mappings()
+                .all()
+            )
+        return {
+            "burstId": cluster_id,
+            "representativeAssetId": representative,
+            "frames": [asset_summary(row) for row in rows],
+        }
+
     def claim_ai_job(self) -> dict | None:
         """Claim AI only after the ordinary worker has resolved the preview."""
         ai_jobs = jobs.alias("ai_jobs")
@@ -861,6 +1158,7 @@ class Catalog:
                 connection.execute(
                     select(
                         ai_jobs.c.asset_id,
+                        ai_jobs.c.force_full,
                         preview_jobs.c.status.label("preview_status"),
                     )
                     .select_from(
@@ -905,8 +1203,13 @@ class Catalog:
                 .values(status=status, error=error, lease_until=None)
             )
 
-    def queue_ai(self, asset_ids: list[str] | None, include_deleted: bool = False) -> dict:
-        return self.queue_processing(asset_ids, ["ai-v1"], include_deleted)
+    def queue_ai(
+        self,
+        asset_ids: list[str] | None,
+        include_deleted: bool = False,
+        force_full: bool = False,
+    ) -> dict:
+        return self.queue_processing(asset_ids, ["ai-v1"], include_deleted, force_full)
 
     def complete_ai_analysis(
         self,
@@ -923,6 +1226,10 @@ class Catalog:
         detected_faces: list[dict],
         match_threshold: float,
         created_at: str,
+        semantic_origin: str = "computed",
+        source_run_id: str | None = None,
+        reuse_policy_version: str | None = None,
+        similarity: dict | None = None,
     ) -> dict:
         """Atomically publish a run, cluster its faces, and finish its job."""
         from math import sqrt
@@ -1012,6 +1319,10 @@ class Catalog:
                     searchable_text=searchable,
                     is_current=True,
                     created_at=datetime.fromisoformat(created_at),
+                    semantic_origin=semantic_origin,
+                    source_run_id=source_run_id,
+                    reuse_policy_version=reuse_policy_version,
+                    similarity=similarity,
                 )
             )
             if assigned:

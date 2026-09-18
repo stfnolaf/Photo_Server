@@ -117,6 +117,17 @@ def _ollama_model_digest(client: httpx.Client, model: str) -> str:
     return "unknown"
 
 
+def resolve_model_digest(settings, model: str) -> str:
+    """Resolve the current model digest from Ollama without starting inference."""
+    try:
+        with httpx.Client(
+            base_url=settings.ai_ollama_url.rstrip("/"), timeout=settings.ai_timeout_seconds
+        ) as client:
+            return _ollama_model_digest(client, model)
+    except httpx.HTTPError:
+        return "unknown"
+
+
 def analyze_semantics(settings, jpeg: bytes) -> tuple[SemanticAnalysis, str, dict]:
     schema = SemanticAnalysis.model_json_schema(by_alias=True)
     prompt = (

@@ -61,6 +61,7 @@ class Mutation(DurableModel):
         "album.patch",
         "album.delete",
         "album.restore",
+        "burst.setRepresentative",
     ]
     entity_id: UUID
     changes: dict = Field(default_factory=dict)

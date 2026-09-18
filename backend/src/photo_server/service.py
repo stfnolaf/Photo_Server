@@ -18,7 +18,7 @@ class Service:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.storage = Storage(settings)
-        self.catalog = Catalog(settings.database_url)
+        self.catalog = Catalog(settings.database_url, settings)
         self.library_id: UUID | None = None
         self.scratch = settings.data_dir / "scratch"
         self.scratch.mkdir(parents=True, exist_ok=True)
@@ -151,11 +151,13 @@ class Service:
         self,
         asset_ids: list[UUID] | None = None,
         include_deleted: bool = False,
+        force_full: bool = False,
     ) -> dict:
         """Queue local AI analysis independently from ingestion workers."""
         return self.catalog.queue_ai(
             [str(asset_id) for asset_id in asset_ids] if asset_ids is not None else None,
             include_deleted,
+            force_full,
         )
 
     def import_batch(self, paths: list[str], operation_id: UUID) -> dict:

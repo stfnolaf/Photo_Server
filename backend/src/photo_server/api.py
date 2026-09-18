@@ -67,6 +67,7 @@ class AnalysisRequest(BaseModel):
 
     asset_ids: list[UUID] | None = Field(default=None, min_length=1, max_length=10000)
     include_deleted: bool = False
+    force_full: bool = False
 
 
 class PersonNameRequest(BaseModel):
@@ -234,12 +235,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/analysis", status_code=202)
     def queue_analysis(body: AnalysisRequest):
-        return service.queue_analysis(body.asset_ids, body.include_deleted)
+        return service.queue_analysis(
+            body.asset_ids, body.include_deleted, body.force_full
+        )
 
     @app.post("/assets/{asset_id}/analysis/retry", status_code=202)
-    def retry_analysis(asset_id: UUID):
+    def retry_analysis(asset_id: UUID, force_full: bool = Query(default=False)):
         find(asset_id)
-        return service.queue_analysis([asset_id])
+        return service.queue_analysis([asset_id], force_full=force_full)
 
     @app.get("/people")
     def list_people(
@@ -378,6 +381,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 action="asset.restore",
                 entity_id=asset_id,
                 expected_revision=body.expected_revision,
+            ),
+        )
+
+    @app.get("/assets/{asset_id}/burst")
+    def get_asset_burst(asset_id: UUID):
+        find(asset_id)
+        detail = service.catalog.burst_detail(str(asset_id))
+        if detail is None:
+            raise HTTPException(404, "Asset has no burst")
+        return detail
+
+    @app.post("/assets/{asset_id}/burst/representative")
+    def set_burst_representative(asset_id: UUID, body: OperationRequest):
+        find(asset_id)
+        detail = service.catalog.burst_detail(str(asset_id))
+        if detail is None:
+            raise HTTPException(409, "Asset is not in a burst")
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="burst.setRepresentative",
+                entity_id=UUID(detail["burstId"]),
+                changes={"representativeAssetId": str(asset_id)},
             ),
         )
 

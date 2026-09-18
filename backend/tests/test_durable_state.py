@@ -289,12 +289,15 @@ def test_legacy_phase_two_database_is_adopted_then_migrated(backend):
     result = service.catalog.initialize(str(service.library_id))
     assert result == {
         "fromVersion": 2,
-        "toVersion": 6,
+        "toVersion": 9,
         "applied": [
             {"version": 3, "name": "durable_user_state"},
             {"version": 4, "name": "postgres_authority"},
             {"version": 5, "name": "ai_analysis"},
             {"version": 6, "name": "abandoned_upload_cleanup"},
+            {"version": 7, "name": "burst_fingerprints"},
+            {"version": 8, "name": "jobs_force_full"},
+            {"version": 9, "name": "burst_clusters"},
         ],
     }
 

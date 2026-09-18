@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +44,15 @@ class Settings(BaseSettings):
     ai_context_tokens: int = Field(default=4096, ge=2048, le=32768)
     ai_face_max_image_side: int = Field(default=2000, ge=512, le=4096)
     ai_vlm_max_image_side: int = Field(default=1280, ge=512, le=4096)
+    # Semantic-reuse rollout mode: "off" always invokes the VLM, "observe" records
+    # the reuse decision but still invokes the VLM, "on" reuses semantics when every
+    # gate passes. The first release defaults to "observe".
+    ai_semantic_reuse_mode: Literal["off", "observe", "on"] = "observe"
+    # Burst clustering thresholds. Clustering is an always-on display feature and
+    # is independent of the semantic-reuse rollout mode; these only affect which
+    # frames are grouped into a burst.
+    burst_cluster_phash_max_distance: int = Field(default=4, ge=0, le=64)
+    burst_cluster_dhash_max_distance: int = Field(default=6, ge=0, le=64)
     face_models_dir: Path = Path("/models")
     face_detection_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
     face_match_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
