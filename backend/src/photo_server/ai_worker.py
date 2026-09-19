@@ -30,7 +30,7 @@ from photo_server.reuse import (
     extract_semantic,
 )
 from photo_server.service import Service
-from photo_server.worker import cache_paths
+from photo_server.worker import cache_paths, generate
 
 
 class AIWorker:
@@ -65,8 +65,22 @@ class AIWorker:
             if manifest is None:
                 raise FileNotFoundError("AI job references a missing asset")
             preview = cache_paths(self.service, manifest)["preview"]
+            regenerate_preview = False
             if not preview.is_file():
-                raise RuntimeError("Preview is marked ready but its cache file is missing")
+                # The cache is disposable (LRU eviction or a wiped volume can
+                # remove a "ready" set at any time), so regenerate it from the
+                # immutable original instead of failing the job. A "ready"
+                # preview file is the only input this pipeline needs; if it
+                # cannot be rebuilt, fall through to the same "unavailable"
+                # error the preview pipeline itself records.
+                regenerate_preview = True
+                if not generate(self.service, manifest):
+                    self.service.catalog.finish_job(
+                        asset_id, "unavailable", "Preview could not be regenerated"
+                    )
+                    raise RuntimeError(
+                        "Preview is marked ready but regeneration is unavailable"
+                    )
 
             face_jpeg = prepare_jpeg(preview, self.service.settings.ai_face_max_image_side)
             vlm_jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
@@ -172,6 +186,9 @@ class AIWorker:
                 "semanticOrigin": semantic_origin,
                 **completed,
             }
+            if regenerate_preview:
+                # Operational signal: this job rebuilt an evicted or wiped preview.
+                result["previewRegenerated"] = True
             if reuse_mode == "observe" and decision.accepted and matched_source is not None:
                 # Observe mode reports the match but still invoked the VLM.
                 result["reuseMatch"] = {
@@ -355,8 +372,20 @@ class AIWorker:
             return None
         preview = cache_paths(self.service, manifest)["preview"]
         if not preview.is_file():
-            # The source preview is not cached locally; skip it rather than
-            # risk an incorrect pixel-similarity decision.
+            # The source preview is not cached locally (e.g. evicted by the LRU
+            # loop or lost to a volume wipe); skip it rather than risk an
+            # incorrect pixel-similarity decision. The target degrades to a full
+            # analysis, which the miss-path regeneration above keeps correct.
+            print(
+                json.dumps(
+                    {
+                        "status": "reuse_candidate_skipped",
+                        "reason": "preview_cache_miss",
+                        "assetId": candidate.asset_id,
+                    }
+                ),
+                flush=True,
+            )
             return None
         source_preview = prepare_jpeg(preview, settings.ai_vlm_max_image_side)
         return dict(
