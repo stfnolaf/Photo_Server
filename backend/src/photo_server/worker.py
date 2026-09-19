@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -136,6 +137,113 @@ def rebuild_cache_index(service: Service) -> dict:
     return {"status": "ok", "directories": directories, "rowsAdded": added, "rowsSkipped": skipped}
 
 
+def sweep_orphaned_preview_dirs(service: Service) -> list[str]:
+    """Remove cache directories that have no remaining ``preview_cache`` row.
+
+    This is the recovery half of the two-phase eviction delete (row, then
+    files): a crash in between, or an asset deleted while cached, can leave
+    directories without a row. Such files are disposable either way (the miss
+    path regenerates them from the immutable original), so removing them is
+    always safe. Only valid ``{asset_id}-{sha256}-v1`` names are ever touched;
+    anything else is left alone.
+    """
+    cache_root = service.settings.data_dir / "cache"
+    if not cache_root.is_dir():
+        return []
+    from sqlalchemy import select
+
+    from photo_server.catalog import preview_cache
+
+    with service.catalog.engine.connect() as connection:
+        known = {
+            str(value)
+            for value in connection.scalars(
+                select(preview_cache.c.asset_id).order_by(preview_cache.c.asset_id.asc())
+            )
+        }
+    removed: list[str] = []
+    for entry in sorted(cache_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        match = re.fullmatch(r"(?P<asset_id>.+)-[0-9a-f]{64}-v1", entry.name)
+        if match is None:
+            continue
+        if match.group("asset_id") in known:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        if not entry.exists():
+            removed.append(match.group("asset_id"))
+    return removed
+
+
+def evict_previews(service: Service) -> dict:
+    """Evict least-recently-accessed preview sets until the cache fits budget.
+
+    Selection and row deletion happen in one transaction (row first, files
+    after); the orphan sweep then reclaims any cache directory without a row,
+    including leftovers from a crash between those two steps.
+    """
+    budget = service.settings.cache_max_bytes
+    if budget <= 0:
+        return {"status": "disabled"}
+    evicted = service.catalog.select_preview_cache_evictions(
+        budget, service.settings.cache_eviction_target_ratio
+    )
+    for entry in evicted:
+        if cache_dir_deleted(service, entry["asset_id"]):
+            print(
+                json.dumps(
+                    {
+                        "status": "preview_evicted",
+                        "assetId": entry["asset_id"],
+                        "freedBytes": entry["bytes"],
+                    }
+                ),
+                flush=True,
+            )
+    for asset_id in sweep_orphaned_preview_dirs(service):
+        print(json.dumps({"status": "preview_orphan_removed", "assetId": asset_id}), flush=True)
+    freed = sum(entry["bytes"] for entry in evicted)
+    remaining = service.catalog.preview_cache_total_bytes()
+    print(
+        json.dumps(
+            {
+                "status": "preview_eviction",
+                "evicted": len(evicted),
+                "freedBytes": freed,
+                "remainingBytes": remaining,
+            }
+        ),
+        flush=True,
+    )
+    return {
+        "status": "ok",
+        "evicted": len(evicted),
+        "freedBytes": freed,
+        "remainingBytes": remaining,
+    }
+
+
+def cache_dir_deleted(service: Service, asset_id: str) -> bool:
+    """Delete one asset's files from its current cache directory, idempotently."""
+    manifest = service.catalog.get(asset_id)
+    if manifest is None:
+        return False
+    targets = cache_paths(service, manifest)
+    for path in targets.values():
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+    try:
+        targets["preview"].parent.rmdir()
+    except OSError:
+        pass
+    return True
+
+
 def run_once(service: Service) -> dict | None:
     onboarding = service.catalog.claim_onboarding_job()
     if onboarding is not None:
@@ -217,14 +325,26 @@ def _cleanup_loop(service: Service):
         time.sleep(60)
 
 
+def _eviction_loop(service: Service):
+    while True:
+        time.sleep(service.settings.cache_eviction_interval_seconds)
+        if service.settings.cache_max_bytes <= 0:
+            continue
+        try:
+            evict_previews(service)
+        except Exception as error:
+            print(json.dumps({"status": "preview_eviction_error", "error": str(error)}), flush=True)
+
+
 def run(service: Service):
     with ThreadPoolExecutor(
-        max_workers=service.settings.worker_threads + 1,
+        max_workers=service.settings.worker_threads + 2,
         thread_name_prefix="photo-worker",
     ) as executor:
         futures = [
             executor.submit(_worker_loop, service) for _ in range(service.settings.worker_threads)
         ]
         futures.append(executor.submit(_cleanup_loop, service))
+        futures.append(executor.submit(_eviction_loop, service))
         for future in futures:
             future.result()

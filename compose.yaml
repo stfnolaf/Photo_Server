@@ -16,6 +16,14 @@ x-backend: &backend
     PHOTO_UPLOAD_WORKERS: ${PHOTO_UPLOAD_WORKERS:-4}
     PHOTO_UPLOAD_ABANDON_SECONDS: ${PHOTO_UPLOAD_ABANDON_SECONDS:-86400}
     PHOTO_WORKER_THREADS: ${PHOTO_WORKER_THREADS:-4}
+    # Preview cache LRU limit. Previews are disposable: after eviction a
+    # GET /assets/{id}/preview returns 202 and re-encodes from the immutable
+    # S3 original, so over budget costs only a re-encode. The worker evicts
+    # least-recently-accessed assets when the accounted size passes the
+    # budget, down to 90% of it (target ratio) to avoid thrashing.
+    PHOTO_CACHE_MAX_BYTES: ${PHOTO_CACHE_MAX_BYTES:-53687091200}
+    PHOTO_CACHE_EVICTION_INTERVAL: ${PHOTO_CACHE_EVICTION_INTERVAL:-300}
+    PHOTO_CACHE_EVICT_TARGET_RATIO: ${PHOTO_CACHE_EVICT_TARGET_RATIO:-0.9}
     PHOTO_POSTGRES_BACKUP_PREFIX: ${PHOTO_POSTGRES_BACKUP_PREFIX:-backups/postgres}
     PHOTO_UPLOAD_PART_BYTES: ${PHOTO_UPLOAD_PART_BYTES:-8388608}
     PHOTO_CORS_ORIGINS: ${PHOTO_CORS_ORIGINS:-}

@@ -1754,6 +1754,96 @@ class Catalog:
             )
         return result.rowcount > 0
 
+    def select_preview_cache_evictions(self, budget_bytes: int, target_ratio: float) -> list[dict]:
+        """Pick the least-recently-accessed preview sets to evict, in one transaction.
+
+        Accumulates rows from the stalest until the freed bytes bring the cache
+        total to at most ``budget_bytes * target_ratio``. Assets with a queued
+        or running ``preview-v1``/``ai-v1`` job are exempt so AI and in-flight
+        preview work never sees a missing file. Selection and removal are
+        committed as a unit; the caller then deletes the files.
+        """
+        if budget_bytes <= 0:
+            return []
+        active_job = (
+            select(1)
+            .select_from(jobs)
+            .correlate(preview_cache)
+            .where(
+                jobs.c.asset_id == preview_cache.c.asset_id,
+                jobs.c.job_type.in_(["preview-v1", "ai-v1"]),
+                jobs.c.status.in_(["queued", "pending", "running"]),
+            )
+            .exists()
+        )
+        candidates = (
+            select(
+                preview_cache.c.asset_id,
+                (
+                    func.coalesce(preview_cache.c.preview_bytes, 0)
+                    + func.coalesce(preview_cache.c.thumbnail_bytes, 0)
+                ).label("bytes"),
+            )
+            .order_by(preview_cache.c.last_accessed_at.asc(), preview_cache.c.asset_id.asc())
+            .where(~active_job)
+        )
+        with self.engine.begin() as connection:
+            total = int(
+                connection.scalar(
+                    select(
+                        func.coalesce(func.sum(preview_cache.c.preview_bytes), 0)
+                        + func.coalesce(func.sum(preview_cache.c.thumbnail_bytes), 0)
+                    ).select_from(preview_cache)
+                )
+                or 0
+            )
+            if total <= budget_bytes:
+                return []
+            target = int(budget_bytes * target_ratio)
+            evicted: list[dict] = []
+            freed = 0
+            for row in connection.execute(candidates):
+                if freed >= total - target:
+                    # The rows taken so far already bring the cache under the
+                    # target; anything further would churn files every loop.
+                    break
+                size = int(row.bytes or 0)
+                evicted.append({"asset_id": str(row.asset_id), "bytes": size})
+                freed += size
+            if evicted:
+                connection.execute(
+                    preview_cache.delete().where(
+                        preview_cache.c.asset_id.in_([entry["asset_id"] for entry in evicted])
+                    )
+                )
+        return evicted
+
+    def backdate_preview_cache_access(self, asset_ids: list[str], seconds_ago: int) -> int:
+        """Backdate ``last_accessed_at`` for tests of the LRU ordering."""
+        if not asset_ids:
+            return 0
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    "UPDATE preview_cache "
+                    "SET last_accessed_at = now() - (:delta || ' seconds')::interval "
+                    "WHERE asset_id = ANY(:ids)"
+                ),
+                {"delta": str(int(seconds_ago)), "ids": list(asset_ids)},
+            )
+        return result.rowcount
+
+    def preview_cache_total_bytes(self) -> int:
+        """Accounted cache size in bytes; the LRU budget is applied to this."""
+        with self.engine.connect() as connection:
+            value = connection.scalar(
+                select(
+                    func.coalesce(func.sum(preview_cache.c.preview_bytes), 0)
+                    + func.coalesce(func.sum(preview_cache.c.thumbnail_bytes), 0)
+                ).select_from(preview_cache)
+            )
+        return int(value or 0)
+
     def create_upload_batch(self, batch_id: UUID, files: list[dict]):
         now = int(time())
         with self.engine.begin() as connection:

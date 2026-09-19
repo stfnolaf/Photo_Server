@@ -103,6 +103,9 @@ The relevant queue settings are:
 | `PHOTO_CORS_ORIGINS` | empty | Comma-separated browser origins allowed to call the API |
 | `PHOTO_WEB_BIND` | `0.0.0.0` | Host interface for the web frontend |
 | `PHOTO_WEB_PORT` | `3000` | Host port for the web frontend |
+| `PHOTO_CACHE_MAX_BYTES` | `0` (50 GiB in compose) | LRU byte budget for the local preview cache; `0` disables eviction |
+| `PHOTO_CACHE_EVICTION_INTERVAL` | 300 | Seconds between worker cache-eviction passes |
+| `PHOTO_CACHE_EVICT_TARGET_RATIO` | 0.9 | When over budget, evict until the cache is at most budget × ratio |
 | `PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS` | 3600 | Seconds between full PostgreSQL backups |
 | `PHOTO_POSTGRES_BACKUP_RETENTION` | 168 | Number of backups retained in S3 |
 | `PHOTO_POSTGRES_BACKUP_PREFIX` | `backups/postgres` | Backup object-key prefix |
@@ -321,6 +324,8 @@ Export writes active originals to `<asset-id>/<original-filename>` plus a portab
 ## Workers
 
 The media worker prioritizes onboarding jobs, versioned processing stages such as `metadata-v1`, and then preview jobs. RAW previews come from ExifTool's `JpgFromRaw`, `PreviewImage`, or `ThumbnailImage` tags; no RAW rendering occurs. JPEG and HEIF originals are decoded with Pillow/pillow-heif. Camera orientation is applied to derived previews.
+
+Previews live in a local, disposable LRU cache. Each cached set tracks its byte sizes and last access in the `preview_cache` table. When the accounted total exceeds `PHOTO_CACHE_MAX_BYTES`, the worker evicts least-recently-accessed sets until it is back at or below `PHOTO_CACHE_EVICT_TARGET_RATIO` of the budget, skipping assets with queued or running preview or AI jobs. Eviction is two-phase (row, then files) and an orphan sweep removes cache directories whose row is gone, so a crash mid-evection cannot wedge the cache. A request for an evicted preview returns `202` and regenerates it from the immutable S3 original; the originals themselves are never touched.
 
 The AI worker has one queue consumer. YuNet detection and alignment complete first, AdaFace IR101 embeds faces on CUDA in batches of at most 32, and only then is the image submitted to Qwen through local Ollama. Qwen is restricted to one loaded model and one parallel request; requests use a 4096-token context by default (Ollama may reserve a larger internal KV allocation). The configured Q4 model plus AdaFace used about 13.1 GB together in the RTX 3090 deployment check, leaving about 11 GB free. Similarity scores are clustering heuristics rather than probabilities; `0.4` carries over the sibling scanner's reviewed starting point.
 

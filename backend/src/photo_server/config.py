@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     face_models_dir: Path = Path("/models")
     face_detection_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
     face_match_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
+    # Preview cache LRU limits. Previews are disposable: a missing file always
+    # resolves through the 202 + regenerate path, so over budget only costs a
+    # re-encode of evicted assets. 0 disables eviction (default: off).
+    cache_max_bytes: int = Field(default=0, ge=0)
+    cache_eviction_interval_seconds: int = Field(
+        default=300, ge=10, le=86400, validation_alias="PHOTO_CACHE_EVICTION_INTERVAL"
+    )
+    cache_eviction_target_ratio: float = Field(
+        default=0.9, ge=0.05, le=1.0, validation_alias="PHOTO_CACHE_EVICT_TARGET_RATIO"
+    )
 
     @model_validator(mode="after")
     def configure_database(self):
