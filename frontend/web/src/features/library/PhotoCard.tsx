@@ -1,9 +1,9 @@
-import { Check, Heart } from "lucide-react";
+import { Check, Heart, Layers } from "lucide-react";
 import type { MouseEvent } from "react";
 import type { PhotoSummary } from "../../api/types";
 import { PreviewImage } from "../../components/PreviewImage";
 import { Rating } from "../../components/Rating";
-import { formatDate } from "../../domain/library";
+import { formatDate, isBurst } from "../../domain/library";
 
 export function PhotoCard({
   photo,
@@ -11,6 +11,7 @@ export function PhotoCard({
   onOpen,
   onSelect,
   onFavorite,
+  onBurst,
   busy,
 }: {
   photo: PhotoSummary;
@@ -18,6 +19,7 @@ export function PhotoCard({
   onOpen: () => void;
   onSelect: (range: boolean) => void;
   onFavorite: () => void;
+  onBurst?: () => void;
   busy: boolean;
 }) {
   const select = (event: MouseEvent) => {
@@ -25,13 +27,20 @@ export function PhotoCard({
     onSelect(event.shiftKey);
   };
   const equipment = [photo.cameraModel, photo.lens].filter(Boolean).join(" · ");
+  const burst = isBurst(photo);
   return (
-    <article className={`photo-card ${selected ? "is-selected" : ""}`} data-asset-id={photo.assetId}>
+    <article className={`photo-card ${selected ? "is-selected" : ""} ${burst ? "has-burst" : ""}`} data-asset-id={photo.assetId}>
       <button className="photo-card__open" type="button" onClick={onOpen} aria-label={`Open ${photo.originalFilename}`}>
         <div className="photo-card__frame">
           <PreviewImage src={photo.thumbnailUrl} status={photo.preview.status} alt="" />
           <span className="format-chip">{photo.mediaType}</span>
           {photo.dateSource === "import" && <span className="import-chip">Import date</span>}
+          {burst && (
+            <span className="burst-badge">
+              <Layers size={12} />
+              {photo.burstSize}
+            </span>
+          )}
         </div>
       </button>
       <button
@@ -43,6 +52,17 @@ export function PhotoCard({
       >
         {selected && <Check size={13} strokeWidth={3} />}
       </button>
+      {burst && onBurst && (
+        <button
+          className="burst-picker"
+          type="button"
+          title="Choose the best frame"
+          aria-label={`Choose the best frame in this burst of ${photo.burstSize}`}
+          onClick={onBurst}
+        >
+          <Layers size={14} />
+        </button>
+      )}
       <div className="photo-card__meta">
         <div className="photo-card__copy">
           <strong title={photo.originalFilename}>{photo.originalFilename}</strong>

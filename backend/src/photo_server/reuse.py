@@ -266,20 +266,25 @@ def extract_semantic(source_result: dict) -> SemanticAnalysis:
     return SemanticAnalysis.model_validate(filtered)
 
 
-def choose_reusable_source(
+def choose_reusable_source_detailed(
     target: ReuseAsset, sources: Sequence[ReuseSource], settings: Settings
-) -> tuple[ReuseSource, ReuseDecision] | None:
-    """Pick the best qualifying source for ``target``, or ``None`` if none qualify.
+) -> tuple[tuple[ReuseSource, ReuseDecision] | None, dict[str, int]]:
+    """Pick the best qualifying source and count per-gate rejections.
 
-    Evaluates every source with ``evaluate_reuse`` and, among the accepted ones,
-    returns the candidate with the lowest (pHash distance, dHash distance,
-    capture-time distance, asset ID) tuple. Deterministic tie-breaking makes
-    retries reproducible.
+    Returns ``(chosen, rejections)`` where ``chosen`` is ``(source, decision)``
+    for the best accepted source (or ``None`` when no source qualifies) and
+    ``rejections`` maps each stable rejection-reason identifier to the number of
+    sources rejected at that gate. Each rejected source is counted exactly once,
+    at the first gate that failed (matching ``evaluate_reuse``'s short-circuit
+    order); this is the "candidates rejected by each gate" operational counter.
     """
     best: tuple[tuple[int, int, int, str], ReuseSource, ReuseDecision] | None = None
+    rejections: dict[str, int] = {}
     for source in sources:
         decision = evaluate_reuse(target, source, settings)
         if not decision.accepted:
+            reason = decision.reason or "unknown"
+            rejections[reason] = rejections.get(reason, 0) + 1
             continue
         key = (
             hamming_distance(target.fingerprint.phash, source.fingerprint.phash),
@@ -290,8 +295,22 @@ def choose_reusable_source(
         if best is None or key < best[0]:
             best = (key, source, decision)
     if best is None:
-        return None
-    return best[1], best[2]
+        return None, rejections
+    return (best[1], best[2]), rejections
+
+
+def choose_reusable_source(
+    target: ReuseAsset, sources: Sequence[ReuseSource], settings: Settings
+) -> tuple[ReuseSource, ReuseDecision] | None:
+    """Pick the best qualifying source for ``target``, or ``None`` if none qualify.
+
+    Evaluates every source with ``evaluate_reuse`` and, among the accepted ones,
+    returns the candidate with the lowest (pHash distance, dHash distance,
+    capture-time distance, asset ID) tuple. Deterministic tie-breaking makes
+    retries reproducible.
+    """
+    chosen, _ = choose_reusable_source_detailed(target, sources, settings)
+    return chosen
 
 
 __all__ = [
@@ -317,6 +336,7 @@ __all__ = [
     "ReuseDecision",
     "ReuseSource",
     "choose_reusable_source",
+    "choose_reusable_source_detailed",
     "evaluate_reuse",
     "extract_semantic",
     "pixel_similarity",

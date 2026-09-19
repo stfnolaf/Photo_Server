@@ -26,7 +26,7 @@ from photo_server.reuse import (
     ReuseAsset,
     ReuseDecision,
     ReuseSource,
-    choose_reusable_source,
+    choose_reusable_source_detailed,
     extract_semantic,
 )
 from photo_server.service import Service
@@ -37,6 +37,9 @@ class AIWorker:
     def __init__(self, service: Service):
         self.service = service
         self._faces = None
+        # Wall-clock duration of the most recent real VLM call on this worker.
+        # Reused frames report it as the estimated VLM time avoided.
+        self._last_vlm_seconds: float | None = None
 
     @property
     def faces(self) -> AdaFaceAnalyzer:
@@ -50,6 +53,9 @@ class AIWorker:
             return None
         asset_id = job["asset_id"]
         force_full = bool(job.get("force_full", False))
+        stage = "setup"
+        rejections: dict[str, int] = {}
+        policy_evaluated = False
         try:
             if job["preview_status"] != "ready":
                 raise RuntimeError(
@@ -66,20 +72,24 @@ class AIWorker:
             vlm_jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
             # Fingerprint computation and persistence are part of the analysis
             # pipeline: a failure here fails the AI job normally.
+            stage = "fingerprint"
             fingerprint = compute_fingerprint(vlm_jpeg)
             if self.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is None:
                 self.service.catalog.upsert_fingerprint(asset_id, fingerprint)
             model_digest = resolve_model_digest(self.service.settings, self.service.settings.ai_model)
-            decision, source, source_run_id = self._semantic_reuse(
+            stage = "semantic"
+            decision, source, source_run_id, rejections, policy_evaluated = self._semantic_reuse(
                 manifest, fingerprint, vlm_jpeg, model_digest, force_full
             )
             # The stages are deliberately serialized: AdaFace finishes its short
             # CUDA batch before Ollama starts the much heavier VLM inference.
+            stage = "face"
             faces = self.faces.analyze(face_jpeg)
             reuse_mode = self.service.settings.ai_semantic_reuse_mode
             matched_source = source
             matched_source_run_id = source_run_id
-            if reuse_mode == "on" and decision.accepted and source is not None:
+            stage = "semantic"
+            if reuse_mode == "on" and not force_full and decision.accepted and source is not None:
                 # The semantic description is inherited from the verified
                 # near-duplicate; face observations and provenance stay
                 # target-specific and are never inherited.
@@ -89,7 +99,9 @@ class AIWorker:
                 reuse_policy_version = REUSE_POLICY_VERSION
                 similarity = decision.similarity
             else:
+                vlm_started = time.monotonic()
                 semantic, model_digest, metrics = analyze_semantics(self.service.settings, vlm_jpeg)
+                self._last_vlm_seconds = time.monotonic() - vlm_started
                 semantic_origin = "computed"
                 source = None
                 source_run_id = None
@@ -166,18 +178,70 @@ class AIWorker:
                     "assetId": matched_source.asset_id,
                     "runId": matched_source_run_id,
                 }
+            result["counters"] = self._counters(
+                semantic_origin, force_full, rejections, policy_evaluated
+            )
             return result
         except Exception as error:
             try:
                 self.service.catalog.finish_ai_job(asset_id, "failed", str(error))
             except Exception:
                 pass
-            return {
+            result = {
                 "jobType": "analysis",
                 "assetId": asset_id,
                 "status": "failed",
                 "error": str(error),
+                "stage": stage,
             }
+            result["counters"] = self._counters(
+                None, force_full, rejections, policy_evaluated, failed_stage=stage
+            )
+            return result
+
+    def _counters(
+        self,
+        semantic_origin: str | None,
+        force_full: bool,
+        rejections: dict[str, int],
+        policy_evaluated: bool,
+        failed_stage: str | None = None,
+    ) -> dict:
+        """Operational counters for the rollout (see docs/rollout-semantic-reuse.md).
+
+        Emitted on every analysis result so the JSON log lines can be aggregated:
+        - ``semanticComputed`` / ``semanticReused``: analyses computed vs reused;
+        - ``rejectionsByGate``: candidates rejected by each policy gate;
+        - ``forcedFull``: the job requested a full analysis;
+        - ``wouldHaveReused``: the policy would have reused, but the job was
+          forced full (only known when the policy was still evaluated);
+        - ``vlmTimeAvoided``: wall-clock seconds of the last real VLM call,
+          reported on reused runs as the estimated VLM time avoided;
+        - ``stageFailures``: failures split by setup/fingerprint/face/semantic.
+        """
+        counters: dict = {
+            "semanticComputed": 1 if semantic_origin == "computed" else 0,
+            "semanticReused": 1 if semantic_origin == "reused" else 0,
+            "forcedFull": 1 if force_full else 0,
+            "wouldHaveReused": (
+                1 if (force_full and policy_evaluated and semantic_origin == "computed") else 0
+            ),
+            "vlmTimeAvoided": (
+                round(self._last_vlm_seconds, 4)
+                if semantic_origin == "reused" and self._last_vlm_seconds is not None
+                else None
+            ),
+            "rejectionsByGate": dict(rejections),
+            "stageFailures": {
+                "setup": 0,
+                "fingerprint": 0,
+                "face": 0,
+                "semantic": 0,
+            },
+        }
+        if failed_stage is not None:
+            counters["stageFailures"][failed_stage] = 1
+        return counters
 
     def _semantic_reuse(
         self,
@@ -186,18 +250,31 @@ class AIWorker:
         vlm_jpeg: bytes,
         model_digest: str,
         force_full: bool,
-    ) -> tuple[ReuseDecision, ReuseSource | None, str | None]:
+    ) -> tuple[ReuseDecision, ReuseSource | None, str | None, dict[str, int], bool]:
         """Resolve a reusable semantic run for the target, if the policy allows it.
 
-        Reuse is only attempted when the mode is not ``off``, the job does not
-        request a full analysis, and the current model digest is known. A
-        candidate lookup failure is logged as an optimization failure and falls
-        back to full VLM analysis; it never fails the job.
+        Returns ``(decision, source, source_run_id, rejections, evaluated)``
+        where ``rejections`` counts candidates rejected by each policy gate and
+        ``evaluated`` records whether the policy was actually evaluated (so a
+        forced-full job can still report ``wouldHaveReused``).
+
+        The policy is evaluated whenever the mode is not ``off`` and the current
+        model digest is known, even for forced-full jobs, so the rollout
+        counters can report what reuse would have done. A forced-full job
+        still computes; the caller must not apply the decision. A candidate
+        lookup failure is logged as an optimization failure and falls back to
+        full VLM analysis; it never fails the job.
         """
         settings = self.service.settings
         mode = settings.ai_semantic_reuse_mode
-        if mode == "off" or force_full or model_digest == UNKNOWN_DIGEST:
-            return ReuseDecision(accepted=False, reason=None, similarity=None), None, None
+        if mode == "off" or model_digest == UNKNOWN_DIGEST:
+            return (
+                ReuseDecision(accepted=False, reason=None, similarity=None),
+                None,
+                None,
+                {},
+                False,
+            )
         target = ReuseAsset(
             asset_id=str(manifest.asset_id),
             fingerprint=fingerprint,
@@ -240,11 +317,17 @@ class AIWorker:
                 source = ReuseAsset(**fields)
                 sources.append(ReuseSource(**source.__dict__, semantic=semantic))
                 source_run_ids[source.asset_id] = status["runId"]
-            chosen = choose_reusable_source(target, sources, settings)
+            chosen, rejections = choose_reusable_source_detailed(target, sources, settings)
             if chosen is None:
-                return ReuseDecision(accepted=False, reason=None, similarity=None), None, None
+                return (
+                    ReuseDecision(accepted=False, reason=None, similarity=None),
+                    None,
+                    None,
+                    rejections,
+                    True,
+                )
             source, decision = chosen
-            return decision, source, source_run_ids.get(source.asset_id)
+            return decision, source, source_run_ids.get(source.asset_id), rejections, True
         except Exception as error:
             # Candidate lookup failure falls back to full VLM analysis only
             # when the database remains healthy enough to publish the result.
@@ -252,7 +335,13 @@ class AIWorker:
                 f"semantic reuse optimization failed for {manifest.asset_id}: {error}",
                 file=sys.stderr,
             )
-            return ReuseDecision(accepted=False, reason=None, similarity=None), None, None
+            return (
+                ReuseDecision(accepted=False, reason=None, similarity=None),
+                None,
+                None,
+                {},
+                False,
+            )
 
     def _load_reuse_source(self, candidate, settings) -> dict | None:
         """Build the ``ReuseAsset`` fields for a candidate, or ``None`` to skip it."""

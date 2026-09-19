@@ -137,7 +137,7 @@ export function PhotoPage({
         expectedRevision: detail.revision,
       });
       await queryClient.invalidateQueries({ queryKey: ["library"] });
-      toast.show(restore ? "Photograph restored" : "Photograph moved to trash");
+      toast.show(restore ? "Photograph unhidden" : "Photograph hidden");
       navigate({ pathname: "/", search: writeFilters(filters).toString() });
     } catch (error) {
       toast.show(error instanceof Error ? error.message : "Photograph could not be changed", "error");

@@ -389,7 +389,7 @@ class Catalog:
         manifest = Manifest.model_validate(value) if value else None
         if manifest and manifest.deleted_at:
             raise LibraryError(
-                f"Matching asset {manifest.asset_id} is in trash; restore it before importing"
+                f"Matching asset {manifest.asset_id} is hidden; unhide it before importing"
             )
         return manifest
 
@@ -594,7 +594,7 @@ class Catalog:
                 ):
                     raise LibraryError("Revision changed; reload before editing")
                 if current and current.deleted_at and action not in {"restore", "delete"}:
-                    raise LibraryError("Restore this item before editing")
+                    raise LibraryError("Unhide this item before editing")
 
             if kind == "asset":
                 changes = {}
@@ -672,7 +672,7 @@ class Catalog:
                         not current or UUID(str(asset_id)) not in current.asset_ids
                     ):
                         raise LibraryError(
-                            f"Restore asset before adding it to an album: {asset_id}"
+                            f"Unhide asset before adding it to an album: {asset_id}"
                         )
                 snapshot = Album.model_validate(
                     {

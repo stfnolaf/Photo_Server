@@ -253,7 +253,7 @@ def set_representative(connection, cluster_id: str, asset_id: str) -> dict:
     if asset_row is None:
         raise LibraryError("Representative asset does not exist")
     if asset_row["deleted_at"] is not None:
-        raise LibraryError("Restore this item before editing")
+        raise LibraryError("Unhide this item before editing")
     connection.execute(
         burst_clusters.update()
         .where(burst_clusters.c.id == cluster_id)

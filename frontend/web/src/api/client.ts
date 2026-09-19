@@ -1,6 +1,7 @@
 import type {
   Album,
   BrowsePage,
+  BurstDetail,
   Health,
   LibraryFilters,
   PeoplePage,
@@ -71,6 +72,9 @@ export const api = {
   photo: (assetId: string, signal?: AbortSignal) =>
     request<PhotoDetail>(`/assets/${assetId}`, { signal }),
 
+  burst: (assetId: string, signal?: AbortSignal) =>
+    request<BurstDetail>(`/assets/${assetId}/burst`, { signal }),
+
   people: (q = "", signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: "1000" });
     if (q) params.set("q", q);
@@ -89,7 +93,7 @@ export const api = {
     if (filters.ratingMin) params.set("rating_min", String(filters.ratingMin));
     if (filters.sort !== "newest") params.set("sort", filters.sort);
     if (filters.view === "favorites") params.set("favorite", "true");
-    if (filters.view === "trash") params.set("deleted", "true");
+    if (filters.view === "hidden") params.set("deleted", "true");
     if (filters.albumId) params.set("album_id", filters.albumId);
     if (cursor) params.set("cursor", cursor);
     return request<BrowsePage>(`/library/assets?${params}`, { signal });

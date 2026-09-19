@@ -1,4 +1,4 @@
-import { Aperture, Folder, Heart, Image, MoreHorizontal, Plus, Trash2, UsersRound } from "lucide-react";
+import { Aperture, EyeOff, Folder, Heart, Image, MoreHorizontal, Plus, UsersRound } from "lucide-react";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { Album, LibraryFilters, PhotoSummary } from "../../api/types";
@@ -37,15 +37,15 @@ export function Sidebar({ filters, knownPhotos }: { filters: LibraryFilters; kno
           <button className={location.pathname === "/people" ? "is-active" : ""} onClick={() => navigate("/people")}>
             <UsersRound size={16} /> <span>People</span>
           </button>
-          <button className={location.pathname === "/" && filters.view === "trash" ? "is-active" : ""} onClick={() => choose({ view: "trash", albumId: null })}>
-            <Trash2 size={16} /> <span>Recently deleted</span>
-          </button>
         </nav>
 
         <nav className="sidebar__nav sidebar__albums">
           <div className="sidebar__label-row">
             <p className="sidebar__label">Albums</p>
             <button type="button" onClick={() => setEditingAlbum(null)} aria-label="Create album"><Plus size={15} /></button>
+          </div>
+          <div className={`sidebar__album ${location.pathname === "/" && filters.view === "hidden" ? "is-active" : ""}`}>
+            <button onClick={() => choose({ view: "hidden", albumId: null })}><EyeOff size={15} /><span>Hidden</span></button>
           </div>
           {active.length === 0 && <p className="sidebar__empty">No albums yet</p>}
           {active.map((album) => (
@@ -56,9 +56,9 @@ export function Sidebar({ filters, knownPhotos }: { filters: LibraryFilters; kno
           ))}
           {deleted.length > 0 && (
             <details className="deleted-albums">
-              <summary>Deleted albums ({deleted.length})</summary>
+              <summary>Hidden albums ({deleted.length})</summary>
               {deleted.map((album) => (
-                <button key={album.albumId} onClick={() => setEditingAlbum(album)}><Trash2 size={14} /><span>{album.name}</span></button>
+                <button key={album.albumId} onClick={() => setEditingAlbum(album)}><EyeOff size={14} /><span>{album.name}</span></button>
               ))}
             </details>
           )}

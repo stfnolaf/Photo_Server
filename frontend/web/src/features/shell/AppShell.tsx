@@ -95,7 +95,7 @@ export function AppShell({
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "all", albumId: null }).toString() })}>Library</button>
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "favorites", albumId: null }).toString() })}>Favorites</button>
         <button onClick={() => navigate("/people")}>People</button>
-        <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "trash", albumId: null }).toString() })}>Trash</button>
+        <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "hidden", albumId: null }).toString() })}>Hidden</button>
       </nav>
     </div>
   );

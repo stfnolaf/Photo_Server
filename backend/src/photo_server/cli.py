@@ -28,14 +28,14 @@ def main():
         "--asset", type=UUID, action="append", help="Asset to process; repeat for many"
     )
     refresh.add_argument(
-        "--include-deleted", action="store_true", help="Include trash when processing the library"
+        "--include-deleted", action="store_true", help="Include hidden when processing the library"
     )
     analyze = commands.add_parser(
         "analyze", help="Queue local face and semantic analysis"
     )
     analyze.add_argument("--asset", type=UUID, action="append", help="Asset to analyze; repeat for many")
     analyze.add_argument(
-        "--include-deleted", action="store_true", help="Include trash when analyzing the library"
+        "--include-deleted", action="store_true", help="Include hidden when analyzing the library"
     )
     analyze.add_argument(
         "--force-full",
@@ -47,7 +47,7 @@ def main():
     )
     export.add_argument("destination", type=Path)
     export.add_argument(
-        "--include-trash", action="store_true", help="Also export trashed originals"
+        "--include-trash", action="store_true", help="Also export hidden originals"
     )
     worker = commands.add_parser("worker")
     worker.add_argument("--once", action="store_true", help="Process at most one queued job")

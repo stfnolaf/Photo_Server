@@ -1,4 +1,4 @@
-import { Download, Heart, RefreshCw, RotateCcw, Sparkles, Trash2, Users } from "lucide-react";
+import { Download, EyeOff, Heart, RefreshCw, RotateCcw, Sparkles, Users } from "lucide-react";
 import type { Album, LocationValue, MutationResult, PhotoDetail } from "../../api/types";
 import { apiUrl } from "../../api/client";
 import { Button } from "../../components/Button";
@@ -118,8 +118,8 @@ export function PhotoInspector({
 
       <div className="inspector-danger">
         <Button tone={deleted ? "default" : "danger"} disabled={busy} onClick={onDelete}>
-          {deleted ? <RotateCcw size={14} /> : <Trash2 size={14} />}
-          {deleted ? "Restore photograph" : "Move to trash"}
+          {deleted ? <RotateCcw size={14} /> : <EyeOff size={14} />}
+          {deleted ? "Unhide photograph" : "Hide photograph"}
         </Button>
       </div>
     </aside>

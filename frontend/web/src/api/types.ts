@@ -43,9 +43,18 @@ export interface PhotoSummary {
   caption: string;
   deletedAt: string | null;
   revision: number;
+  burstId: string | null;
+  burstSize: number | null;
+  burstRepresentativeAssetId: string | null;
   preview: { status: PreviewStatus; error: string | null };
   thumbnailUrl: string;
   previewUrl: string;
+}
+
+export interface BurstDetail {
+  burstId: string;
+  representativeAssetId: string;
+  frames: PhotoSummary[];
 }
 
 export interface BrowsePage {
@@ -183,7 +192,7 @@ export interface LibraryFilters {
   mediaType: "" | MediaType;
   ratingMin: number;
   sort: "newest" | "oldest";
-  view: "all" | "favorites" | "trash";
+  view: "all" | "favorites" | "hidden";
   albumId: string | null;
 }
 

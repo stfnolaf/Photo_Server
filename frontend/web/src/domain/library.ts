@@ -25,8 +25,8 @@ export function readFilters(params: URLSearchParams): LibraryFilters {
     view:
       view === "favorites" || params.get("favorite") === "true"
         ? "favorites"
-        : view === "trash" || params.get("deleted") === "true"
-          ? "trash"
+        : view === "hidden" || params.get("deleted") === "true"
+          ? "hidden"
           : "all",
     albumId: params.get("album") ?? params.get("album_id"),
   };
@@ -48,7 +48,7 @@ export function writeFilters(filters: LibraryFilters): URLSearchParams {
 export function collectionTitle(filters: LibraryFilters, albums: Album[]): string {
   if (filters.albumId) return albums.find((album) => album.albumId === filters.albumId)?.name ?? "Album";
   if (filters.view === "favorites") return "Favorites";
-  if (filters.view === "trash") return "Recently deleted";
+  if (filters.view === "hidden") return "Hidden";
   return "All photographs";
 }
 
@@ -74,6 +74,42 @@ export function formatDate(value: string | null, withTime = false): string {
 
 export function monthKey(photo: PhotoSummary): string {
   return photo.timelineTime.slice(0, 7);
+}
+
+export function isBurst(photo: PhotoSummary): boolean {
+  return Boolean(photo.burstId) && (photo.burstSize ?? 0) > 1;
+}
+
+/**
+ * Collapse a burst's near-identical frames into a single grid item.
+ *
+ * Each burst (a cluster with more than one frame) is represented once, keyed by
+ * its `burstId`, using the first member's position in the list so month grouping
+ * and ordering are preserved. The cell keeps the first member's data (its
+ * `revision`, rating, and selection identity stay valid) but displays the
+ * representative's image, constructed from `burstRepresentativeAssetId`, so the
+ * chosen best frame renders even when it is on another page. Non-burst frames
+ * pass through unchanged.
+ */
+export function collapseBursts(photos: PhotoSummary[]): PhotoSummary[] {
+  const seen = new Set<string>();
+  const result: PhotoSummary[] = [];
+  for (const photo of photos) {
+    if (!isBurst(photo)) {
+      result.push(photo);
+      continue;
+    }
+    const burstId = photo.burstId as string;
+    if (seen.has(burstId)) continue;
+    seen.add(burstId);
+    const representativeId = photo.burstRepresentativeAssetId ?? photo.assetId;
+    result.push({
+      ...photo,
+      thumbnailUrl: `/assets/${representativeId}/thumbnail`,
+      previewUrl: `/assets/${representativeId}/preview`,
+    });
+  }
+  return result;
 }
 
 export function monthLabel(key: string): string {

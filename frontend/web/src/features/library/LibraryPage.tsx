@@ -1,16 +1,17 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FolderOpen, Grid2X2, ImageOff, LoaderCircle, Pencil, RefreshCw, Trash2, X } from "lucide-react";
+import { EyeOff, FolderOpen, Grid2X2, ImageOff, LoaderCircle, Pencil, RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Album, LibraryFilters, MutationResult, PhotoSummary } from "../../api/types";
 import { useDurableMutation } from "../../api/mutations";
 import { Button } from "../../components/Button";
 import { useToast } from "../../components/Toast";
-import { collectionTitle, monthKey, monthLabel, writeFilters } from "../../domain/library";
+import { collectionTitle, collapseBursts, isBurst, monthKey, monthLabel, writeFilters } from "../../domain/library";
 import { usePhotoLibrary } from "../../hooks/usePhotoLibrary";
 import { useLayoutStore } from "../../state/layout";
 import { AlbumDialog } from "../albums/AlbumDialog";
+import { BurstStrip } from "./BurstStrip";
 import { LibraryToolbar } from "./LibraryToolbar";
 import { PhotoCard } from "./PhotoCard";
 
@@ -69,10 +70,12 @@ export function LibraryPage({
 
   useEffect(() => setSelected(new Set()), [filters]);
 
+  const [burstReview, setBurstReview] = useState<PhotoSummary | null>(null);
   const gap = 12;
   const columns = Math.max(1, Math.floor((width - 32 + gap) / (thumbnailSize + gap)));
   const cardWidth = (width - 32 - gap * (columns - 1)) / columns;
-  const rows = useMemo(() => buildRows(photos, columns), [columns, photos]);
+  const collapsed = useMemo(() => collapseBursts(photos), [photos]);
+  const rows = useMemo(() => buildRows(collapsed, columns), [columns, collapsed]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -94,10 +97,10 @@ export function LibraryPage({
     setSelected((current) => {
       const next = new Set(current);
       if (range && lastSelected) {
-        const start = photos.findIndex((photo) => photo.assetId === lastSelected);
-        const end = photos.findIndex((photo) => photo.assetId === assetId);
+        const start = collapsed.findIndex((photo) => photo.assetId === lastSelected);
+        const end = collapsed.findIndex((photo) => photo.assetId === assetId);
         if (start >= 0 && end >= 0) {
-          for (const photo of photos.slice(Math.min(start, end), Math.max(start, end) + 1)) next.add(photo.assetId);
+          for (const photo of collapsed.slice(Math.min(start, end), Math.max(start, end) + 1)) next.add(photo.assetId);
         }
       } else if (next.has(assetId)) next.delete(assetId);
       else next.add(assetId);
@@ -167,7 +170,7 @@ export function LibraryPage({
     <section className="library-workspace">
       <header className="library-header">
         <div>
-          <p className="eyebrow">{filters.albumId ? "Album" : filters.view === "trash" ? "Library maintenance" : "Photo library"}</p>
+          <p className="eyebrow">{filters.albumId ? "Album" : filters.view === "hidden" ? "Hidden photographs" : "Photo library"}</p>
           <div className="library-header__title">
             <h1>{title}</h1>
             {currentAlbum && <button className="icon-button" type="button" onClick={() => setEditingAlbum(currentAlbum)} aria-label="Edit album"><Pencil size={15} /></button>}
@@ -187,8 +190,8 @@ export function LibraryPage({
         )}
         {!library.isLoading && !library.isError && photos.length === 0 && (
           <div className="center-state empty-library">
-            {filters.view === "trash" ? <Trash2 size={38} /> : filters.albumId ? <FolderOpen size={38} /> : <Grid2X2 size={38} />}
-            <h2>{activeFilters ? "No matching photographs" : filters.view === "trash" ? "Trash is empty" : filters.albumId ? "This album is empty" : "Your library starts here"}</h2>
+            {filters.view === "hidden" ? <EyeOff size={38} /> : filters.albumId ? <FolderOpen size={38} /> : <Grid2X2 size={38} />}
+            <h2>{activeFilters ? "No matching photographs" : filters.view === "hidden" ? "No hidden photographs" : filters.albumId ? "This album is empty" : "Your library starts here"}</h2>
             <p>{activeFilters ? "Try widening the filters or using a different search." : "Imported photographs will appear here, ordered by capture date."}</p>
             {activeFilters && <Button onClick={() => setFilters({ ...filters, q: "", dateFrom: "", dateTo: "", mediaType: "", ratingMin: 0 })}>Clear filters</Button>}
           </div>
@@ -217,7 +220,11 @@ export function LibraryPage({
                           busy={busy.has(photo.assetId)}
                           onSelect={(range) => choose(photo.assetId, range)}
                           onFavorite={() => toggleFavorite(photo)}
-                          onOpen={() => navigate({ pathname: `/photo/${photo.assetId}`, search: writeFilters(filters).toString() })}
+                          onOpen={() => {
+                            const target = isBurst(photo) ? (photo.burstRepresentativeAssetId ?? photo.assetId) : photo.assetId;
+                            navigate({ pathname: `/photo/${target}`, search: writeFilters(filters).toString() });
+                          }}
+                          onBurst={isBurst(photo) ? () => setBurstReview(photo) : undefined}
                         />
                       ))}
                     </div>
@@ -247,6 +254,21 @@ export function LibraryPage({
         <label className="density-control"><Grid2X2 size={13} /><span className="sr-only">Thumbnail size</span><input type="range" min="130" max="280" step="10" value={thumbnailSize} onChange={(event) => setThumbnailSize(Number(event.target.value))} /></label>
       </footer>
       {editingAlbum !== undefined && <AlbumDialog album={editingAlbum} knownPhotos={photos} onClose={() => setEditingAlbum(undefined)} />}
+      {burstReview && (
+        <BurstStrip
+          photo={burstReview}
+          onClose={() => setBurstReview(null)}
+          onRepresentative={async (assetId) => {
+            try {
+              await mutate(`/assets/${assetId}/burst/representative`, "POST", {});
+              await queryClient.invalidateQueries({ queryKey: ["library"] });
+              await queryClient.invalidateQueries({ queryKey: ["burst"] });
+            } catch (error) {
+              toast.show(error instanceof Error ? error.message : "The burst selection could not be saved", "error");
+            }
+          }}
+        />
+      )}
     </section>
   );
 }

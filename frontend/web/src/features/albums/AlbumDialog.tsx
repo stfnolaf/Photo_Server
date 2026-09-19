@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, RotateCcw, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, EyeOff, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Album, PhotoSummary } from "../../api/types";
 import { useDurableMutation } from "../../api/mutations";
@@ -71,7 +71,7 @@ export function AlbumDialog({
         { expectedRevision: album.revision },
       );
       await refresh();
-      toast.show(deleted ? "Album restored" : "Album moved to trash");
+      toast.show(deleted ? "Album unhidden" : "Album hidden");
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Album could not be changed");
@@ -87,7 +87,7 @@ export function AlbumDialog({
   };
 
   return (
-    <Modal title={album ? (deleted ? "Deleted album" : "Edit album") : "Create album"} onClose={onClose} wide>
+    <Modal title={album ? (deleted ? "Hidden album" : "Edit album") : "Create album"} onClose={onClose} wide>
       <form className="album-form" onSubmit={save}>
         <label className="field">
           <span>Name</span>
@@ -126,8 +126,8 @@ export function AlbumDialog({
         <footer className="modal__actions">
           {album && (
             <Button type="button" tone={deleted ? "default" : "danger"} disabled={saving} onClick={toggleDeleted}>
-              {deleted ? <RotateCcw size={15} /> : <Trash2 size={15} />}
-              {deleted ? "Restore album" : "Move to trash"}
+              {deleted ? <RotateCcw size={15} /> : <EyeOff size={15} />}
+              {deleted ? "Unhide album" : "Hide album"}
             </Button>
           )}
           <span className="modal__spacer" />
