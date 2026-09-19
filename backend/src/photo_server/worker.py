@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -25,9 +26,19 @@ def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
     return {"preview": directory / "preview.jpg", "thumbnail": directory / "thumbnail.jpg"}
 
 
+def _cache_sizes(targets: dict[str, Path]) -> tuple[int | None, int | None]:
+    return tuple(path.stat().st_size if path.exists() else None for path in targets.values())
+
+
 def generate(service: Service, manifest: Manifest) -> bool:
     targets = cache_paths(service, manifest)
     if all(path.exists() for path in targets.values()):
+        # Files from before tracking (or a crashed first run): backfill a row
+        # without pretending this is a fresh access.
+        preview_bytes, thumbnail_bytes = _cache_sizes(targets)
+        service.catalog.backfill_preview_cache(
+            str(manifest.asset_id), preview_bytes, thumbnail_bytes
+        )
         return True
     with TemporaryDirectory(dir=service.scratch) as directory:
         original = Path(directory) / manifest.primary.original_filename
@@ -78,7 +89,51 @@ def generate(service: Service, manifest: Manifest) -> bool:
                     os.replace(temporary_path, path)
                 finally:
                     temporary_path.unlink(missing_ok=True)
+    # Record the freshly written set; the upsert also counts as an access.
+    preview_bytes, thumbnail_bytes = _cache_sizes(targets)
+    service.catalog.record_preview_cache(
+        str(manifest.asset_id), preview_bytes, thumbnail_bytes
+    )
     return True
+
+
+def rebuild_cache_index(service: Service) -> dict:
+    """Backfill preview_cache rows for cache directories that predate tracking.
+
+    Walks ``{data_dir}/cache`` for ``{asset_id}-{sha256}-v1`` directories and
+    inserts a row (sizes via ``stat``) for each asset that lacks one. Never
+    updates an existing row. Orphaned directories whose asset was purged are
+    counted as skipped.
+    """
+    cache_root = service.settings.data_dir / "cache"
+    directories = 0
+    added = 0
+    skipped = 0
+    if cache_root.is_dir():
+        for entry in sorted(cache_root.iterdir()):
+            if not entry.is_dir():
+                continue
+            match = re.fullmatch(r"(?P<asset_id>.+)-[0-9a-f]{64}-v1", entry.name)
+            if match is None:
+                continue
+            directories += 1
+            asset_id = match.group("asset_id")
+            preview = entry / "preview.jpg"
+            thumbnail = entry / "thumbnail.jpg"
+            try:
+                if service.catalog.backfill_preview_cache(
+                    asset_id,
+                    preview.stat().st_size if preview.exists() else None,
+                    thumbnail.stat().st_size if thumbnail.exists() else None,
+                ):
+                    added += 1
+                else:
+                    skipped += 1
+            except Exception:
+                # Orphaned directory: the asset row is gone (FK violation on
+                # insert). Leave the files; they are harmless.
+                skipped += 1
+    return {"status": "ok", "directories": directories, "rowsAdded": added, "rowsSkipped": skipped}
 
 
 def run_once(service: Service) -> dict | None:

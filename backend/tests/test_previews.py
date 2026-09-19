@@ -28,10 +28,16 @@ def preview_fixture(tmp_path, content, role="ORIGINAL_RAW", metadata=None):
         imported_at="2026-01-01T00:00:00Z",
         metadata=metadata or {},
     )
+    catalog = SimpleNamespace(
+        record_preview_cache=lambda *args: None,
+        backfill_preview_cache=lambda *args: True,
+        touch_preview_cache=lambda *args: True,
+    )
     service = SimpleNamespace(
         settings=SimpleNamespace(data_dir=tmp_path, exiftool="exiftool"),
         scratch=tmp_path,
         storage=SimpleNamespace(chunks=lambda key: [content]),
+        catalog=catalog,
     )
     return service, manifest
 

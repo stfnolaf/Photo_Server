@@ -226,6 +226,15 @@ burst_members = Table(
         primary_key=True,
     ),
 )
+preview_cache = Table(
+    "preview_cache",
+    schema,
+    Column("asset_id", String, ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True),
+    Column("preview_bytes", BigInteger),
+    Column("thumbnail_bytes", BigInteger),
+    Column("last_accessed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
 
 
 class Catalog:
@@ -1681,6 +1690,69 @@ class Catalog:
                     where=jobs.c.status != "running",
                 )
             )
+
+    def record_preview_cache(self, asset_id: str, preview_bytes: int, thumbnail_bytes: int):
+        """Upsert sizes for a freshly generated preview set and mark it accessed."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(preview_cache)
+                .values(
+                    asset_id=asset_id,
+                    preview_bytes=preview_bytes,
+                    thumbnail_bytes=thumbnail_bytes,
+                    last_accessed_at=func.now(),
+                    updated_at=func.now(),
+                )
+                .on_conflict_do_update(
+                    index_elements=[preview_cache.c.asset_id],
+                    set_={
+                        "preview_bytes": preview_bytes,
+                        "thumbnail_bytes": thumbnail_bytes,
+                        "last_accessed_at": func.now(),
+                        "updated_at": func.now(),
+                    },
+                )
+            )
+
+    def backfill_preview_cache(
+        self, asset_id: str, preview_bytes: int | None, thumbnail_bytes: int | None
+    ) -> bool:
+        """Insert a row for a cached set that predates tracking. Never updates one.
+
+        Returns True when a new row was inserted, False when one already existed.
+        The existence check (rather than the insert's rowcount) decides the
+        return value because psycopg does not report a reliable rowcount for
+        ``INSERT ... ON CONFLICT DO NOTHING``.
+        """
+        with self.engine.begin() as connection:
+            exists = connection.execute(
+                select(1).where(preview_cache.c.asset_id == asset_id)
+            ).scalar_one_or_none()
+            if exists is not None:
+                return False
+            connection.execute(
+                insert(preview_cache)
+                .values(
+                    asset_id=asset_id,
+                    preview_bytes=preview_bytes,
+                    thumbnail_bytes=thumbnail_bytes,
+                )
+                .on_conflict_do_nothing(index_elements=[preview_cache.c.asset_id])
+            )
+        return True
+
+    def touch_preview_cache(self, asset_id: str) -> bool:
+        """Bump last_accessed_at, at most once per 30s. False if no row was updated."""
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                preview_cache.update()
+                .where(
+                    preview_cache.c.asset_id == asset_id,
+                    preview_cache.c.last_accessed_at < text("now() - interval '30 seconds'"),
+                )
+                .values(last_accessed_at=func.now(), updated_at=func.now())
+            )
+        return result.rowcount > 0
 
     def create_upload_batch(self, batch_id: UUID, files: list[dict]):
         now = int(time())

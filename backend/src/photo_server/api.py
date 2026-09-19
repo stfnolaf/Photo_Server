@@ -1,3 +1,4 @@
+import time
 from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Annotated, Literal
@@ -33,6 +34,12 @@ from photo_server.uploads import (
     seal_batch,
 )
 from photo_server.worker import cache_paths
+
+# In-process throttle for preview_cache.last_accessed_at updates: asset id ->
+# monotonic timestamp of the last touch. Bounded by the number of assets
+# served per process lifetime; a per-request DB UPDATE would be wasteful.
+_preview_touches: dict[str, float] = {}
+_PREVIEW_TOUCH_COOLDOWN = 30.0
 
 
 class UploadFileDeclaration(BaseModel):
@@ -95,6 +102,28 @@ class FaceMoveRequest(BaseModel):
     operation_id: UUID
     face_ids: list[UUID] = Field(min_length=1, max_length=1000)
     target_person_id: UUID | None = None
+
+
+def _record_access(service: Service, manifest, asset_id: str) -> None:
+    """Bump preview_cache.last_accessed_at for a served preview, at most once
+    per cooldown. Best-effort bookkeeping: never let it break the response."""
+    now = time.monotonic()
+    last = _preview_touches.get(asset_id)
+    if last is not None and now - last < _PREVIEW_TOUCH_COOLDOWN:
+        return
+    _preview_touches[asset_id] = now
+    try:
+        if not service.catalog.touch_preview_cache(asset_id):
+            # Row missing (e.g. cache dir created before tracking): insert
+            # from the files on disk.
+            paths = cache_paths(service, manifest)
+            service.catalog.backfill_preview_cache(
+                asset_id,
+                paths["preview"].stat().st_size,
+                paths["thumbnail"].stat().st_size,
+            )
+    except Exception:
+        pass
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -500,6 +529,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(
                 status_code=202, content={"status": "pending"}, headers={"Retry-After": "2"}
             )
+        _record_access(service, manifest, str(asset_id))
         return FileResponse(
             path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"}
         )

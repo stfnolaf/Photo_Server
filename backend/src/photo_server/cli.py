@@ -53,6 +53,10 @@ def main():
     worker.add_argument("--once", action="store_true", help="Process at most one queued job")
     ai_worker = commands.add_parser("ai-worker")
     ai_worker.add_argument("--once", action="store_true", help="Analyze at most one queued asset")
+    commands.add_parser(
+        "cache-rebuild-index",
+        help="Backfill preview_cache rows for cached preview sets that predate tracking",
+    )
     args = parser.parse_args()
     settings = Settings()
     try:
@@ -61,7 +65,7 @@ def main():
         else:
             service = Service(settings)
             initialized = service.initialize(
-                recover_uploads=args.command not in {"worker", "ai-worker", "migrate"}
+                recover_uploads=args.command not in {"worker", "ai-worker", "migrate", "cache-rebuild-index"}
             )
             if args.command in {"init", "migrate"}:
                 result = initialized
@@ -85,6 +89,10 @@ def main():
                 result = run_ai(service, args.once)
                 if not args.once:
                     return
+            elif args.command == "cache-rebuild-index":
+                from photo_server.worker import rebuild_cache_index
+
+                result = rebuild_cache_index(service)
             else:
                 from photo_server.worker import run, run_once
 
