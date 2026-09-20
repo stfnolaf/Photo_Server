@@ -1727,3 +1727,351 @@ def test_phase_3b(backend):
                 "the session; no workers started"
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: face-operation results (rename/merge/move), the binary
+# face-thumbnail contract, and the storage-verify report.
+# ---------------------------------------------------------------------------
+
+UNKNOWN_FACE_ID = UUID("77777777-7777-4777-8777-777777777777")
+
+PHASE4_MINIMAL_RESULT = {
+    "summary": "Phase 4 golden probe.",
+    "photoTypes": ["portrait"],
+    "scene": "studio",
+    "setting": "indoor",
+    "objects": [],
+    "activities": [],
+    "tags": ["golden"],
+    "visibleText": [],
+    "faceCount": 1,
+    "personCount": 1,
+}
+
+PHASE4_PERSONS = {
+    key: uuid5(GOLDEN_NAMESPACE, f"phase4-person-{number}")
+    for key, number in {
+        "avery": 1,
+        "sam": 2,
+        "ben": 3,
+        "ghost": 4,
+        "stale": 5,
+        "new": 6,  # the person a targetless face move creates (uuid4 pinned)
+    }.items()
+}
+
+PHASE4_OPS = {
+    key: uuid5(GOLDEN_NAMESPACE, f"phase4-op-{key}")
+    for key in (
+        "rename",
+        "rename-unknown",
+        "merge-same",
+        "merge",
+        "merge-src-missing",
+        "merge-tgt-missing",
+        "move-to-avery",
+        "move-new",
+        "move-stale",
+        "move-unknown-face",
+        "move-tgt-missing",
+        "move-dup",
+        "move-empty",
+    )
+}
+
+
+def seed_phase_4(service) -> dict:
+    """Seed the phase 4 scenario and return the pinned ids per key.
+
+    Four assets (81-84) each carry one current photo-ai run and faces:
+    avery (one face on 81 and one on 82), sam (one face on 81), ben (one
+    face on 83), and an unnamed ghost (one face on 84); asset 84 also
+    carries a second, non-current run whose face is stale. The ghost
+    asset's preview job is pinned ``unavailable`` so its face thumbnail
+    takes the 404 branch instead of the 202 branch.
+    """
+    assets = {
+        number: pinned_catalog_fixture(
+            service,
+            number,
+            capture,
+            media=media,
+        )
+        for number, (capture, media) in {
+            81: ("2024-07-01T00:10:00+08:00", "JPEG"),
+            82: ("2024-07-02T00:10:00+08:00", "JPEG"),
+            83: ("2024-07-03T00:10:00+08:00", "HEIF"),
+            84: (None, "JPEG"),
+        }.items()
+    }
+    asset_ids = {number: str(manifest.asset_id) for number, manifest in assets.items()}
+    runs = {
+        number: str(uuid5(GOLDEN_NAMESPACE, f"phase4-run-{number}"))
+        for number in (81, 82, 83, 84)
+    }
+    stale_run = str(uuid5(GOLDEN_NAMESPACE, "phase4-run-84b"))
+    face_ids = {tag: uuid5(GOLDEN_NAMESPACE, f"phase4-face-{tag}") for tag in ("81a", "82a", "81b", "83b", "84g", "84s")}
+
+    with service.catalog.engine.begin() as connection:
+        for key, (name, created) in {
+            "avery": ("Avery", "2025-01-02T12:00:00+00:00"),
+            "sam": ("Sam", "2025-01-02T12:05:00+00:00"),
+            "ben": ("Ben", "2025-01-02T12:10:00+00:00"),
+            "ghost": ("", "2025-01-02T12:15:00+00:00"),
+            "stale": ("Stale", "2025-01-02T12:20:00+00:00"),
+        }.items():
+            connection.execute(
+                insert(people).values(
+                    id=str(PHASE4_PERSONS[key]),
+                    display_name=name,
+                    created_at=datetime.fromisoformat(created),
+                )
+            )
+        for number in (81, 82, 83, 84):
+            connection.execute(
+                insert(analysis_runs).values(
+                    id=runs[number],
+                    asset_id=asset_ids[number],
+                    analysis_type="photo-ai",
+                    model_name="stub-vlm",
+                    model_version="stub-digest-1",
+                    pipeline_version="photo-ai-v1",
+                    input_hash="0" * 64,
+                    object_key=f"analysis/{asset_ids[number]}/photo-ai-v1/{runs[number]}.json",
+                    result=PHASE4_MINIMAL_RESULT,
+                    searchable_text="Phase 4 golden probe portrait studio",
+                    is_current=True,
+                    semantic_origin="computed",
+                    created_at=datetime.fromisoformat("2025-01-05T08:30:00+00:00"),
+                )
+            )
+        connection.execute(
+            insert(analysis_runs).values(
+                id=stale_run,
+                asset_id=asset_ids[84],
+                analysis_type="photo-ai",
+                model_name="stub-vlm",
+                model_version="stub-digest-2",
+                pipeline_version="photo-ai-v1",
+                input_hash="f" * 64,
+                object_key=f"analysis/{asset_ids[84]}/photo-ai-v1/{stale_run}.json",
+                result=PHASE4_MINIMAL_RESULT,
+                searchable_text="Phase 4 golden probe portrait studio",
+                is_current=False,
+                semantic_origin="computed",
+                created_at=datetime.fromisoformat("2025-01-06T08:30:00+00:00"),
+            )
+        )
+        for tag, (number, run, person, index, box, confidence) in {
+            "81a": (81, runs[81], "avery", 0, [0.1, 0.2, 0.3, 0.4], 0.9),
+            "82a": (82, runs[82], "avery", 0, [0.0, 0.0, 1.0, 1.0], 1.0),
+            "81b": (81, runs[81], "sam", 1, [0.5, 0.6, 0.7, 0.8], 0.75),
+            "83b": (83, runs[83], "ben", 0, [0.2, 0.3, 0.4, 0.5], 0.85),
+            "84g": (84, runs[84], "ghost", 0, [0.3, 0.4, 0.5, 0.6], 0.7),
+            "84s": (84, stale_run, "stale", 1, [0.4, 0.5, 0.6, 0.7], 0.65),
+        }.items():
+            connection.execute(
+                insert(faces).values(
+                    id=str(face_ids[tag]),
+                    asset_id=asset_ids[number],
+                    analysis_run_id=run,
+                    person_id=str(PHASE4_PERSONS[person]),
+                    face_index=index,
+                    bounding_box=box,
+                    confidence=confidence,
+                    embedding=[0.1, 0.2, 0.3, 0.4],
+                )
+            )
+        # The ghost asset's preview job is unavailable: its face thumbnail
+        # must take the 404 branch instead of the 202 branch.
+        connection.execute(
+            update(jobs)
+            .where(
+                jobs.c.asset_id == asset_ids[84],
+                jobs.c.job_type == "preview-v1",
+            )
+            .values(status="unavailable", error="No embedded preview in the source file")
+        )
+    return {
+        "persons": {key: str(value) for key, value in PHASE4_PERSONS.items()},
+        "faces": {key: str(value) for key, value in face_ids.items()},
+        "ops": {key: str(value) for key, value in PHASE4_OPS.items()},
+    }
+
+
+def _phase4_json_case(method: str, path: str, body: dict) -> dict:
+    return {
+        "method": method,
+        "path": path,
+        "body": json.dumps(body).encode(),
+        "headers": {"Content-Type": "application/json"},
+    }
+
+
+def phase_4_cases(seeded: dict) -> list:
+    avery = seeded["persons"]["avery"]
+    sam = seeded["persons"]["sam"]
+    ben = seeded["persons"]["ben"]
+    f81a = seeded["faces"]["81a"]
+    f82a = seeded["faces"]["82a"]
+    f83b = seeded["faces"]["83b"]
+    f84g = seeded["faces"]["84g"]
+    f84s = seeded["faces"]["84s"]
+    ops = seeded["ops"]
+    return [
+        # person.rename: rename, idempotent replay, operation-id reuse
+        # 409, and the unknown-person 404.
+        _phase4_json_case(
+            "PATCH", f"/people/{avery}", {"operationId": ops["rename"], "displayName": "Avery L."}
+        ),
+        _phase4_json_case(
+            "PATCH", f"/people/{avery}", {"operationId": ops["rename"], "displayName": "Avery L."}
+        ),
+        _phase4_json_case(
+            "PATCH", f"/people/{avery}", {"operationId": ops["rename"], "displayName": "Clash"}
+        ),
+        _phase4_json_case(
+            "PATCH",
+            f"/people/{UNKNOWN_PERSON_ID}",
+            {"operationId": ops["rename-unknown"], "displayName": "Nobody"},
+        ),
+        # person.merge: same-person 409 first (it must not consume a
+        # person), then sam into avery (one face moves) plus an
+        # idempotent replay, then 404s for a missing source and a missing
+        # target.
+        _phase4_json_case(
+            "POST",
+            f"/people/{avery}/merge",
+            {"operationId": ops["merge-same"], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            f"/people/{sam}/merge",
+            {"operationId": ops["merge"], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            f"/people/{sam}/merge",
+            {"operationId": ops["merge"], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            f"/people/{UNKNOWN_PERSON_ID}/merge",
+            {"operationId": ops["merge-src-missing"], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            f"/people/{ben}/merge",
+            {"operationId": ops["merge-tgt-missing"], "targetPersonId": str(UNKNOWN_PERSON_ID)},
+        ),
+        # faces.move: ben's face to the existing avery, replay; the ghost
+        # face with no target (creates a pinned new person), replay; then
+        # 409s for a stale and an unknown face, a 404 for a missing
+        # target, and 422s for duplicate and empty face lists.
+        _phase4_json_case(
+            "POST",
+            "/faces/move",
+            {"operationId": ops["move-to-avery"], "faceIds": [f83b], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            "/faces/move",
+            {"operationId": ops["move-to-avery"], "faceIds": [f83b], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST", "/faces/move", {"operationId": ops["move-new"], "faceIds": [f84g]}
+        ),
+        _phase4_json_case(
+            "POST", "/faces/move", {"operationId": ops["move-new"], "faceIds": [f84g]}
+        ),
+        _phase4_json_case(
+            "POST",
+            "/faces/move",
+            {"operationId": ops["move-stale"], "faceIds": [f84s], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            "/faces/move",
+            {"operationId": ops["move-unknown-face"], "faceIds": [str(UNKNOWN_FACE_ID)], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST",
+            "/faces/move",
+            {"operationId": ops["move-tgt-missing"], "faceIds": [f82a], "targetPersonId": str(UNKNOWN_PERSON_ID)},
+        ),
+        _phase4_json_case(
+            "POST",
+            "/faces/move",
+            {"operationId": ops["move-dup"], "faceIds": [f82a, f82a], "targetPersonId": avery},
+        ),
+        _phase4_json_case(
+            "POST", "/faces/move", {"operationId": ops["move-empty"], "faceIds": []}
+        ),
+        # The face-thumbnail contract: a pending preview yields the
+        # 202 + Retry-After body, an unavailable preview the 404 branch,
+        # and unknown and stale faces the face-not-found 404.
+        ("GET", f"/faces/{f81a}/thumbnail"),
+        ("GET", f"/faces/{f84g}/thumbnail"),
+        ("GET", f"/faces/{UNKNOWN_FACE_ID}/thumbnail"),
+        ("GET", f"/faces/{f84s}/thumbnail"),
+        # The storage-verify report over the four seeded blobs: the
+        # default head-only pass, then the full sha256 pass (the
+        # disposable test bucket only — never the configured library).
+        ("POST", "/maintenance/verify"),
+        ("POST", "/maintenance/verify?full=true"),
+    ]
+
+
+def test_phase_4(backend):
+    """Phase 4: the face-review operations and the storage-verify report
+    become schema-complete (``PersonRenameOut`` / ``PersonMergeOut`` /
+    ``FaceMoveOut`` / ``VerifyOut``), and the binary face-thumbnail
+    endpoint is documented with its media type and 202 + Retry-After
+    contract.
+
+    Golden: avery is renamed (idempotent replay, operation-id reuse 409,
+    unknown-person 404); sam is merged into avery after a same-person 409
+    (replay, missing-source 404, missing-target 404); ben's face moves to
+    avery (replay), the ghost face moves without a target and creates a
+    new person with a pinned id (replay), then stale-face 409,
+    unknown-face 409, missing-target 404, duplicate-ids 422, and
+    empty-list 422; the face thumbnail serves the 202 pending body for a
+    missing preview, the unavailable-preview 404, and face-not-found 404s
+    for unknown and stale faces; POST /maintenance/verify reports
+    size-only and full sha256 passes over the four seeded blobs with no
+    errors. The catalog module's uuid4 is pinned to this section's new
+    person id for the session; no workers are started.
+    """
+    seeded = seed_phase_4(backend.service)
+
+    def pinned_uuid4() -> UUID:
+        return PHASE4_PERSONS["new"]
+
+    with mock.patch("photo_server.catalog.uuid4", new=pinned_uuid4):
+        run_sequence(
+            backend,
+            "phase4",
+            phase_4_cases(seeded),
+            describe=(
+                "phase4: face-review operations and the storage-verify "
+                "report on four pinned assets with five people and six "
+                "faces (five current-run, one non-current-run): avery is "
+                "renamed (idempotent replay, operation-id reuse 409, "
+                "unknown-person 404); after a same-person 409, sam is "
+                "merged into avery (one face moves; replay, "
+                "missing-source 404, missing-target 404); ben's face "
+                "moves to avery (replay), the ghost face moves without a "
+                "target and creates a new person with a pinned id "
+                "(replay), then stale-face 409, unknown-face 409, "
+                "missing-target 404, duplicate-ids 422, empty-list 422; "
+                "the face thumbnail serves the 202 pending body (Retry-"
+                "After 2) for a missing preview, the unavailable-preview "
+                "404, and face-not-found 404s for unknown and stale "
+                "faces; POST /maintenance/verify reports the size-only "
+                "and full sha256 passes over the four seeded blobs "
+                "(assetsChecked 4, blobsChecked 4, no errors) against "
+                "the disposable test bucket only; catalog uuid4 pinned "
+                "for the session; no workers started"
+            ),
+        )

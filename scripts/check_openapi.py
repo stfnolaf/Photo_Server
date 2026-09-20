@@ -7,14 +7,19 @@ checked-in file, exiting 1 on any difference. The spec is a projection, not a
 second source of truth: this check is code -> spec only, so a stale spec is a
 CI failure instead of a silent contract divergence.
 
-With --strict-coverage it additionally fails if any JSON operation still
-declares the empty response schema FastAPI emits for untyped operations
-(content: {"application/json": {"schema": {}}}). A covered response is a
-`$ref`, an object schema with `properties`, or a composite (`anyOf`/`oneOf`)
-schema — the latter is how discriminated unions (typed model variants selected
-by a discriminator) are emitted. The flag is wired into CI in the phase that
-lands the last response models (plan Phase 4) so that from then on any new
-untyped endpoint breaks the build; until then the flag exists but is opt-in.
+With --strict-coverage (wired into run_all_tests.sh since plan Phase 4, so
+from there on any new untyped endpoint breaks the build) it additionally
+fails if any JSON operation still declares the empty response schema
+FastAPI emits for untyped operations (content: {"application/json":
+{"schema": {}}}). A covered response is a `$ref`, an object schema with
+`properties`, or a composite (`anyOf`/`oneOf`) schema — the latter is how
+discriminated unions (typed model variants selected by a discriminator) are
+emitted — or an array whose items are covered (the `list[X]` response
+models: /assets, /albums, /upload-batches). The four binary endpoints
+(original/preview/thumbnail/face-thumbnail) are not JSON operations: their
+200s are documented with an explicit media type via the app's openapi()
+projection, and their 202s carry a $ref, so the coverage check passes for
+them by construction.
 
 No services are contacted (see dump_openapi.py).
 """
@@ -31,10 +36,21 @@ CHECKED_IN = ROOT / "openapi" / "openapi.json"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 
+def _schema_covered(schema: dict) -> bool:
+    """True when a response schema types its payload: a `$ref`, an object
+    with `properties`, a composite (`anyOf`/`oneOf`), or an array whose
+    items are themselves covered (`list[X]` response models)."""
+    if not schema:
+        return False
+    if any(key in schema for key in ("$ref", "properties", "anyOf", "oneOf")):
+        return True
+    items = schema.get("items")
+    return isinstance(items, dict) and _schema_covered(items)
+
+
 def _uncovered_json_responses(spec: dict) -> list[str]:
     """List `METHOD /path -> status` responses whose JSON schema is the empty
     schema FastAPI emits for untyped operations."""
-    covered_keys = ("$ref", "properties", "anyOf", "oneOf")
     uncovered = []
     for path, item in sorted(spec.get("paths", {}).items()):
         for method, operation in item.items():
@@ -46,8 +62,7 @@ def _uncovered_json_responses(spec: dict) -> list[str]:
                 media = response.get("content", {}).get("application/json")
                 if media is None:
                     continue
-                schema = media.get("schema") or {}
-                if schema and any(key in schema for key in covered_keys):
+                if _schema_covered(media.get("schema") or {}):
                     continue
                 uncovered.append(f"{method.upper()} {path} -> {status}")
     return uncovered

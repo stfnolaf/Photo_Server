@@ -1,3 +1,4 @@
+import copy
 import time
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -26,15 +27,20 @@ from photo_server.api_schemas import (
     BrowsePageOut,
     BurstDetailOut,
     BurstRepresentativeOut,
+    FaceMoveOut,
     HealthOut,
     MutationResultOut,
+    Pending202Out,
     PeoplePageOut,
     PersonDetailOut,
+    PersonMergeOut,
+    PersonRenameOut,
     PreviewStatusOut,
     QueueResultOut,
     UploadBatchOut,
     UploadFileReceipt,
     UploadQueueStatusOut,
+    VerifyOut,
 )
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
@@ -310,7 +316,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Person not found")
         return person
 
-    @app.patch("/people/{person_id}")
+    @app.patch("/people/{person_id}", response_model=PersonRenameOut)
     def rename_person(person_id: UUID, body: PersonNameRequest):
         return service.catalog.commit_face_operation(
             body.operation_id,
@@ -321,7 +327,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    @app.post("/people/{person_id}/merge")
+    @app.post("/people/{person_id}/merge", response_model=PersonMergeOut)
     def merge_person(person_id: UUID, body: PersonMergeRequest):
         return service.catalog.commit_face_operation(
             body.operation_id,
@@ -332,7 +338,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    @app.post("/faces/move")
+    @app.post("/faces/move", response_model=FaceMoveOut)
     def move_faces(body: FaceMoveRequest):
         face_ids = [str(face_id) for face_id in body.face_ids]
         if len(set(face_ids)) != len(face_ids):
@@ -346,7 +352,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    @app.get("/faces/{face_id}/thumbnail")
+    # Phase 4 (plan): the four binary endpoints serve bytes, not JSON, and
+    # the client uses them as URLs (<img src>, <a download>, XHR upload), so
+    # they get documented media types and the 202 + Retry-After contract
+    # instead of a response model — there is no JSON 200 body to type.
+    # ``responses=`` is documentation-only in FastAPI (it never touches the
+    # wire), and the openapi() projection below strips the untyped
+    # application/json placeholder FastAPI merges under these 200s, so the
+    # spec records only what is actually served.
+    def derivative_responses() -> dict:
+        return {
+            "200": {
+                "description": "The generated JPEG derivative",
+                "content": {"image/jpeg": {"schema": {"type": "string", "format": "binary"}}},
+                "headers": {
+                    "Cache-Control": {
+                        "description": "private, max-age=3600",
+                        "schema": {"type": "string"},
+                    }
+                },
+            },
+            "202": {
+                "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
+                "model": Pending202Out,
+                "headers": {
+                    "Retry-After": {
+                        "description": "Seconds until the derivative is likely ready (2)",
+                        "schema": {"type": "integer"},
+                    }
+                },
+            },
+        }
+
+    @app.get("/faces/{face_id}/thumbnail", responses=derivative_responses())
     def face_thumbnail(face_id: UUID):
         face = service.catalog.face(str(face_id))
         if face is None:
@@ -523,7 +561,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.get("/assets/{asset_id}/original")
+    @app.get(
+        "/assets/{asset_id}/original",
+        responses={
+            "200": {
+                "description": "The stored original, streamed; the media type is the stored blob's MIME type",
+                "content": {
+                    "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+                },
+                "headers": {
+                    "Content-Length": {
+                        "description": "The stored size in bytes",
+                        "schema": {"type": "integer"},
+                    },
+                    "Content-Disposition": {
+                        "description": "attachment; filename*=UTF-8''<url-encoded original filename>",
+                        "schema": {"type": "string"},
+                    },
+                },
+            }
+        },
+    )
     def original(asset_id: UUID):
         manifest = find(asset_id)
         if service.storage.head(manifest.primary.object_key) is None:
@@ -556,11 +614,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"}
         )
 
-    @app.get("/assets/{asset_id}/preview")
+    @app.get("/assets/{asset_id}/preview", responses=derivative_responses())
     def preview(asset_id: UUID):
         return derivative(asset_id, "preview")
 
-    @app.get("/assets/{asset_id}/thumbnail")
+    @app.get("/assets/{asset_id}/thumbnail", responses=derivative_responses())
     def thumbnail(asset_id: UUID):
         return derivative(asset_id, "thumbnail")
 
@@ -570,9 +628,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         service.catalog.queue_preview(str(asset_id))
         return service.catalog.preview_status(str(asset_id))
 
-    @app.post("/maintenance/verify")
+    @app.post("/maintenance/verify", response_model=VerifyOut)
     def verify_storage(full: bool = False):
         return service.verify(full)
+
+    # The responses= declarations above are merged by FastAPI into (not
+    # replacing) the untyped application/json placeholder it writes for
+    # modelless 200 responses, which would leave an empty JSON schema beside
+    # the documented media type in the spec. This projection — spec only,
+    # never the wire — drops the placeholder from the four binary 200s so
+    # the checked-in spec and the served /openapi.json and /docs record
+    # exactly the media types and headers that are actually served. FastAPI
+    # caches the generated schema in app.openapi_schema, so the projection
+    # deep-copies before mutating.
+    _binary_200_media = {
+        "/assets/{asset_id}/original": "application/octet-stream",
+        "/assets/{asset_id}/preview": "image/jpeg",
+        "/assets/{asset_id}/thumbnail": "image/jpeg",
+        "/faces/{face_id}/thumbnail": "image/jpeg",
+    }
+    _base_openapi = app.openapi
+
+    def openapi() -> dict:
+        spec = copy.deepcopy(_base_openapi())
+        for path, media_type in _binary_200_media.items():
+            content = spec["paths"][path]["get"]["responses"]["200"]["content"]
+            content.pop("application/json", None)
+            content.setdefault(
+                media_type, {"schema": {"type": "string", "format": "binary"}}
+            )
+        return spec
+
+    app.openapi = openapi
 
     return app
 

@@ -1085,6 +1085,38 @@
         "title": "BurstRepresentativeOut",
         "type": "object"
       },
+      "FaceMoveOut": {
+        "additionalProperties": false,
+        "description": "POST /faces/move: the ``faces.move`` result. ``personId`` is the\ntarget person \u2014 the client's ``targetPersonId`` when one was sent, or\nthe newly created group otherwise (signalled by ``createdPerson``).\nNote the wire dict does not echo the request's ``targetPersonId``; the\nclient reads the destination back from ``personId``.\n``movedFaces`` counts the reassigned face rows.",
+        "properties": {
+          "createdPerson": {
+            "title": "Createdperson",
+            "type": "boolean"
+          },
+          "movedFaces": {
+            "title": "Movedfaces",
+            "type": "integer"
+          },
+          "operationId": {
+            "format": "uuid",
+            "title": "Operationid",
+            "type": "string"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operationId",
+          "personId",
+          "movedFaces",
+          "createdPerson"
+        ],
+        "title": "FaceMoveOut",
+        "type": "object"
+      },
       "FaceMoveRequest": {
         "properties": {
           "faceIds": {
@@ -1553,6 +1585,22 @@
         "title": "OperationRequest",
         "type": "object"
       },
+      "Pending202Out": {
+        "additionalProperties": false,
+        "description": "The 202 body of the binary derivative endpoints (asset\npreview/thumbnail, face thumbnail) when the JPEG is not ready yet:\n``{\"status\": \"pending\"}`` plus a ``Retry-After: 2`` header, which the\nclient polls on (PreviewImage.tsx, FaceThumbnail.tsx). Declared in the\nspec only (the ``responses=`` 202 entry) \u2014 the handlers emit this\nJSONResponse directly and never validate through the model.",
+        "properties": {
+          "status": {
+            "const": "pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Pending202Out",
+        "type": "object"
+      },
       "PeoplePageOut": {
         "additionalProperties": false,
         "description": "GET /people: the page plus named/unnamed counts over all matches.",
@@ -1625,6 +1673,39 @@
         "title": "PersonDetailOut",
         "type": "object"
       },
+      "PersonMergeOut": {
+        "additionalProperties": false,
+        "description": "POST /people/{id}/merge: the ``person.merge`` result. ``personId`` is\nthe surviving target (the merge keeps its name); ``mergedPersonId`` is\nthe source whose faces were moved over and whose row was deleted;\n``movedFaces`` counts the transferred face rows.",
+        "properties": {
+          "mergedPersonId": {
+            "format": "uuid",
+            "title": "Mergedpersonid",
+            "type": "string"
+          },
+          "movedFaces": {
+            "title": "Movedfaces",
+            "type": "integer"
+          },
+          "operationId": {
+            "format": "uuid",
+            "title": "Operationid",
+            "type": "string"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operationId",
+          "personId",
+          "mergedPersonId",
+          "movedFaces"
+        ],
+        "title": "PersonMergeOut",
+        "type": "object"
+      },
       "PersonMergeRequest": {
         "properties": {
           "operationId": {
@@ -1663,6 +1744,33 @@
           "operationId"
         ],
         "title": "PersonNameRequest",
+        "type": "object"
+      },
+      "PersonRenameOut": {
+        "additionalProperties": false,
+        "description": "PATCH /people/{id}: the ``person.rename`` result. ``displayName`` is\nthe new display name; the empty string is a valid value (it clears the\nname). The same body is returned for an idempotent replay of the stored\noperation.",
+        "properties": {
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          },
+          "operationId": {
+            "format": "uuid",
+            "title": "Operationid",
+            "type": "string"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operationId",
+          "personId",
+          "displayName"
+        ],
+        "title": "PersonRenameOut",
         "type": "object"
       },
       "PersonSummaryOut": {
@@ -2670,6 +2778,63 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VerifyErrorOut": {
+        "additionalProperties": false,
+        "description": "One failed check in a POST /maintenance/verify report: the object\nkey (or ``album:<albumId>`` for a dangling album reference) and the\nfailure message.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "error"
+        ],
+        "title": "VerifyErrorOut",
+        "type": "object"
+      },
+      "VerifyOut": {
+        "additionalProperties": false,
+        "description": "POST /maintenance/verify: the storage-integrity report.\n``assetsChecked``/``blobsChecked`` count the manifests and the blobs\nthat passed; ``verification`` is ``\"size\"`` for the default head-only\npass and ``\"sha256\"`` for ``?full=true``; ``errors`` is empty when\nevery blob and album reference checked out.",
+        "properties": {
+          "assetsChecked": {
+            "title": "Assetschecked",
+            "type": "integer"
+          },
+          "blobsChecked": {
+            "title": "Blobschecked",
+            "type": "integer"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/VerifyErrorOut"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "verification": {
+            "enum": [
+              "sha256",
+              "size"
+            ],
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assetsChecked",
+          "blobsChecked",
+          "verification",
+          "errors"
+        ],
+        "title": "VerifyOut",
+        "type": "object"
       }
     }
   },
@@ -3366,11 +3531,28 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "The stored original, streamed; the media type is the stored blob's MIME type",
+            "headers": {
+              "Content-Disposition": {
+                "description": "attachment; filename*=UTF-8''<url-encoded original filename>",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "description": "The stored size in bytes",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -3404,11 +3586,40 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "The generated JPEG derivative",
+            "headers": {
+              "Cache-Control": {
+                "description": "private, max-age=3600",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pending202Out"
+                }
+              }
+            },
+            "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the derivative is likely ready (2)",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -3532,11 +3743,40 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "The generated JPEG derivative",
+            "headers": {
+              "Cache-Control": {
+                "description": "private, max-age=3600",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pending202Out"
+                }
+              }
+            },
+            "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the derivative is likely ready (2)",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -3619,7 +3859,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FaceMoveOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3656,11 +3898,40 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "The generated JPEG derivative",
+            "headers": {
+              "Cache-Control": {
+                "description": "private, max-age=3600",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pending202Out"
+                }
+              }
+            },
+            "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the derivative is likely ready (2)",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "422": {
             "content": {
@@ -3908,7 +4179,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -4081,7 +4354,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PersonRenameOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -4129,7 +4404,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PersonMergeOut"
+                }
               }
             },
             "description": "Successful Response"

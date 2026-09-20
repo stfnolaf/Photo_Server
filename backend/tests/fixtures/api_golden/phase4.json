@@ -1,0 +1,244 @@
+{
+  "cases": [
+    {
+      "body": {
+        "displayName": "Avery L.",
+        "operationId": "c0c640b5-40bb-559e-a6e8-1c8258180ca9",
+        "personId": "9d708b80-bf90-5afb-9187-f18c94ca6b8f"
+      },
+      "method": "PATCH",
+      "path": "/people/9d708b80-bf90-5afb-9187-f18c94ca6b8f",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Avery L.",
+        "operationId": "c0c640b5-40bb-559e-a6e8-1c8258180ca9",
+        "personId": "9d708b80-bf90-5afb-9187-f18c94ca6b8f"
+      },
+      "method": "PATCH",
+      "path": "/people/9d708b80-bf90-5afb-9187-f18c94ca6b8f",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Operation ID was reused with a different request"
+      },
+      "method": "PATCH",
+      "path": "/people/9d708b80-bf90-5afb-9187-f18c94ca6b8f",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "PATCH",
+      "path": "/people/33333333-3333-4333-8333-333333333333",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Choose two different people to combine"
+      },
+      "method": "POST",
+      "path": "/people/9d708b80-bf90-5afb-9187-f18c94ca6b8f/merge",
+      "status": 409
+    },
+    {
+      "body": {
+        "mergedPersonId": "9a85f631-194e-5045-aef1-1cc9b5bbdddb",
+        "movedFaces": 1,
+        "operationId": "460b6c10-7c99-5a39-84d2-50e0f6d0f6cd",
+        "personId": "9d708b80-bf90-5afb-9187-f18c94ca6b8f"
+      },
+      "method": "POST",
+      "path": "/people/9a85f631-194e-5045-aef1-1cc9b5bbdddb/merge",
+      "status": 200
+    },
+    {
+      "body": {
+        "mergedPersonId": "9a85f631-194e-5045-aef1-1cc9b5bbdddb",
+        "movedFaces": 1,
+        "operationId": "460b6c10-7c99-5a39-84d2-50e0f6d0f6cd",
+        "personId": "9d708b80-bf90-5afb-9187-f18c94ca6b8f"
+      },
+      "method": "POST",
+      "path": "/people/9a85f631-194e-5045-aef1-1cc9b5bbdddb/merge",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/people/33333333-3333-4333-8333-333333333333/merge",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/people/db82d169-5ba3-5647-8468-9266b8ba9b3f/merge",
+      "status": 404
+    },
+    {
+      "body": {
+        "createdPerson": false,
+        "movedFaces": 1,
+        "operationId": "10b4a4fb-9424-5bfe-828d-b9bce3ade750",
+        "personId": "9d708b80-bf90-5afb-9187-f18c94ca6b8f"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 200
+    },
+    {
+      "body": {
+        "createdPerson": false,
+        "movedFaces": 1,
+        "operationId": "10b4a4fb-9424-5bfe-828d-b9bce3ade750",
+        "personId": "9d708b80-bf90-5afb-9187-f18c94ca6b8f"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 200
+    },
+    {
+      "body": {
+        "createdPerson": true,
+        "movedFaces": 1,
+        "operationId": "dc21e02d-47fe-5e75-86a2-9bbef3395464",
+        "personId": "32a9aa90-189f-565c-98bd-38d5523452a7"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 200
+    },
+    {
+      "body": {
+        "createdPerson": true,
+        "movedFaces": 1,
+        "operationId": "dc21e02d-47fe-5e75-86a2-9bbef3395464",
+        "personId": "32a9aa90-189f-565c-98bd-38d5523452a7"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "One or more selected faces are no longer current"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "One or more selected faces are no longer current"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Face IDs must be unique"
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "actual_length": 0,
+              "field_type": "List",
+              "min_length": 1
+            },
+            "input": [],
+            "loc": [
+              "body",
+              "faceIds"
+            ],
+            "msg": "List should have at least 1 item after validation, not 0",
+            "type": "too_short"
+          }
+        ]
+      },
+      "method": "POST",
+      "path": "/faces/move",
+      "status": 422
+    },
+    {
+      "body": {
+        "status": "pending"
+      },
+      "method": "GET",
+      "path": "/faces/f1131893-79c1-5d87-8327-ed1940a6c2ed/thumbnail",
+      "status": 202
+    },
+    {
+      "body": {
+        "detail": "Photograph preview is unavailable"
+      },
+      "method": "GET",
+      "path": "/faces/4dc36835-a3c2-5269-83ad-b99bf0fa419b/thumbnail",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Face not found"
+      },
+      "method": "GET",
+      "path": "/faces/77777777-7777-4777-8777-777777777777/thumbnail",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Face not found"
+      },
+      "method": "GET",
+      "path": "/faces/9c664ba5-5aba-50d5-b08e-965cf3fe70db/thumbnail",
+      "status": 404
+    },
+    {
+      "body": {
+        "assetsChecked": 4,
+        "blobsChecked": 4,
+        "errors": [],
+        "verification": "size"
+      },
+      "method": "POST",
+      "path": "/maintenance/verify",
+      "status": 200
+    },
+    {
+      "body": {
+        "assetsChecked": 4,
+        "blobsChecked": 4,
+        "errors": [],
+        "verification": "sha256"
+      },
+      "method": "POST",
+      "path": "/maintenance/verify?full=true",
+      "status": 200
+    }
+  ],
+  "description": "phase4: face-review operations and the storage-verify report on four pinned assets with five people and six faces (five current-run, one non-current-run): avery is renamed (idempotent replay, operation-id reuse 409, unknown-person 404); after a same-person 409, sam is merged into avery (one face moves; replay, missing-source 404, missing-target 404); ben's face moves to avery (replay), the ghost face moves without a target and creates a new person with a pinned id (replay), then stale-face 409, unknown-face 409, missing-target 404, duplicate-ids 422, empty-list 422; the face thumbnail serves the 202 pending body (Retry-After 2) for a missing preview, the unavailable-preview 404, and face-not-found 404s for unknown and stale faces; POST /maintenance/verify reports the size-only and full sha256 passes over the four seeded blobs (assetsChecked 4, blobsChecked 4, no errors) against the disposable test bucket only; catalog uuid4 pinned for the session; no workers started",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase4"
+}

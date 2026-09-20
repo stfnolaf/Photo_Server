@@ -1,7 +1,13 @@
 """Typed response models for the JSON endpoints (OpenAPI codegen,
 phases 1a-1b: asset browse/detail, then people reads; phase 2: upload and
 health endpoints; phase 3a: album CRUD and restore; phase 3b: asset
-mutations and queue operations).
+mutations and queue operations; phase 4: people/face operation results and
+the storage-verify report).
+
+The four binary endpoints (original/preview/thumbnail/face-thumbnail) carry
+no JSON 200 body, so they are documented with explicit media types plus a
+``Pending202Out`` 202 instead of a response model (plan phase 4,
+"declare binary, don't over-model").
 
 These models describe exactly what the endpoints put on the wire: same key sets,
 same nullability, same nesting as the dict literals the handlers build today
@@ -615,3 +621,79 @@ class QueueResultOut(ResponseModel):
     jobs_already_queued: StrictInt
     jobs_already_running: StrictInt
     job_types: list[StrictStr]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: the durable face-operation results (catalog.commit_face_operation)
+# and the storage-integrity report (service.verify).
+# ---------------------------------------------------------------------------
+
+
+class PersonRenameOut(ResponseModel):
+    """PATCH /people/{id}: the ``person.rename`` result. ``displayName`` is
+    the new display name; the empty string is a valid value (it clears the
+    name). The same body is returned for an idempotent replay of the stored
+    operation."""
+
+    operation_id: UUID
+    person_id: UUID
+    display_name: StrictStr
+
+
+class PersonMergeOut(ResponseModel):
+    """POST /people/{id}/merge: the ``person.merge`` result. ``personId`` is
+    the surviving target (the merge keeps its name); ``mergedPersonId`` is
+    the source whose faces were moved over and whose row was deleted;
+    ``movedFaces`` counts the transferred face rows."""
+
+    operation_id: UUID
+    person_id: UUID
+    merged_person_id: UUID
+    moved_faces: StrictInt
+
+
+class FaceMoveOut(ResponseModel):
+    """POST /faces/move: the ``faces.move`` result. ``personId`` is the
+    target person — the client's ``targetPersonId`` when one was sent, or
+    the newly created group otherwise (signalled by ``createdPerson``).
+    Note the wire dict does not echo the request's ``targetPersonId``; the
+    client reads the destination back from ``personId``.
+    ``movedFaces`` counts the reassigned face rows."""
+
+    operation_id: UUID
+    person_id: UUID
+    moved_faces: StrictInt
+    created_person: StrictBool
+
+
+class VerifyErrorOut(ResponseModel):
+    """One failed check in a POST /maintenance/verify report: the object
+    key (or ``album:<albumId>`` for a dangling album reference) and the
+    failure message."""
+
+    key: StrictStr
+    error: StrictStr
+
+
+class VerifyOut(ResponseModel):
+    """POST /maintenance/verify: the storage-integrity report.
+    ``assetsChecked``/``blobsChecked`` count the manifests and the blobs
+    that passed; ``verification`` is ``"size"`` for the default head-only
+    pass and ``"sha256"`` for ``?full=true``; ``errors`` is empty when
+    every blob and album reference checked out."""
+
+    assets_checked: StrictInt
+    blobs_checked: StrictInt
+    verification: Literal["sha256", "size"]
+    errors: list[VerifyErrorOut]
+
+
+class Pending202Out(ResponseModel):
+    """The 202 body of the binary derivative endpoints (asset
+    preview/thumbnail, face thumbnail) when the JPEG is not ready yet:
+    ``{"status": "pending"}`` plus a ``Retry-After: 2`` header, which the
+    client polls on (PreviewImage.tsx, FaceThumbnail.tsx). Declared in the
+    spec only (the ``responses=`` 202 entry) — the handlers emit this
+    JSONResponse directly and never validate through the model."""
+
+    status: Literal["pending"]

@@ -1,4 +1,4 @@
-"""Unit tests for the phase 1a-3b response models (no services required).
+"""Unit tests for the phase 1a-4 response models (no services required).
 
 Each model in ``photo_server.api_schemas`` is validated against real JSON
 captured in the golden fixtures (``tests/fixtures/api_golden/``) and must
@@ -33,13 +33,17 @@ from photo_server.api_schemas import (
     BrowsePageOut,
     BurstDetailOut,
     BurstRepresentativeOut,
+    FaceMoveOut,
     FaceRefOut,
     HealthOut,
     LocationOut,
     MutationOut,
     MutationResultOut,
+    Pending202Out,
     PeoplePageOut,
     PersonDetailOut,
+    PersonMergeOut,
+    PersonRenameOut,
     PersonSummaryOut,
     PhotoSummaryOut,
     PreviewStatusOut,
@@ -52,6 +56,8 @@ from photo_server.api_schemas import (
     UploadJobOut,
     UploadQueueStatusOut,
     UserStateOut,
+    VerifyErrorOut,
+    VerifyOut,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_golden"
@@ -61,6 +67,7 @@ PHASE1B = FIXTURES / "phase1b.json"
 PHASE2 = FIXTURES / "phase2.json"
 PHASE3A = FIXTURES / "phase3a.json"
 PHASE3B = FIXTURES / "phase3b.json"
+PHASE4 = FIXTURES / "phase4.json"
 
 
 def normalize(value):
@@ -852,3 +859,196 @@ def test_queue_result_model_rejects_forbidden_shapes():
         )
     with pytest.raises(ValidationError):
         QueueResultOut.model_validate({**queue, "surprise": 1})
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: face-operation results (rename/merge/move) and the storage
+# verify report (VerifyOut / VerifyErrorOut / Pending202Out).
+# ---------------------------------------------------------------------------
+
+
+def phase4_cases() -> list[tuple[str, str, int, dict | None]]:
+    if not PHASE4.exists():
+        pytest.skip(f"golden fixture {PHASE4.name} not recorded yet")
+    return [
+        (case["method"], case["path"], case["status"], case["body"])
+        for case in json.loads(PHASE4.read_text())["cases"]
+    ]
+
+
+def phase4_success_bodies(status: int, key: str) -> list[dict]:
+    return [
+        body
+        for method, path, case_status, body in phase4_cases()
+        if case_status == status and isinstance(body, dict) and key in body
+    ]
+
+
+def test_person_rename_model_round_trips():
+    """Every recorded rename result (fresh and idempotent replay) round-trips
+    with the exact wire key set, and the replay echoes the stored result."""
+    bodies = [
+        body
+        for method, path, status, body in phase4_cases()
+        if status == 200
+        and method == "PATCH"
+        and path.startswith("/people/")
+        and "displayName" in body
+    ]
+    assert len(bodies) == 2, "expected a rename and its replay"
+    for body in bodies:
+        instance = assert_round_trip(PersonRenameOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+    assert bodies[0] == bodies[1], "idempotent replay must return the stored result"
+
+
+def test_person_merge_model_round_trips():
+    """The merge result carries the target, the merged source, and the face
+    count, and never echoes a request-only field."""
+    bodies = phase4_success_bodies(200, "mergedPersonId")
+    assert len(bodies) == 2, "expected a merge and its replay"
+    for body in bodies:
+        instance = assert_round_trip(PersonMergeOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+        assert body["personId"] != body["mergedPersonId"]
+    assert bodies[0] == bodies[1]
+
+
+def test_face_move_model_round_trips():
+    """The face-move result reports the destination person, the face count,
+    and whether a person was created; the request's targetPersonId is never
+    echoed (the client reads the destination back from personId)."""
+    bodies = phase4_success_bodies(200, "createdPerson")
+    assert len(bodies) == 4, "expected two moves and their replays"
+    for body in bodies:
+        instance = assert_round_trip(FaceMoveOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+        assert "targetPersonId" not in body
+    created = [b for b in bodies if b["createdPerson"]]
+    assert created and all(b["movedFaces"] == 1 for b in bodies)
+    assert all(b["createdPerson"] is False for b in bodies if not b["createdPerson"])
+
+
+def test_verify_model_round_trips():
+    """The verify report's two variants (size-only and full sha256) round-trip
+    with the exact key set, empty error list, and matched check counts."""
+    bodies = phase4_success_bodies(200, "verification")
+    assert len(bodies) == 2, "expected a size and a full verify"
+    for body in bodies:
+        instance = assert_round_trip(VerifyOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+        assert body["errors"] == []
+        assert body["assetsChecked"] == body["blobsChecked"]
+    assert {b["verification"] for b in bodies} == {"size", "sha256"}
+
+
+def test_pending_202_model_round_trips():
+    """The 202 body of the binary derivative endpoints is a single
+    ``pending`` status; the model is documentation-only (the handler emits
+    the JSONResponse directly) but must still accept the exact wire shape."""
+    bodies = [
+        body
+        for method, path, status, body in phase4_cases()
+        if status == 202 and isinstance(body, dict) and "status" in body
+    ]
+    assert bodies, "no 202 pending bodies recorded in the phase4 golden"
+    for body in bodies:
+        instance = assert_round_trip(Pending202Out, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+        assert body["status"] == "pending"
+
+
+def test_verify_error_model_rejects_forbidden_shapes():
+    good = {"key": "originals/00000000-0000-0000-0000-000000000081/x", "error": "size mismatch"}
+    assert_round_trip(VerifyErrorOut, good)
+    with pytest.raises(ValidationError):
+        VerifyErrorOut.model_validate({**good, "surprise": 1})
+    with pytest.raises(ValidationError):
+        VerifyErrorOut.model_validate({"key": good["key"]})
+    with pytest.raises(ValidationError):
+        VerifyErrorOut.model_validate({**good, "key": 1})
+    with pytest.raises(ValidationError):
+        VerifyErrorOut.model_validate({**good, "error": None})
+
+
+def test_verify_model_rejects_forbidden_shapes():
+    body = phase4_success_bodies(200, "verification")[0]
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate({**body, "surprise": 1})
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate({**body, "verification": "md5"})
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate({**body, "assetsChecked": "4"})
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate({**body, "blobsChecked": 1.5})
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate(
+            {key: value for key, value in body.items() if key != "errors"}
+        )
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate(
+            {**body, "errors": [{"key": "k"}]}  # missing the error field
+        )
+    with pytest.raises(ValidationError):
+        VerifyOut.model_validate(
+            {**body, "errors": [{"key": "k", "error": "e", "surprise": 1}]}
+        )
+
+
+def test_person_rename_model_rejects_forbidden_shapes():
+    body = phase4_success_bodies(200, "displayName")[0]
+    with pytest.raises(ValidationError):
+        PersonRenameOut.model_validate({**body, "surprise": 1})
+    with pytest.raises(ValidationError):
+        PersonRenameOut.model_validate({**body, "personId": "not-a-uuid"})
+    with pytest.raises(ValidationError):
+        PersonRenameOut.model_validate({**body, "operationId": "not-a-uuid"})
+    with pytest.raises(ValidationError):
+        PersonRenameOut.model_validate(
+            {key: value for key, value in body.items() if key != "displayName"}
+        )
+    with pytest.raises(ValidationError):
+        PersonRenameOut.model_validate({**body, "personId": 1})
+
+
+def test_person_merge_model_rejects_forbidden_shapes():
+    body = phase4_success_bodies(200, "mergedPersonId")[0]
+    with pytest.raises(ValidationError):
+        PersonMergeOut.model_validate({**body, "surprise": 1})
+    with pytest.raises(ValidationError):
+        PersonMergeOut.model_validate({**body, "mergedPersonId": "not-a-uuid"})
+    with pytest.raises(ValidationError):
+        PersonMergeOut.model_validate({**body, "movedFaces": "1"})
+    with pytest.raises(ValidationError):
+        PersonMergeOut.model_validate(
+            {key: value for key, value in body.items() if key != "movedFaces"}
+        )
+
+
+def test_face_move_model_rejects_forbidden_shapes():
+    body = phase4_success_bodies(200, "createdPerson")[0]
+    with pytest.raises(ValidationError):
+        FaceMoveOut.model_validate({**body, "surprise": 1})
+    with pytest.raises(ValidationError):
+        FaceMoveOut.model_validate({**body, "personId": "not-a-uuid"})
+    with pytest.raises(ValidationError):
+        FaceMoveOut.model_validate({**body, "createdPerson": "false"})
+    with pytest.raises(ValidationError):
+        FaceMoveOut.model_validate({**body, "movedFaces": 1.5})
+    with pytest.raises(ValidationError):
+        FaceMoveOut.model_validate(
+            {key: value for key, value in body.items() if key != "createdPerson"}
+        )
+    # The request-only targetPersonId is not part of the result document.
+    with pytest.raises(ValidationError):
+        FaceMoveOut.model_validate({**body, "targetPersonId": "not-a-uuid"})
+
+
+def test_pending_202_model_rejects_forbidden_shapes():
+    assert_round_trip(Pending202Out, {"status": "pending"})
+    with pytest.raises(ValidationError):
+        Pending202Out.model_validate({"status": "ready"})
+    with pytest.raises(ValidationError):
+        Pending202Out.model_validate({})
+    with pytest.raises(ValidationError):
+        Pending202Out.model_validate({"status": "pending", "surprise": 1})

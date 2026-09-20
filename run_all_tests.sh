@@ -190,7 +190,7 @@ log
 log "==================================================================="
 log " SECTION 2: OpenAPI spec drift (scripts/check_openapi.py)"
 log "==================================================================="
-run_capture bash -c "cd '$ROOT' && '$PY' scripts/check_openapi.py"
+run_capture bash -c "cd '$ROOT' && '$PY' scripts/check_openapi.py --strict-coverage"
 rc=$?
 if [ "$rc" -eq 0 ]; then
   log "RESULT: OpenAPI spec drift -> PASS"
