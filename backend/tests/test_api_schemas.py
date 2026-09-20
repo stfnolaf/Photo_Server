@@ -1,4 +1,4 @@
-"""Unit tests for the phase 1a-1b response models (no services required).
+"""Unit tests for the phase 1a-2 response models (no services required).
 
 Each model in ``photo_server.api_schemas`` is validated against real JSON
 captured in the golden fixtures (``tests/fixtures/api_golden/``) and must
@@ -27,10 +27,12 @@ from photo_server.api_schemas import (
     AssetDocOut,
     AssetDocV1Out,
     AssetDocV2Out,
+    BatchAbandonedOut,
     BlobOut,
     BrowsePageOut,
     BurstDetailOut,
     FaceRefOut,
+    HealthOut,
     LocationOut,
     MutationOut,
     PeoplePageOut,
@@ -39,6 +41,12 @@ from photo_server.api_schemas import (
     PhotoSummaryOut,
     PreviewStatusOut,
     ProcessingStatusOut,
+    QueueCountsOut,
+    UploadBatchOut,
+    UploadFileOut,
+    UploadFileReceipt,
+    UploadJobOut,
+    UploadQueueStatusOut,
     UserStateOut,
 )
 
@@ -46,6 +54,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "api_golden"
 SEED = FIXTURES / "seed.json"
 PHASE1A = FIXTURES / "phase1a.json"
 PHASE1B = FIXTURES / "phase1b.json"
+PHASE2 = FIXTURES / "phase2.json"
 
 
 def normalize(value):
@@ -414,3 +423,162 @@ def test_people_models_reject_forbidden_shapes():
         FaceRefOut.model_validate({**face, "box": ["0.1"]})
     with pytest.raises(ValidationError):
         FaceRefOut.model_validate({k: v for k, v in face.items() if k != "faceId"})
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: upload and health models.
+# ---------------------------------------------------------------------------
+
+
+def phase2_cases() -> list[dict]:
+    if not PHASE2.exists():
+        pytest.skip(f"golden fixture {PHASE2.name} not recorded yet")
+    return json.loads(PHASE2.read_text())["cases"]
+
+
+def phase2_find(method: str, path: str, *, status: int | None = None) -> dict:
+    matches = [
+        case
+        for case in phase2_cases()
+        if case["method"] == method and case["path"] == path and (status is None or case["status"] == status)
+    ]
+    assert matches, f"{method} {path} (status {status}) missing from {PHASE2.name}"
+    return matches[0]
+
+
+def phase2_batch_bodies() -> list[dict]:
+    """Every recorded body in the describe_batch() shape: the 201 creates,
+    the 202 seal/retry responses, the single-batch GETs, and every item of
+    the list responses."""
+    batches = []
+    for case in phase2_cases():
+        body = case["body"]
+        if isinstance(body, dict) and "batchId" in body and "files" in body and "jobs" in body:
+            batches.append(body)
+        elif isinstance(body, list) and all(
+            isinstance(item, dict) and "batchId" in item and "files" in item for item in body
+        ):
+            batches.extend(body)
+    return batches
+
+
+def test_upload_batch_models_round_trip():
+    batches = phase2_batch_bodies()
+    # The section records every lifecycle state the models declare:
+    # accepting (GET before seal), queued (seal/retry), complete (A), failed
+    # (B), and the discarded batches' 201 bodies.
+    states = {body["status"] for body in batches}
+    assert {"accepting", "queued", "complete", "failed"} <= states
+    for batch in batches:
+        assert_round_trip(UploadBatchOut, batch)
+        for file in batch["files"]:
+            assert_round_trip(UploadFileOut, file)
+        for job in batch["jobs"]:
+            assert_round_trip(UploadJobOut, job)
+    # The free-form job result blob (decision 4) validates as a dict.
+    complete = next(body for body in batches if body["status"] == "complete")
+    for job in complete["jobs"]:
+        assert isinstance(job["result"], dict)
+        assert job["result"]["assetId"]
+    # skipped/failed files carry a reason or error; uploaded files carry a
+    # uuid assetId only after onboarding completes.
+    for file in complete["files"]:
+        if file["status"] == "skipped":
+            assert file["reason"] is not None and file["assetId"] is None
+        if file["status"] == "imported":
+            UUID(file["assetId"])
+
+
+def test_upload_receipt_models_round_trip():
+    receipts = [
+        case["body"]
+        for case in phase2_cases()
+        if case["method"] == "PUT" and case["status"] == 200
+    ]
+    assert receipts, "no PUT receipts recorded in the phase2 golden"
+    # The one replayed PUT must carry the same digest as its fresh upload.
+    by_file = {}
+    for receipt in receipts:
+        by_file.setdefault(receipt["fileId"], []).append(receipt)
+    replayed = [receipt for receipts_ in by_file.values() for receipt in receipts_ if receipt["replayed"]]
+    assert replayed, "no replayed PUT recorded in the phase2 golden"
+    for receipt in replayed:
+        fresh = next(item for item in by_file[receipt["fileId"]] if not item["replayed"])
+        assert receipt["sha256"] == fresh["sha256"]
+    for receipt in receipts:
+        assert_round_trip(UploadFileReceipt, receipt)
+    abandoned = [
+        case["body"]
+        for case in phase2_cases()
+        if case["method"] == "DELETE" and case["status"] == 200
+    ]
+    assert len(abandoned) == 2
+    for body in abandoned:
+        assert_round_trip(BatchAbandonedOut, body)
+
+
+def test_queue_and_health_models_round_trip():
+    queue_body = phase2_find("GET", "/upload-queue")["body"]
+    assert_round_trip(UploadQueueStatusOut, queue_body)
+    health = phase2_find("GET", "/health")["body"]
+    assert_round_trip(HealthOut, health)
+    # The models' field sets must match the wire exactly: every recorded key
+    # is a model field, and every model field appears on the wire.
+    assert set(UploadQueueStatusOut.model_validate(queue_body).model_dump(by_alias=True).keys()) == set(
+        queue_body
+    )
+    assert set(HealthOut.model_validate(health).model_dump(by_alias=True).keys()) == set(health)
+
+
+def test_upload_models_reject_forbidden_shapes():
+    batches = phase2_batch_bodies()
+    complete = next(body for body in batches if body["status"] == "complete")
+    accepting = next(body for body in batches if body["status"] == "accepting")
+    with pytest.raises(ValidationError):
+        UploadBatchOut.model_validate({**accepting, "surprise": 1})
+    with pytest.raises(ValidationError):
+        UploadBatchOut.model_validate({**accepting, "status": "sealed"})
+    with pytest.raises(ValidationError):
+        UploadBatchOut.model_validate({**accepting, "createdAt": "1735689600"})
+    with pytest.raises(ValidationError):
+        UploadBatchOut.model_validate({**complete, "sealedAt": "soon"})
+    with pytest.raises(ValidationError):
+        UploadFileOut.model_validate({**complete["files"][0], "required": "true"})
+    with pytest.raises(ValidationError):
+        UploadFileOut.model_validate({**complete["files"][0], "status": "staged"})
+    with pytest.raises(ValidationError):
+        UploadFileOut.model_validate({**complete["files"][0], "sizeBytes": 100.0})
+    with pytest.raises(ValidationError):
+        UploadJobOut.model_validate({**complete["jobs"][0], "result": ["not", "a", "dict"]})
+    with pytest.raises(ValidationError):
+        UploadJobOut.model_validate({**complete["jobs"][0], "status": "done"})
+    receipt = next(case["body"] for case in phase2_cases() if case["method"] == "PUT" and case["status"] == 200)
+    with pytest.raises(ValidationError):
+        UploadFileReceipt.model_validate({**receipt, "status": "pending"})
+    with pytest.raises(ValidationError):
+        UploadFileReceipt.model_validate({**receipt, "sha256": receipt["sha256"].upper()})
+    with pytest.raises(ValidationError):
+        UploadFileReceipt.model_validate({**receipt, "sha256": receipt["sha256"][:60]})
+    with pytest.raises(ValidationError):
+        UploadFileReceipt.model_validate({**receipt, "replayed": "no"})
+    abandoned = next(
+        case["body"] for case in phase2_cases() if case["method"] == "DELETE" and case["status"] == 200
+    )
+    with pytest.raises(ValidationError):
+        BatchAbandonedOut.model_validate({**abandoned, "status": "abandoned"})
+    health = phase2_find("GET", "/health")["body"]
+    with pytest.raises(ValidationError):
+        HealthOut.model_validate({**health, "surprise": 1})
+    with pytest.raises(ValidationError):
+        HealthOut.model_validate({**health, "status": "degraded"})
+    with pytest.raises(ValidationError):
+        HealthOut.model_validate({**health, "assets": "0"})
+    queue = phase2_find("GET", "/upload-queue")["body"]
+    with pytest.raises(ValidationError):
+        QueueCountsOut.model_validate({**queue, "uploadsActive": 1})
+    with pytest.raises(ValidationError):
+        UploadQueueStatusOut.model_validate({k: v for k, v in queue.items() if k != "uploadsActive"})
+    # The one status the frontend union does not declare is still wire
+    # legal: a batch can be observed in the deleting window, and the
+    # frozen-wire model must accept it (decision 7).
+    assert_round_trip(UploadBatchOut, {**accepting, "status": "deleting"})

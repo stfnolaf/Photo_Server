@@ -1,5 +1,6 @@
 """Typed response models for the read-only JSON endpoints (OpenAPI codegen,
-phases 1a-1b: asset browse/detail, then people reads).
+phases 1a-1b: asset browse/detail, then people reads; phase 2: upload and
+health endpoints).
 
 These models describe exactly what the endpoints put on the wire: same key sets,
 same nullability, same nesting as the dict literals the handlers build today
@@ -369,3 +370,153 @@ class PersonDetailOut(ResponseModel):
     face_count: StrictInt
     photo_count: StrictInt
     faces: list[FaceRefOut]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: upload and health endpoints.
+#
+# describe_batch() is the shared response of POST /upload-batches,
+# GET /upload-batches, GET /upload-batches/{id}, and the 202 responses of
+# POST .../seal and POST .../retry; the PUT file receipt and the DELETE
+# abandoned-batch receipt have their own small shapes. created_at/sealed_at
+# are epoch seconds: BIGINT columns in the catalog, JSON numbers on the wire
+# (the frontend's UploadBatch.createdAt/sealedAt are numbers too).
+#
+# The batch status union deliberately includes "deleting": a transient state
+# between claim_upload_batch_cleanup() and finish_upload_batch_cleanup() that
+# the frontend's UploadBatchStatus does not declare but the wire can carry in
+# that window, and the frozen-wire model must accept (decision 7).
+# ---------------------------------------------------------------------------
+
+UPLOAD_BATCH_STATUSES = Literal[
+    "accepting",
+    "queued",
+    "processing",
+    "complete",
+    "failed",
+    "deleting",
+]
+
+# The nine upload-file lifecycle states (catalog.upload_files.status); the
+# frontend's UploadFileStatus declares the same union.
+UPLOAD_FILE_STATUSES = Literal[
+    "waiting",
+    "uploading",
+    "uploaded",
+    "skipped",
+    "queued",
+    "processing",
+    "imported",
+    "duplicate",
+    "failed",
+]
+
+# The four onboarding-job states (catalog.onboarding_jobs.status).
+UPLOAD_JOB_STATUSES = Literal["pending", "running", "complete", "failed"]
+
+
+class UploadFileOut(ResponseModel):
+    """One file row of describe_batch(): the declared path/size/mime, the
+    lifecycle state, the asset it became (null until onboarding completes),
+    and the PUT URL (required files only)."""
+
+    file_id: UUID
+    path: StrictStr
+    size_bytes: StrictInt
+    mime_type: StrictStr | None
+    required: StrictBool
+    status: UPLOAD_FILE_STATUSES
+    reason: StrictStr | None
+    asset_id: UUID | None
+    error: StrictStr | None
+    upload_url: StrictStr | None
+
+
+class UploadJobOut(ResponseModel):
+    """One onboarding-job row of describe_batch(). The result is a free-form
+    blob (plan decision 4): a dict once the job produces one, values
+    unchecked."""
+
+    job_id: UUID
+    status: UPLOAD_JOB_STATUSES
+    attempts: StrictInt
+    result: dict[str, Any] | None
+    error: StrictStr | None
+
+
+class UploadBatchOut(ResponseModel):
+    """describe_batch(): the batch header (epoch-second createdAt, nullable
+    sealedAt) plus its file and onboarding-job rows."""
+
+    batch_id: UUID
+    status: UPLOAD_BATCH_STATUSES
+    created_at: StrictInt
+    sealed_at: StrictInt | None
+    files: list[UploadFileOut]
+    jobs: list[UploadJobOut]
+
+
+class UploadFileReceipt(ResponseModel):
+    """PUT /upload-batches/{id}/files/{fileId}: one of the three
+    receive_file() returns (fresh upload, re-upload of an equal digest, or a
+    full replay); all report status "uploaded"."""
+
+    file_id: UUID
+    status: Literal["uploaded"]
+    sha256: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    replayed: StrictBool
+
+
+class BatchAbandonedOut(ResponseModel):
+    """DELETE /upload-batches/{id}: the unsealed batch and its staged objects
+    are gone."""
+
+    batch_id: UUID
+    status: Literal["deleted"]
+    files_deleted: StrictInt
+    multipart_uploads_aborted: StrictInt
+
+
+class QueueCountsOut(ResponseModel):
+    """catalog.queue_counts(): the thirteen per-queue counts (batches plus the
+    onboarding, processing, preview, and analysis jobs)."""
+
+    upload_batches_queued: StrictInt
+    onboarding_pending: StrictInt
+    onboarding_running: StrictInt
+    onboarding_failed: StrictInt
+    processing_pending: StrictInt
+    processing_running: StrictInt
+    processing_failed: StrictInt
+    preview_pending: StrictInt
+    preview_running: StrictInt
+    preview_failed: StrictInt
+    analysis_pending: StrictInt
+    analysis_running: StrictInt
+    analysis_failed: StrictInt
+
+
+class UploadQueueStatusOut(QueueCountsOut):
+    """GET /upload-queue: the queue counts plus the UploadGate's in-process
+    transfer statistics (workers, active, waiting)."""
+
+    upload_workers: StrictInt
+    uploads_active: StrictInt
+    uploads_waiting: StrictInt
+
+
+class HealthOut(QueueCountsOut):
+    """GET /health: the endpoint's merged shape — fixed "ok", the library id,
+    asset/blob counts, every queue count, the upload-gate statistics, and the
+    latest PostgreSQL backup marker in the media bucket (null until the first
+    backup)."""
+
+    status: Literal["ok"]
+    library_id: UUID
+    assets: StrictInt
+    blobs: StrictInt
+    upload_workers: StrictInt
+    uploads_active: StrictInt
+    uploads_waiting: StrictInt
+    postgres_backup_key: StrictStr | None
+    postgres_backup_at: StrictStr | None

@@ -1,0 +1,1232 @@
+{
+  "cases": [
+    {
+      "body": {
+        "batchId": "787bbcfd-cf82-5f88-8254-43cc9270430a",
+        "createdAt": 1735689610,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+            "mimeType": "image/jpeg",
+            "path": "a/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1089f1aa-9339-59be-adaa-b73c4f00d457",
+            "mimeType": "application/rdf+xml",
+            "path": "a/one.xmp",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 40,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/1089f1aa-9339-59be-adaa-b73c4f00d457"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "dab9523e-3e4a-545a-8516-4906bddd3c70",
+            "mimeType": "image/x-raw-adorne",
+            "path": "a/three.arw",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 200,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/dab9523e-3e4a-545a-8516-4906bddd3c70"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "65d1e3bc-7650-5c95-a9d9-31f462de92ac",
+            "mimeType": "image/jpeg",
+            "path": "a/three.jpg",
+            "reason": "raw_preferred",
+            "required": false,
+            "sizeBytes": 80,
+            "status": "skipped",
+            "uploadUrl": null
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "4eca463b-da05-57d6-92f4-f4963d254a65",
+            "mimeType": "image/jpeg",
+            "path": "a/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/4eca463b-da05-57d6-92f4-f4963d254a65"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "POST",
+      "path": "/upload-batches",
+      "status": 201
+    },
+    {
+      "body": {
+        "batchId": "787bbcfd-cf82-5f88-8254-43cc9270430a",
+        "createdAt": 1735689600,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+            "mimeType": "image/jpeg",
+            "path": "a/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1089f1aa-9339-59be-adaa-b73c4f00d457",
+            "mimeType": "application/rdf+xml",
+            "path": "a/one.xmp",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 40,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/1089f1aa-9339-59be-adaa-b73c4f00d457"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "dab9523e-3e4a-545a-8516-4906bddd3c70",
+            "mimeType": "image/x-raw-adorne",
+            "path": "a/three.arw",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 200,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/dab9523e-3e4a-545a-8516-4906bddd3c70"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "65d1e3bc-7650-5c95-a9d9-31f462de92ac",
+            "mimeType": "image/jpeg",
+            "path": "a/three.jpg",
+            "reason": "raw_preferred",
+            "required": false,
+            "sizeBytes": 80,
+            "status": "skipped",
+            "uploadUrl": null
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "4eca463b-da05-57d6-92f4-f4963d254a65",
+            "mimeType": "image/jpeg",
+            "path": "a/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/4eca463b-da05-57d6-92f4-f4963d254a65"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "GET",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a",
+      "status": 200
+    },
+    {
+      "body": [
+        {
+          "batchId": "787bbcfd-cf82-5f88-8254-43cc9270430a",
+          "createdAt": 1735689600,
+          "files": [
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+              "mimeType": "image/jpeg",
+              "path": "a/one.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "waiting",
+              "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545"
+            },
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "1089f1aa-9339-59be-adaa-b73c4f00d457",
+              "mimeType": "application/rdf+xml",
+              "path": "a/one.xmp",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 40,
+              "status": "waiting",
+              "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/1089f1aa-9339-59be-adaa-b73c4f00d457"
+            },
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "dab9523e-3e4a-545a-8516-4906bddd3c70",
+              "mimeType": "image/x-raw-adorne",
+              "path": "a/three.arw",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 200,
+              "status": "waiting",
+              "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/dab9523e-3e4a-545a-8516-4906bddd3c70"
+            },
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "65d1e3bc-7650-5c95-a9d9-31f462de92ac",
+              "mimeType": "image/jpeg",
+              "path": "a/three.jpg",
+              "reason": "raw_preferred",
+              "required": false,
+              "sizeBytes": 80,
+              "status": "skipped",
+              "uploadUrl": null
+            },
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "4eca463b-da05-57d6-92f4-f4963d254a65",
+              "mimeType": "image/jpeg",
+              "path": "a/two.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "waiting",
+              "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/4eca463b-da05-57d6-92f4-f4963d254a65"
+            }
+          ],
+          "jobs": [],
+          "sealedAt": null,
+          "status": "accepting"
+        }
+      ],
+      "method": "GET",
+      "path": "/upload-batches?limit=100",
+      "status": 200
+    },
+    {
+      "body": {
+        "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+        "replayed": false,
+        "sha256": "7f938929c9cb1966e142a11830aaf8592d47b57b3f4a76df8e6af3992d1b9196",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545",
+      "status": 200
+    },
+    {
+      "body": {
+        "fileId": "1089f1aa-9339-59be-adaa-b73c4f00d457",
+        "replayed": false,
+        "sha256": "ec8bd009c892dd530ebac8e873d3ff9331a7279e975930df4d35e6f4df72a2a1",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/1089f1aa-9339-59be-adaa-b73c4f00d457",
+      "status": 200
+    },
+    {
+      "body": {
+        "fileId": "4eca463b-da05-57d6-92f4-f4963d254a65",
+        "replayed": false,
+        "sha256": "c6da9e685d03327915776967e71b69cf05b0322daeadc96510081147226da447",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/4eca463b-da05-57d6-92f4-f4963d254a65",
+      "status": 200
+    },
+    {
+      "body": {
+        "fileId": "dab9523e-3e4a-545a-8516-4906bddd3c70",
+        "replayed": false,
+        "sha256": "319b06e121a306a641d1f5eb9ff9e6b334b0e74619fde0646ad98cc0ec0a6320",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/dab9523e-3e4a-545a-8516-4906bddd3c70",
+      "status": 200
+    },
+    {
+      "body": {
+        "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+        "replayed": true,
+        "sha256": "7f938929c9cb1966e142a11830aaf8592d47b57b3f4a76df8e6af3992d1b9196",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "This companion was skipped by the batch selection rules"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/65d1e3bc-7650-5c95-a9d9-31f462de92ac",
+      "status": 409
+    },
+    {
+      "body": {
+        "batchId": "787bbcfd-cf82-5f88-8254-43cc9270430a",
+        "createdAt": 1735689600,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+            "mimeType": "image/jpeg",
+            "path": "a/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1089f1aa-9339-59be-adaa-b73c4f00d457",
+            "mimeType": "application/rdf+xml",
+            "path": "a/one.xmp",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 40,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/1089f1aa-9339-59be-adaa-b73c4f00d457"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "dab9523e-3e4a-545a-8516-4906bddd3c70",
+            "mimeType": "image/x-raw-adorne",
+            "path": "a/three.arw",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 200,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/dab9523e-3e4a-545a-8516-4906bddd3c70"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "65d1e3bc-7650-5c95-a9d9-31f462de92ac",
+            "mimeType": "image/jpeg",
+            "path": "a/three.jpg",
+            "reason": "raw_preferred",
+            "required": false,
+            "sizeBytes": 80,
+            "status": "skipped",
+            "uploadUrl": null
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "4eca463b-da05-57d6-92f4-f4963d254a65",
+            "mimeType": "image/jpeg",
+            "path": "a/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/4eca463b-da05-57d6-92f4-f4963d254a65"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "067bcab5-1b77-5fb3-b08b-2d9e3477f035",
+            "result": null,
+            "status": "pending"
+          },
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "1322d240-1bd0-5af0-9c68-6197b90b3fbd",
+            "result": null,
+            "status": "pending"
+          },
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "de38be71-84c6-54cc-9f53-75615a167748",
+            "result": null,
+            "status": "pending"
+          }
+        ],
+        "sealedAt": 1735689610,
+        "status": "queued"
+      },
+      "method": "POST",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/seal",
+      "status": 202
+    },
+    {
+      "body": {
+        "batchId": "787bbcfd-cf82-5f88-8254-43cc9270430a",
+        "createdAt": 1735689600,
+        "files": [
+          {
+            "assetId": "ca963092-553d-535e-81a3-1a2e6a9075b2",
+            "error": null,
+            "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
+            "mimeType": "image/jpeg",
+            "path": "a/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "imported",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545"
+          },
+          {
+            "assetId": "ca963092-553d-535e-81a3-1a2e6a9075b2",
+            "error": null,
+            "fileId": "1089f1aa-9339-59be-adaa-b73c4f00d457",
+            "mimeType": "application/rdf+xml",
+            "path": "a/one.xmp",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 40,
+            "status": "imported",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/1089f1aa-9339-59be-adaa-b73c4f00d457"
+          },
+          {
+            "assetId": "b18eac37-c7ef-5f32-9b24-0e296c9e07b7",
+            "error": null,
+            "fileId": "dab9523e-3e4a-545a-8516-4906bddd3c70",
+            "mimeType": "image/x-raw-adorne",
+            "path": "a/three.arw",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 200,
+            "status": "imported",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/dab9523e-3e4a-545a-8516-4906bddd3c70"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "65d1e3bc-7650-5c95-a9d9-31f462de92ac",
+            "mimeType": "image/jpeg",
+            "path": "a/three.jpg",
+            "reason": "raw_preferred",
+            "required": false,
+            "sizeBytes": 80,
+            "status": "skipped",
+            "uploadUrl": null
+          },
+          {
+            "assetId": "2eb82861-9fb9-5524-b22d-5159485acdb5",
+            "error": null,
+            "fileId": "4eca463b-da05-57d6-92f4-f4963d254a65",
+            "mimeType": "image/jpeg",
+            "path": "a/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "imported",
+            "uploadUrl": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/4eca463b-da05-57d6-92f4-f4963d254a65"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "067bcab5-1b77-5fb3-b08b-2d9e3477f035",
+            "result": {
+              "assetId": "2eb82861-9fb9-5524-b22d-5159485acdb5",
+              "replayed": false,
+              "status": "imported"
+            },
+            "status": "complete"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "1322d240-1bd0-5af0-9c68-6197b90b3fbd",
+            "result": {
+              "assetId": "b18eac37-c7ef-5f32-9b24-0e296c9e07b7",
+              "replayed": false,
+              "status": "imported"
+            },
+            "status": "complete"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "de38be71-84c6-54cc-9f53-75615a167748",
+            "result": {
+              "assetId": "ca963092-553d-535e-81a3-1a2e6a9075b2",
+              "replayed": false,
+              "status": "imported"
+            },
+            "status": "complete"
+          }
+        ],
+        "sealedAt": 1735689610,
+        "status": "complete"
+      },
+      "method": "GET",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+        "createdAt": 1735689610,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+            "mimeType": "image/jpeg",
+            "path": "b/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+            "mimeType": "image/jpeg",
+            "path": "b/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "POST",
+      "path": "/upload-batches",
+      "status": 201
+    },
+    {
+      "body": {
+        "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+        "replayed": false,
+        "sha256": "d1a0d2c95feb5c829c4ee1941355516f5d225d87a91a1aa1bcccf19579da48ec",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+      "status": 200
+    },
+    {
+      "body": {
+        "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+        "replayed": false,
+        "sha256": "a514aef84d2ad2fd69376522be404f35c8315822cb6fa45cdad7d7922d056193",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+        "createdAt": 1735689640,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+            "mimeType": "image/jpeg",
+            "path": "b/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+            "mimeType": "image/jpeg",
+            "path": "b/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "75de6b13-a2fe-5eac-a6f3-365cf98f3a3d",
+            "result": null,
+            "status": "pending"
+          },
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "daee355b-4e43-5dfc-8f35-12d84557dc28",
+            "result": null,
+            "status": "pending"
+          }
+        ],
+        "sealedAt": 1735689610,
+        "status": "queued"
+      },
+      "method": "POST",
+      "path": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/seal",
+      "status": 202
+    },
+    {
+      "body": {
+        "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+        "createdAt": 1735689640,
+        "files": [
+          {
+            "assetId": null,
+            "error": "Simulated onboarding failure (golden)",
+            "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+            "mimeType": "image/jpeg",
+            "path": "b/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "failed",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+          },
+          {
+            "assetId": null,
+            "error": "Simulated onboarding failure (golden)",
+            "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+            "mimeType": "image/jpeg",
+            "path": "b/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "failed",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 1,
+            "error": "Simulated onboarding failure (golden)",
+            "jobId": "75de6b13-a2fe-5eac-a6f3-365cf98f3a3d",
+            "result": null,
+            "status": "failed"
+          },
+          {
+            "attempts": 1,
+            "error": "Simulated onboarding failure (golden)",
+            "jobId": "daee355b-4e43-5dfc-8f35-12d84557dc28",
+            "result": null,
+            "status": "failed"
+          }
+        ],
+        "sealedAt": 1735689650,
+        "status": "failed"
+      },
+      "method": "GET",
+      "path": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+        "createdAt": 1735689640,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+            "mimeType": "image/jpeg",
+            "path": "b/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+            "mimeType": "image/jpeg",
+            "path": "b/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "75de6b13-a2fe-5eac-a6f3-365cf98f3a3d",
+            "result": null,
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "daee355b-4e43-5dfc-8f35-12d84557dc28",
+            "result": null,
+            "status": "pending"
+          }
+        ],
+        "sealedAt": 1735689650,
+        "status": "queued"
+      },
+      "method": "POST",
+      "path": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/retry",
+      "status": 202
+    },
+    {
+      "body": {
+        "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+        "createdAt": 1735689640,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+            "mimeType": "image/jpeg",
+            "path": "b/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+          },
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+            "mimeType": "image/jpeg",
+            "path": "b/two.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "75de6b13-a2fe-5eac-a6f3-365cf98f3a3d",
+            "result": null,
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "jobId": "daee355b-4e43-5dfc-8f35-12d84557dc28",
+            "result": null,
+            "status": "pending"
+          }
+        ],
+        "sealedAt": 1735689650,
+        "status": "queued"
+      },
+      "method": "GET",
+      "path": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "89a16601-da32-5049-8fb5-a6be6e64102e",
+        "createdAt": 1735689610,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "3af96319-1a08-5829-be32-ff7f519d66e3",
+            "mimeType": "image/jpeg",
+            "path": "c/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e/files/3af96319-1a08-5829-be32-ff7f519d66e3"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "POST",
+      "path": "/upload-batches",
+      "status": 201
+    },
+    {
+      "body": {
+        "fileId": "3af96319-1a08-5829-be32-ff7f519d66e3",
+        "replayed": false,
+        "sha256": "523494afce28da3c1f3570f4017ef6999d014a8ec9f200051d705f7729f9905b",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e/files/3af96319-1a08-5829-be32-ff7f519d66e3",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "89a16601-da32-5049-8fb5-a6be6e64102e",
+        "filesDeleted": 1,
+        "multipartUploadsAborted": 0,
+        "status": "deleted"
+      },
+      "method": "DELETE",
+      "path": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Upload batch not found"
+      },
+      "method": "GET",
+      "path": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e",
+      "status": 409
+    },
+    {
+      "body": {
+        "batchId": "765b45fb-7940-54bf-b888-42e5ca1363da",
+        "createdAt": 1735689610,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "186f86f9-3741-5479-95cd-ce601502ee00",
+            "mimeType": "image/jpeg",
+            "path": "d/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 50,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/765b45fb-7940-54bf-b888-42e5ca1363da/files/186f86f9-3741-5479-95cd-ce601502ee00"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "POST",
+      "path": "/upload-batches",
+      "status": 201
+    },
+    {
+      "body": {
+        "detail": "Content-Length does not match the batch declaration"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/765b45fb-7940-54bf-b888-42e5ca1363da/files/186f86f9-3741-5479-95cd-ce601502ee00",
+      "status": 409
+    },
+    {
+      "body": {
+        "batchId": "765b45fb-7940-54bf-b888-42e5ca1363da",
+        "createdAt": 1735689630,
+        "files": [
+          {
+            "assetId": null,
+            "error": "Content-Length does not match the declaration",
+            "fileId": "186f86f9-3741-5479-95cd-ce601502ee00",
+            "mimeType": "image/jpeg",
+            "path": "d/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 50,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/765b45fb-7940-54bf-b888-42e5ca1363da/files/186f86f9-3741-5479-95cd-ce601502ee00"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "GET",
+      "path": "/upload-batches/765b45fb-7940-54bf-b888-42e5ca1363da",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Upload these required files before sealing: ['d/one.jpg']"
+      },
+      "method": "POST",
+      "path": "/upload-batches/765b45fb-7940-54bf-b888-42e5ca1363da/seal",
+      "status": 409
+    },
+    {
+      "body": {
+        "batchId": "765b45fb-7940-54bf-b888-42e5ca1363da",
+        "filesDeleted": 1,
+        "multipartUploadsAborted": 0,
+        "status": "deleted"
+      },
+      "method": "DELETE",
+      "path": "/upload-batches/765b45fb-7940-54bf-b888-42e5ca1363da",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "4346d8f0-3a29-5aad-a8af-e3bca03b21cc",
+        "createdAt": 1735689610,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "f7ca7226-00f0-5a28-a515-0af23cb1970c",
+            "mimeType": "image/jpeg",
+            "path": "e/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "waiting",
+            "uploadUrl": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/files/f7ca7226-00f0-5a28-a515-0af23cb1970c"
+          }
+        ],
+        "jobs": [],
+        "sealedAt": null,
+        "status": "accepting"
+      },
+      "method": "POST",
+      "path": "/upload-batches",
+      "status": 201
+    },
+    {
+      "body": {
+        "fileId": "f7ca7226-00f0-5a28-a515-0af23cb1970c",
+        "replayed": false,
+        "sha256": "96932d581e21a0c55f515b23d90c8f3ddf63ae76b252f46b76ad5d8177819751",
+        "status": "uploaded"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/files/f7ca7226-00f0-5a28-a515-0af23cb1970c",
+      "status": 200
+    },
+    {
+      "body": {
+        "batchId": "4346d8f0-3a29-5aad-a8af-e3bca03b21cc",
+        "createdAt": 1735689635,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "f7ca7226-00f0-5a28-a515-0af23cb1970c",
+            "mimeType": "image/jpeg",
+            "path": "e/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/files/f7ca7226-00f0-5a28-a515-0af23cb1970c"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "b6358179-74b2-5e0f-aa3d-04044e6fff22",
+            "result": null,
+            "status": "pending"
+          }
+        ],
+        "sealedAt": 1735689610,
+        "status": "queued"
+      },
+      "method": "POST",
+      "path": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/seal",
+      "status": 202
+    },
+    {
+      "body": {
+        "detail": "A sealed upload batch cannot be discarded"
+      },
+      "method": "DELETE",
+      "path": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "This batch has no failed onboarding jobs"
+      },
+      "method": "POST",
+      "path": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/retry",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "This batch is already sealed"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/files/f7ca7226-00f0-5a28-a515-0af23cb1970c",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "Upload file does not belong to this batch"
+      },
+      "method": "PUT",
+      "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/55555555-5555-4555-8555-555555555555",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": "Upload batch not found"
+      },
+      "method": "GET",
+      "path": "/upload-batches/44444444-4444-4444-8444-444444444444",
+      "status": 409
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "actual_length": 0,
+              "field_type": "List",
+              "min_length": 1
+            },
+            "input": [],
+            "loc": [
+              "body",
+              "files"
+            ],
+            "msg": "List should have at least 1 item after validation, not 0",
+            "type": "too_short"
+          }
+        ]
+      },
+      "method": "POST",
+      "path": "/upload-batches",
+      "status": 422
+    },
+    {
+      "body": [
+        {
+          "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+          "createdAt": 1735689640,
+          "files": [
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+              "mimeType": "image/jpeg",
+              "path": "b/one.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "queued",
+              "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+            },
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+              "mimeType": "image/jpeg",
+              "path": "b/two.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "queued",
+              "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+            }
+          ],
+          "jobs": [
+            {
+              "attempts": 1,
+              "error": null,
+              "jobId": "75de6b13-a2fe-5eac-a6f3-365cf98f3a3d",
+              "result": null,
+              "status": "pending"
+            },
+            {
+              "attempts": 1,
+              "error": null,
+              "jobId": "daee355b-4e43-5dfc-8f35-12d84557dc28",
+              "result": null,
+              "status": "pending"
+            }
+          ],
+          "sealedAt": 1735689650,
+          "status": "queued"
+        }
+      ],
+      "method": "GET",
+      "path": "/upload-batches?limit=1",
+      "status": 200
+    },
+    {
+      "body": [
+        {
+          "batchId": "a20e66da-e412-5566-8fb8-e8e7767fb0ec",
+          "createdAt": 1735689640,
+          "files": [
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "1dbb9842-da4b-5f5e-aec3-7b892ce766a2",
+              "mimeType": "image/jpeg",
+              "path": "b/one.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "queued",
+              "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/1dbb9842-da4b-5f5e-aec3-7b892ce766a2"
+            },
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "357ef368-cd91-5802-aee8-ab19e56ce8a5",
+              "mimeType": "image/jpeg",
+              "path": "b/two.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "queued",
+              "uploadUrl": "/upload-batches/a20e66da-e412-5566-8fb8-e8e7767fb0ec/files/357ef368-cd91-5802-aee8-ab19e56ce8a5"
+            }
+          ],
+          "jobs": [
+            {
+              "attempts": 1,
+              "error": null,
+              "jobId": "75de6b13-a2fe-5eac-a6f3-365cf98f3a3d",
+              "result": null,
+              "status": "pending"
+            },
+            {
+              "attempts": 1,
+              "error": null,
+              "jobId": "daee355b-4e43-5dfc-8f35-12d84557dc28",
+              "result": null,
+              "status": "pending"
+            }
+          ],
+          "sealedAt": 1735689650,
+          "status": "queued"
+        },
+        {
+          "batchId": "4346d8f0-3a29-5aad-a8af-e3bca03b21cc",
+          "createdAt": 1735689635,
+          "files": [
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "f7ca7226-00f0-5a28-a515-0af23cb1970c",
+              "mimeType": "image/jpeg",
+              "path": "e/one.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "queued",
+              "uploadUrl": "/upload-batches/4346d8f0-3a29-5aad-a8af-e3bca03b21cc/files/f7ca7226-00f0-5a28-a515-0af23cb1970c"
+            }
+          ],
+          "jobs": [
+            {
+              "attempts": 0,
+              "error": null,
+              "jobId": "b6358179-74b2-5e0f-aa3d-04044e6fff22",
+              "result": null,
+              "status": "pending"
+            }
+          ],
+          "sealedAt": 1735689655,
+          "status": "queued"
+        }
+      ],
+      "method": "GET",
+      "path": "/upload-batches",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysisFailed": 0,
+        "analysisPending": 0,
+        "analysisRunning": 0,
+        "onboardingFailed": 0,
+        "onboardingPending": 3,
+        "onboardingRunning": 0,
+        "previewFailed": 0,
+        "previewPending": 0,
+        "previewRunning": 0,
+        "processingFailed": 0,
+        "processingPending": 0,
+        "processingRunning": 0,
+        "uploadBatchesQueued": 2,
+        "uploadWorkers": 4,
+        "uploadsActive": 0,
+        "uploadsWaiting": 0
+      },
+      "method": "GET",
+      "path": "/upload-queue",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysisFailed": 0,
+        "analysisPending": 0,
+        "analysisRunning": 0,
+        "assets": 0,
+        "blobs": 0,
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "onboardingFailed": 0,
+        "onboardingPending": 3,
+        "onboardingRunning": 0,
+        "postgresBackupAt": null,
+        "postgresBackupKey": null,
+        "previewFailed": 0,
+        "previewPending": 0,
+        "previewRunning": 0,
+        "processingFailed": 0,
+        "processingPending": 0,
+        "processingRunning": 0,
+        "status": "ok",
+        "uploadBatchesQueued": 2,
+        "uploadWorkers": 4,
+        "uploadsActive": 0,
+        "uploadsWaiting": 0
+      },
+      "method": "GET",
+      "path": "/health",
+      "status": 200
+    }
+  ],
+  "description": "phase2: five pinned batches (A complete with a sidecar, B failed then retried to queued, C discarded, D content-length mismatch then discarded, E sealed) exercising every upload lifecycle state and error shape, then GET /upload-batches (created_at-ordered, limit=1 and full), GET /upload-queue (13 counts plus gate statistics), and GET /health (ok, library id, asset/blob counts, every queue count, gate statistics, null backup marker); onboarding terminal states seeded in SQL, created_at/sealed_at pinned by hooks, the catalog clock pinned for the session (sealedAt in the seal 202 bodies), no workers started",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase2"
+}

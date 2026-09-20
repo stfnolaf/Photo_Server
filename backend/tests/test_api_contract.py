@@ -51,15 +51,39 @@ function that feeds its own request list to :func:`run_sequence`. Previously
 recorded sections are never edited in place; if a later phase intentionally
 changes a wire format it re-records that section as a *new file* (e.g.
 ``seed_v2.json``) so the old bytes stay reviewable in git history.
+
+Sections whose scenario drives state changes through the API (phase 2's
+upload lifecycle) may also use two extensions of :func:`run_sequence`:
+
+- A request case can be a dict with ``method``, ``path``, and optional
+  ``body`` (bytes) and ``headers``, so POST/PUT requests with request bodies
+  are expressible. The recorded fixture still captures only the response
+  ``(method, path, status, body)`` — the request bytes live in the test
+  scenario code, not the fixture.
+- A :class:`Hook` is a labelled between-request step (a SQL pin or seed)
+  that runs inside the client session but records nothing. Phase 2 uses
+  hooks to pin the wall-clock ``created_at``/``sealed_at`` stamps written by
+  the endpoints and to move onboarding jobs to terminal states directly in
+  SQL, so the recorded bytes are deterministic and no worker (let alone the
+  AI worker service) is ever started.
+- :func:`run_sequence` accepts an optional ``clock`` epoch: when set, the
+  ``time`` function imported by the catalog and uploads modules is pinned to
+  that epoch for the whole client session, so wall-clock fields that an
+  endpoint writes *and echoes into its own recorded response* (``sealedAt``
+  in the 202 seal body) are deterministic without touching the real clock
+  (S3 signing, psycopg, and the process keep the real time).
 """
 
+import contextlib
 import difflib
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 
 import psycopg
@@ -78,7 +102,10 @@ from photo_server.catalog import (
     burst_members,
     faces,
     jobs,
+    onboarding_jobs,
     people,
+    upload_batches,
+    upload_files,
 )
 from photo_server.config import Settings
 from photo_server.models import Blob, Manifest, Mutation
@@ -107,6 +134,16 @@ class Backend:
     service: Service
     fresh_catalog: object
     root: Path
+
+
+@dataclass
+class Hook:
+    """A between-request step inside :func:`run_sequence`: the ``action``
+    (typically SQL pinning or seeding) runs during the client session, in
+    sequence with the request cases, but records nothing."""
+
+    label: str
+    action: Callable[[], None]
 
 
 @pytest.fixture
@@ -244,8 +281,8 @@ def normalize(value):
     return value
 
 
-def capture(client, method, path) -> dict:
-    response = client.request(method, path)
+def capture(client, method, path, *, body=None, headers=None) -> dict:
+    response = client.request(method, path, content=body, headers=headers)
     return {
         "method": method.upper(),
         "path": path,
@@ -254,14 +291,54 @@ def capture(client, method, path) -> dict:
     }
 
 
-def run_sequence(backend: Backend, section: str, cases: list[tuple[str, str]], *, describe: str):
+def _case_request(case) -> tuple[str, str, bytes | None, dict | None]:
+    """Unpack a request case: a ``(method, path)`` pair or a dict with
+    ``method``/``path`` plus optional ``body`` (bytes) and ``headers``."""
+    if isinstance(case, dict):
+        return case["method"], case["path"], case.get("body"), case.get("headers")
+    method, path = case
+    return method, path, None, None
+
+
+def run_sequence(
+    backend: Backend,
+    section: str,
+    cases: list[tuple[str, str] | dict | Hook],
+    *,
+    describe: str,
+    clock: int | None = None,
+):
     """Record the section's fixture on first run, verify it on every run after.
 
-    ``cases`` is the fixed request list as ``(method, path)`` pairs, executed
-    against a fresh ``TestClient`` of the backend's app in the given order.
+    ``cases`` is executed against a fresh ``TestClient`` of the backend's app
+    in the given order. Each entry is a request case (a ``(method, path)``
+    pair or a dict with ``method``/``path`` plus optional ``body``/``headers``)
+    or a :class:`Hook` (a between-request step that records nothing). Only
+    request cases are recorded in the fixture.
+
+    If ``clock`` is given, the ``time`` function imported by the catalog and
+    uploads modules is pinned to that epoch for the whole client session, so
+    wall-clock fields the endpoints write and echo into recorded bodies
+    (notably ``sealedAt`` in the 202 seal response) are deterministic across
+    runs. The real clock is used everywhere else: S3 request signing,
+    psycopg, and the process itself.
     """
-    with TestClient(create_app(backend.service.settings)) as client:
-        recorded = [capture(client, method, path) for method, path in cases]
+    stack = contextlib.ExitStack()
+    if clock is not None:
+
+        def pinned() -> float:
+            return float(clock)
+
+        stack.enter_context(mock.patch("photo_server.catalog.time", new=pinned))
+        stack.enter_context(mock.patch("photo_server.uploads.time", new=pinned))
+    with stack, TestClient(create_app(backend.service.settings)) as client:
+        recorded = []
+        for case in cases:
+            if isinstance(case, Hook):
+                case.action()
+                continue
+            method, path, body, headers = _case_request(case)
+            recorded.append(capture(client, method, path, body=body, headers=headers))
     fixture = FIXTURES / f"{section}.json"
     payload = {
         "schemaVersion": 1,
@@ -788,5 +865,309 @@ def test_phase_1b(backend):
             "no match, limit/offset paging), a person detail for every "
             "person (including empty face arrays) plus limit/offset paging "
             "on Avery's faces, and a 404 unknown person"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: upload and health endpoints.
+#
+# All five batches use client-chosen batch ids (UploadBatchRequest accepts
+# batchId), so every identity in the section is uuid5-derived and the
+# recorded bytes are reproducible on a fresh backend. created_at/sealed_at
+# are wall-clock writes of the endpoints and are pinned in SQL by hooks
+# immediately after each write; onboarding jobs move to their terminal
+# states by direct SQL seeding (the worker — let alone the AI worker
+# service — is never started), mirroring what finish_onboarding_job()
+# would write.
+# ---------------------------------------------------------------------------
+
+GOLDEN_BATCH_A = uuid5(GOLDEN_NAMESPACE, "phase2-batch-a")
+GOLDEN_BATCH_B = uuid5(GOLDEN_NAMESPACE, "phase2-batch-b")
+GOLDEN_BATCH_C = uuid5(GOLDEN_NAMESPACE, "phase2-batch-c")
+GOLDEN_BATCH_D = uuid5(GOLDEN_NAMESPACE, "phase2-batch-d")
+GOLDEN_BATCH_E = uuid5(GOLDEN_NAMESPACE, "phase2-batch-e")
+UNKNOWN_BATCH_ID = UUID("44444444-4444-4444-8444-444444444444")
+UNKNOWN_FILE_ID = UUID("55555555-5555-4555-8555-555555555555")
+
+# Pinned epoch-second stamps (base 2025-01-01T00:00:00Z). created_at drives
+# GET /upload-batches ordering (created_at desc, id), so the pins also fix
+# the list order: B (…640) > E (…635) > D (…630) > C (…620) > A (…600).
+PINNED_CREATED_A = 1735689600
+PINNED_SEALED_A = 1735689610
+PINNED_CREATED_C = 1735689620
+PINNED_CREATED_D = 1735689630
+PINNED_CREATED_E = 1735689635
+PINNED_SEALED_E = 1735689655
+PINNED_CREATED_B = 1735689640
+PINNED_SEALED_B = 1735689650
+
+# The simulated onboarding failure recorded in batch B's job and file rows.
+PINNED_ONBOARDING_ERROR = "Simulated onboarding failure (golden)"
+
+
+def _upload_body(seed: str, size: int) -> bytes:
+    """Deterministic request body: ``seed`` repeated, truncated to ``size``
+    bytes, so every receipt sha256 is a pure function of (seed, size)."""
+    data = seed.encode("ascii")
+    return (data * (size // len(data) + 1))[:size]
+
+
+def _file_id(batch_id: UUID, path: str) -> UUID:
+    """uuid5 with the same derivation uploads.py _records() uses."""
+    return uuid5(batch_id, f"file:{path}")
+
+
+def _job_id(batch_id: UUID, path: str) -> UUID:
+    """uuid5 with the same derivation catalog.seal_upload_batch() uses."""
+    return uuid5(batch_id, f"onboard:{path}")
+
+
+def _onboard_asset_id(service, job: UUID) -> UUID:
+    """uuid5 with the same derivation uploads.py _commit_staged() uses."""
+    return uuid5(service.library_id, f"upload:{job}")
+
+
+def _pin_batch(
+    service, batch_id: UUID, *, created_at: int | None = None, sealed_at: int | None = None
+) -> None:
+    values = {}
+    if created_at is not None:
+        values["created_at"] = created_at
+    if sealed_at is not None:
+        values["sealed_at"] = sealed_at
+    with service.catalog.engine.begin() as connection:
+        connection.execute(
+            upload_batches.update().where(upload_batches.c.id == str(batch_id)).values(**values)
+        )
+
+
+def _set_batch_status(service, batch_id: UUID, status: str) -> None:
+    with service.catalog.engine.begin() as connection:
+        connection.execute(
+            upload_batches.update().where(upload_batches.c.id == str(batch_id)).values(status=status)
+        )
+
+
+def _complete_onboarding_job(service, batch_id: UUID, primary: str, sidecars: list[str]) -> None:
+    """Move one onboarding job to the same terminal state the worker's
+    finish_onboarding_job() would write: job complete with its result blob
+    and attempts counted, the primary and sidecar files imported with the
+    shared asset id."""
+    job = _job_id(batch_id, primary)
+    asset_id = _onboard_asset_id(service, job)
+    file_ids = [_file_id(batch_id, primary)] + [_file_id(batch_id, path) for path in sidecars]
+    with service.catalog.engine.begin() as connection:
+        connection.execute(
+            onboarding_jobs.update()
+            .where(onboarding_jobs.c.id == str(job))
+            .values(
+                status="complete",
+                attempts=1,
+                lease_until=None,
+                result={"assetId": str(asset_id), "replayed": False, "status": "imported"},
+                error=None,
+            )
+        )
+        connection.execute(
+            upload_files.update()
+            .where(upload_files.c.id.in_([str(file) for file in file_ids]))
+            .values(status="imported", asset_id=str(asset_id), error=None)
+        )
+
+
+def _fail_onboarding_jobs(service, batch_id: UUID, paths: list[str]) -> None:
+    """Fail a sealed batch's onboarding jobs as finish_onboarding_job(error)
+    would: jobs failed (attempts counted, error set), their files failed,
+    and the batch status refreshed to failed."""
+    with service.catalog.engine.begin() as connection:
+        for path in paths:
+            connection.execute(
+                onboarding_jobs.update()
+                .where(onboarding_jobs.c.id == str(_job_id(batch_id, path)))
+                .values(status="failed", attempts=1, lease_until=None, error=PINNED_ONBOARDING_ERROR)
+            )
+            connection.execute(
+                upload_files.update()
+                .where(upload_files.c.id == str(_file_id(batch_id, path)))
+                .values(status="failed", error=PINNED_ONBOARDING_ERROR)
+            )
+        connection.execute(
+            upload_batches.update()
+            .where(upload_batches.c.id == str(batch_id))
+            .values(status="failed")
+        )
+
+
+def _post_batch(batch_id: UUID, files: list[dict]) -> dict:
+    return {
+        "method": "POST",
+        "path": "/upload-batches",
+        "body": json.dumps({"batchId": str(batch_id), "files": files}).encode("utf-8"),
+        "headers": {"Content-Type": "application/json"},
+    }
+
+
+def _put_file(batch_id: UUID, path: str, size: int) -> dict:
+    return {
+        "method": "PUT",
+        "path": f"/upload-batches/{batch_id}/files/{_file_id(batch_id, path)}",
+        "body": _upload_body(path, size),
+    }
+
+
+def phase_2_cases(service) -> list:
+    """The phase 2 request list: five pinned batches walking every upload
+    lifecycle and error shape, then the list/limit, queue, and health reads.
+    Hooks (recorded nothing) pin wall-clock stamps and seed onboarding
+    terminal states between the requests."""
+    a, b, c, d, e = GOLDEN_BATCH_A, GOLDEN_BATCH_B, GOLDEN_BATCH_C, GOLDEN_BATCH_D, GOLDEN_BATCH_E
+    files_a = [
+        {"path": "a/one.jpg", "sizeBytes": 100, "mimeType": "image/jpeg"},
+        {"path": "a/one.xmp", "sizeBytes": 40, "mimeType": "application/rdf+xml"},
+        {"path": "a/two.jpg", "sizeBytes": 100, "mimeType": "image/jpeg"},
+        {"path": "a/three.jpg", "sizeBytes": 80, "mimeType": "image/jpeg"},
+        {"path": "a/three.arw", "sizeBytes": 200, "mimeType": "image/x-raw-adorne"},
+    ]
+    files_b = [
+        {"path": "b/one.jpg", "sizeBytes": 100, "mimeType": "image/jpeg"},
+        {"path": "b/two.jpg", "sizeBytes": 100, "mimeType": "image/jpeg"},
+    ]
+    cases = []
+
+    # A: the full lifecycle — create (two assets, one attached sidecar, one
+    # raw-preferred skip) -> four uploads -> replayed PUT -> skipped-file
+    # 409 -> seal -> seeded onboarding completion -> complete.
+    cases.append(_post_batch(a, files_a))
+    cases.append(Hook("pin batch A created_at", lambda: _pin_batch(service, a, created_at=PINNED_CREATED_A)))
+    cases.append(("GET", f"/upload-batches/{a}"))
+    cases.append(("GET", "/upload-batches?limit=100"))
+    cases.append(_put_file(a, "a/one.jpg", 100))
+    cases.append(_put_file(a, "a/one.xmp", 40))
+    cases.append(_put_file(a, "a/two.jpg", 100))
+    cases.append(_put_file(a, "a/three.arw", 200))
+    cases.append(_put_file(a, "a/one.jpg", 100))  # replay: same body, replayed=true
+    cases.append(_put_file(a, "a/three.jpg", 80))  # skipped file: 409 selection rules
+    cases.append(("POST", f"/upload-batches/{a}/seal"))
+    cases.append(
+        Hook(
+            "seed batch A onboarding completion",
+            lambda: (
+                _pin_batch(service, a, sealed_at=PINNED_SEALED_A),
+                _complete_onboarding_job(service, a, "a/one.jpg", ["a/one.xmp"]),
+                _complete_onboarding_job(service, a, "a/two.jpg", []),
+                _complete_onboarding_job(service, a, "a/three.arw", []),
+                _set_batch_status(service, a, "complete"),
+            ),
+        )
+    )
+    cases.append(("GET", f"/upload-batches/{a}"))
+
+    # B: fail and retry — sealed, onboarding seeded to failed, POST retry
+    # moves the jobs back to pending (attempts preserved) and the batch to
+    # queued.
+    cases.append(_post_batch(b, files_b))
+    cases.append(Hook("pin batch B created_at", lambda: _pin_batch(service, b, created_at=PINNED_CREATED_B)))
+    cases.append(_put_file(b, "b/one.jpg", 100))
+    cases.append(_put_file(b, "b/two.jpg", 100))
+    cases.append(("POST", f"/upload-batches/{b}/seal"))
+    cases.append(
+        Hook(
+            "seed batch B onboarding failure",
+            lambda: (
+                _pin_batch(service, b, sealed_at=PINNED_SEALED_B),
+                _fail_onboarding_jobs(service, b, ["b/one.jpg", "b/two.jpg"]),
+            ),
+        )
+    )
+    cases.append(("GET", f"/upload-batches/{b}"))
+    cases.append(("POST", f"/upload-batches/{b}/retry"))
+    cases.append(("GET", f"/upload-batches/{b}"))
+
+    # C: create -> upload -> discard (BatchAbandonedOut) -> GET after
+    # deletion: 409 "Upload batch not found" (the LibraryError contract).
+    cases.append(_post_batch(c, [{"path": "c/one.jpg", "sizeBytes": 100, "mimeType": "image/jpeg"}]))
+    cases.append(Hook("pin batch C created_at", lambda: _pin_batch(service, c, created_at=PINNED_CREATED_C)))
+    cases.append(_put_file(c, "c/one.jpg", 100))
+    cases.append(("DELETE", f"/upload-batches/{c}"))
+    cases.append(("GET", f"/upload-batches/{c}"))
+
+    # D: content-length mismatch (declared 50, sent 100 -> 409, file row
+    # reset to waiting with the declaration error) -> seal 409 (required
+    # file missing) -> discard.
+    cases.append(_post_batch(d, [{"path": "d/one.jpg", "sizeBytes": 50, "mimeType": "image/jpeg"}]))
+    cases.append(Hook("pin batch D created_at", lambda: _pin_batch(service, d, created_at=PINNED_CREATED_D)))
+    cases.append(_put_file(d, "d/one.jpg", 100))
+    cases.append(("GET", f"/upload-batches/{d}"))
+    cases.append(("POST", f"/upload-batches/{d}/seal"))
+    cases.append(("DELETE", f"/upload-batches/{d}"))
+
+    # E: sealed batch — DELETE 409 (sealed batches cannot be discarded),
+    # retry 409 (no failed jobs), PUT 409 (already sealed).
+    cases.append(_post_batch(e, [{"path": "e/one.jpg", "sizeBytes": 100, "mimeType": "image/jpeg"}]))
+    cases.append(Hook("pin batch E created_at", lambda: _pin_batch(service, e, created_at=PINNED_CREATED_E)))
+    cases.append(_put_file(e, "e/one.jpg", 100))
+    cases.append(("POST", f"/upload-batches/{e}/seal"))
+    cases.append(Hook("pin batch E sealed_at", lambda: _pin_batch(service, e, sealed_at=PINNED_SEALED_E)))
+    cases.append(("DELETE", f"/upload-batches/{e}"))
+    cases.append(("POST", f"/upload-batches/{e}/retry"))
+    cases.append(_put_file(e, "e/one.jpg", 100))
+
+    # Misc: unknown file of a batch, unknown batch, empty declaration (422),
+    # list/limit ordering, the queue, and health.
+    cases.append(
+        {"method": "PUT", "path": f"/upload-batches/{a}/files/{UNKNOWN_FILE_ID}", "body": _upload_body("x", 50)}
+    )
+    cases.append(("GET", f"/upload-batches/{UNKNOWN_BATCH_ID}"))
+    cases.append(
+        {
+            "method": "POST",
+            "path": "/upload-batches",
+            "body": json.dumps({"files": []}).encode("utf-8"),
+            "headers": {"Content-Type": "application/json"},
+        }
+    )
+    cases.append(("GET", "/upload-batches?limit=1"))
+    cases.append(("GET", "/upload-batches"))
+    cases.append(("GET", "/upload-queue"))
+    cases.append(("GET", "/health"))
+    return cases
+
+
+def test_phase_2(backend):
+    """Phase 2: the upload lifecycle and the health endpoint typed with
+    response_model; every endpoint is rewired but no bytes on the wire
+    change.
+
+    Five client-named batches: A walks the full lifecycle (five declared
+    files — two assets, one attached sidecar, one raw-preferred skip;
+    create -> four uploads -> replayed PUT -> skipped-file 409 -> seal ->
+    seeded onboarding completion -> complete), B walks failure and retry
+    (sealed, onboarding seeded failed, POST retry -> queued with attempts
+    preserved), C is discarded after one upload (then 409 on GET), D hits
+    the content-length mismatch and the missing-file seal 409 (then
+    discarded), and E is sealed (DELETE 409, retry 409, PUT 409). Plus a
+    409 unknown batch, a 409 unknown file, a 422 empty declaration, the
+    created_at-ordered list with limit, /upload-queue, and /health. The AI
+    worker service is never started; all onboarding terminal states are
+    seeded in SQL and every wall-clock stamp is pinned by a hook.
+    """
+    run_sequence(
+        backend,
+        "phase2",
+        phase_2_cases(backend.service),
+        clock=PINNED_SEALED_A,
+        describe=(
+            "phase2: five pinned batches (A complete with a sidecar, B "
+            "failed then retried to queued, C discarded, D content-length "
+            "mismatch then discarded, E sealed) exercising every upload "
+            "lifecycle state and error shape, then GET /upload-batches "
+            "(created_at-ordered, limit=1 and full), GET /upload-queue "
+            "(13 counts plus gate statistics), and GET /health (ok, library "
+            "id, asset/blob counts, every queue count, gate statistics, null "
+            "backup marker); onboarding terminal states seeded in SQL, "
+            "created_at/sealed_at pinned by hooks, the catalog clock pinned "
+            "for the session (sealedAt in the seal 202 bodies), no workers "
+            "started"
         ),
     )

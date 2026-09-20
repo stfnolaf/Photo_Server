@@ -21,10 +21,15 @@ from pydantic.alias_generators import to_camel
 from photo_server.api_schemas import (
     AssetDetailOut,
     AssetDocOut,
+    BatchAbandonedOut,
     BrowsePageOut,
     BurstDetailOut,
+    HealthOut,
     PeoplePageOut,
     PersonDetailOut,
+    UploadBatchOut,
+    UploadFileReceipt,
+    UploadQueueStatusOut,
 )
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
@@ -170,7 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def root():
         return RedirectResponse("/docs")
 
-    @app.get("/health")
+    @app.get("/health", response_model=HealthOut)
     def health():
         service.storage.client.head_bucket(Bucket=service.storage.bucket)
         return {
@@ -182,7 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             **service.backup_status(),
         }
 
-    @app.post("/upload-batches", status_code=201)
+    @app.post("/upload-batches", status_code=201, response_model=UploadBatchOut)
     def start_upload_batch(body: UploadBatchRequest):
         return create_batch(
             service,
@@ -190,19 +195,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             body.batch_id,
         )
 
-    @app.get("/upload-batches")
+    @app.get("/upload-batches", response_model=list[UploadBatchOut])
     def get_active_upload_batches(limit: int = Query(default=100, ge=1, le=1000)):
         return list_active_batches(service, limit)
 
-    @app.get("/upload-batches/{batch_id}")
+    @app.get("/upload-batches/{batch_id}", response_model=UploadBatchOut)
     def get_upload_batch(batch_id: UUID):
         return describe_batch(service, batch_id)
 
-    @app.delete("/upload-batches/{batch_id}")
+    @app.delete("/upload-batches/{batch_id}", response_model=BatchAbandonedOut)
     def discard_upload_batch(batch_id: UUID):
         return abandon_batch(service, batch_id)
 
-    @app.put("/upload-batches/{batch_id}/files/{file_id}")
+    @app.put("/upload-batches/{batch_id}/files/{file_id}", response_model=UploadFileReceipt)
     async def upload_file(batch_id: UUID, file_id: UUID, request: Request):
         header = request.headers.get("content-length")
         try:
@@ -218,16 +223,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content_length,
         )
 
-    @app.post("/upload-batches/{batch_id}/seal", status_code=202)
+    @app.post("/upload-batches/{batch_id}/seal", status_code=202, response_model=UploadBatchOut)
     def finish_upload_batch(batch_id: UUID):
         return seal_batch(service, batch_id)
 
-    @app.post("/upload-batches/{batch_id}/retry", status_code=202)
+    @app.post("/upload-batches/{batch_id}/retry", status_code=202, response_model=UploadBatchOut)
     def retry_upload_batch(batch_id: UUID):
         service.catalog.retry_upload_batch(batch_id)
         return describe_batch(service, batch_id)
 
-    @app.get("/upload-queue")
+    @app.get("/upload-queue", response_model=UploadQueueStatusOut)
     def upload_queue():
         return {**service.catalog.queue_counts(), **upload_gate.status()}
 

@@ -817,6 +817,38 @@
         "title": "AssetDocV2Out",
         "type": "object"
       },
+      "BatchAbandonedOut": {
+        "additionalProperties": false,
+        "description": "DELETE /upload-batches/{id}: the unsealed batch and its staged objects\nare gone.",
+        "properties": {
+          "batchId": {
+            "format": "uuid",
+            "title": "Batchid",
+            "type": "string"
+          },
+          "filesDeleted": {
+            "title": "Filesdeleted",
+            "type": "integer"
+          },
+          "multipartUploadsAborted": {
+            "title": "Multipartuploadsaborted",
+            "type": "integer"
+          },
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batchId",
+          "status",
+          "filesDeleted",
+          "multipartUploadsAborted"
+        ],
+        "title": "BatchAbandonedOut",
+        "type": "object"
+      },
       "BlobOut": {
         "additionalProperties": false,
         "description": "One blob reference inside a manifest document (models.py Blob).",
@@ -1032,6 +1064,142 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthOut": {
+        "additionalProperties": false,
+        "description": "GET /health: the endpoint's merged shape \u2014 fixed \"ok\", the library id,\nasset/blob counts, every queue count, the upload-gate statistics, and the\nlatest PostgreSQL backup marker in the media bucket (null until the first\nbackup).",
+        "properties": {
+          "analysisFailed": {
+            "title": "Analysisfailed",
+            "type": "integer"
+          },
+          "analysisPending": {
+            "title": "Analysispending",
+            "type": "integer"
+          },
+          "analysisRunning": {
+            "title": "Analysisrunning",
+            "type": "integer"
+          },
+          "assets": {
+            "title": "Assets",
+            "type": "integer"
+          },
+          "blobs": {
+            "title": "Blobs",
+            "type": "integer"
+          },
+          "libraryId": {
+            "format": "uuid",
+            "title": "Libraryid",
+            "type": "string"
+          },
+          "onboardingFailed": {
+            "title": "Onboardingfailed",
+            "type": "integer"
+          },
+          "onboardingPending": {
+            "title": "Onboardingpending",
+            "type": "integer"
+          },
+          "onboardingRunning": {
+            "title": "Onboardingrunning",
+            "type": "integer"
+          },
+          "postgresBackupAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postgresbackupat"
+          },
+          "postgresBackupKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postgresbackupkey"
+          },
+          "previewFailed": {
+            "title": "Previewfailed",
+            "type": "integer"
+          },
+          "previewPending": {
+            "title": "Previewpending",
+            "type": "integer"
+          },
+          "previewRunning": {
+            "title": "Previewrunning",
+            "type": "integer"
+          },
+          "processingFailed": {
+            "title": "Processingfailed",
+            "type": "integer"
+          },
+          "processingPending": {
+            "title": "Processingpending",
+            "type": "integer"
+          },
+          "processingRunning": {
+            "title": "Processingrunning",
+            "type": "integer"
+          },
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "uploadBatchesQueued": {
+            "title": "Uploadbatchesqueued",
+            "type": "integer"
+          },
+          "uploadWorkers": {
+            "title": "Uploadworkers",
+            "type": "integer"
+          },
+          "uploadsActive": {
+            "title": "Uploadsactive",
+            "type": "integer"
+          },
+          "uploadsWaiting": {
+            "title": "Uploadswaiting",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uploadBatchesQueued",
+          "onboardingPending",
+          "onboardingRunning",
+          "onboardingFailed",
+          "processingPending",
+          "processingRunning",
+          "processingFailed",
+          "previewPending",
+          "previewRunning",
+          "previewFailed",
+          "analysisPending",
+          "analysisRunning",
+          "analysisFailed",
+          "status",
+          "libraryId",
+          "assets",
+          "blobs",
+          "uploadWorkers",
+          "uploadsActive",
+          "uploadsWaiting",
+          "postgresBackupKey",
+          "postgresBackupAt"
+        ],
+        "title": "HealthOut",
         "type": "object"
       },
       "Location": {
@@ -1686,6 +1854,68 @@
         "title": "ProcessingStatusOut",
         "type": "object"
       },
+      "UploadBatchOut": {
+        "additionalProperties": false,
+        "description": "describe_batch(): the batch header (epoch-second createdAt, nullable\nsealedAt) plus its file and onboarding-job rows.",
+        "properties": {
+          "batchId": {
+            "format": "uuid",
+            "title": "Batchid",
+            "type": "string"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/UploadFileOut"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/UploadJobOut"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "sealedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sealedat"
+          },
+          "status": {
+            "enum": [
+              "accepting",
+              "queued",
+              "processing",
+              "complete",
+              "failed",
+              "deleting"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batchId",
+          "status",
+          "createdAt",
+          "sealedAt",
+          "files",
+          "jobs"
+        ],
+        "title": "UploadBatchOut",
+        "type": "object"
+      },
       "UploadBatchRequest": {
         "properties": {
           "batchId": {
@@ -1747,6 +1977,294 @@
           "sizeBytes"
         ],
         "title": "UploadFileDeclaration",
+        "type": "object"
+      },
+      "UploadFileOut": {
+        "additionalProperties": false,
+        "description": "One file row of describe_batch(): the declared path/size/mime, the\nlifecycle state, the asset it became (null until onboarding completes),\nand the PUT URL (required files only).",
+        "properties": {
+          "assetId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assetid"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "fileId": {
+            "format": "uuid",
+            "title": "Fileid",
+            "type": "string"
+          },
+          "mimeType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mimetype"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "sizeBytes": {
+            "title": "Sizebytes",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "waiting",
+              "uploading",
+              "uploaded",
+              "skipped",
+              "queued",
+              "processing",
+              "imported",
+              "duplicate",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "uploadUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploadurl"
+          }
+        },
+        "required": [
+          "fileId",
+          "path",
+          "sizeBytes",
+          "mimeType",
+          "required",
+          "status",
+          "reason",
+          "assetId",
+          "error",
+          "uploadUrl"
+        ],
+        "title": "UploadFileOut",
+        "type": "object"
+      },
+      "UploadFileReceipt": {
+        "additionalProperties": false,
+        "description": "PUT /upload-batches/{id}/files/{fileId}: one of the three\nreceive_file() returns (fresh upload, re-upload of an equal digest, or a\nfull replay); all report status \"uploaded\".",
+        "properties": {
+          "fileId": {
+            "format": "uuid",
+            "title": "Fileid",
+            "type": "string"
+          },
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "status": {
+            "const": "uploaded",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileId",
+          "status",
+          "sha256",
+          "replayed"
+        ],
+        "title": "UploadFileReceipt",
+        "type": "object"
+      },
+      "UploadJobOut": {
+        "additionalProperties": false,
+        "description": "One onboarding-job row of describe_batch(). The result is a free-form\nblob (plan decision 4): a dict once the job produces one, values\nunchecked.",
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "jobId": {
+            "format": "uuid",
+            "title": "Jobid",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "complete",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "status",
+          "attempts",
+          "result",
+          "error"
+        ],
+        "title": "UploadJobOut",
+        "type": "object"
+      },
+      "UploadQueueStatusOut": {
+        "additionalProperties": false,
+        "description": "GET /upload-queue: the queue counts plus the UploadGate's in-process\ntransfer statistics (workers, active, waiting).",
+        "properties": {
+          "analysisFailed": {
+            "title": "Analysisfailed",
+            "type": "integer"
+          },
+          "analysisPending": {
+            "title": "Analysispending",
+            "type": "integer"
+          },
+          "analysisRunning": {
+            "title": "Analysisrunning",
+            "type": "integer"
+          },
+          "onboardingFailed": {
+            "title": "Onboardingfailed",
+            "type": "integer"
+          },
+          "onboardingPending": {
+            "title": "Onboardingpending",
+            "type": "integer"
+          },
+          "onboardingRunning": {
+            "title": "Onboardingrunning",
+            "type": "integer"
+          },
+          "previewFailed": {
+            "title": "Previewfailed",
+            "type": "integer"
+          },
+          "previewPending": {
+            "title": "Previewpending",
+            "type": "integer"
+          },
+          "previewRunning": {
+            "title": "Previewrunning",
+            "type": "integer"
+          },
+          "processingFailed": {
+            "title": "Processingfailed",
+            "type": "integer"
+          },
+          "processingPending": {
+            "title": "Processingpending",
+            "type": "integer"
+          },
+          "processingRunning": {
+            "title": "Processingrunning",
+            "type": "integer"
+          },
+          "uploadBatchesQueued": {
+            "title": "Uploadbatchesqueued",
+            "type": "integer"
+          },
+          "uploadWorkers": {
+            "title": "Uploadworkers",
+            "type": "integer"
+          },
+          "uploadsActive": {
+            "title": "Uploadsactive",
+            "type": "integer"
+          },
+          "uploadsWaiting": {
+            "title": "Uploadswaiting",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uploadBatchesQueued",
+          "onboardingPending",
+          "onboardingRunning",
+          "onboardingFailed",
+          "processingPending",
+          "processingRunning",
+          "processingFailed",
+          "previewPending",
+          "previewRunning",
+          "previewFailed",
+          "analysisPending",
+          "analysisRunning",
+          "analysisFailed",
+          "uploadWorkers",
+          "uploadsActive",
+          "uploadsWaiting"
+        ],
+        "title": "UploadQueueStatusOut",
         "type": "object"
       },
       "UserStateOut": {
@@ -2903,7 +3421,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3423,7 +3943,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/UploadBatchOut"
+                  },
+                  "title": "Response Get Active Upload Batches Upload Batches Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3457,7 +3983,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UploadBatchOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3495,7 +4023,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BatchAbandonedOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3531,7 +4061,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UploadBatchOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3579,7 +4111,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UploadFileReceipt"
+                }
               }
             },
             "description": "Successful Response"
@@ -3617,7 +4151,9 @@
           "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UploadBatchOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3655,7 +4191,9 @@
           "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UploadBatchOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3681,7 +4219,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UploadQueueStatusOut"
+                }
               }
             },
             "description": "Successful Response"
