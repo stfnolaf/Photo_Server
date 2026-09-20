@@ -2846,7 +2846,7 @@
   "paths": {
     "/albums": {
       "get": {
-        "operationId": "list_albums_albums_get",
+        "operationId": "listAlbums",
         "parameters": [
           {
             "in": "query",
@@ -2867,7 +2867,7 @@
                   "items": {
                     "$ref": "#/components/schemas/AlbumOut"
                   },
-                  "title": "Response List Albums Albums Get",
+                  "title": "Response Listalbums",
                   "type": "array"
                 }
               }
@@ -2888,7 +2888,7 @@
         "summary": "List Albums"
       },
       "post": {
-        "operationId": "create_album_albums_post",
+        "operationId": "createAlbum",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2927,7 +2927,7 @@
     "/albums/{album_id}": {
       "delete": {
         "description": "DELETE with a JSON request body (the durable-mutation journal\nprotocol): the body carries the client-chosen ``operationId`` and\noptionally ``expectedRevision``. Generated clients must send it\nexplicitly; a bodyless DELETE is rejected as 422.",
-        "operationId": "trash_album_albums__album_id__delete",
+        "operationId": "trashAlbum",
         "parameters": [
           {
             "in": "path",
@@ -2975,7 +2975,7 @@
         "summary": "Trash Album"
       },
       "get": {
-        "operationId": "get_album_albums__album_id__get",
+        "operationId": "getAlbum",
         "parameters": [
           {
             "in": "path",
@@ -3013,7 +3013,7 @@
         "summary": "Get Album"
       },
       "patch": {
-        "operationId": "update_album_albums__album_id__patch",
+        "operationId": "updateAlbum",
         "parameters": [
           {
             "in": "path",
@@ -3063,7 +3063,7 @@
     },
     "/albums/{album_id}/restore": {
       "post": {
-        "operationId": "restore_album_albums__album_id__restore_post",
+        "operationId": "restoreAlbum",
         "parameters": [
           {
             "in": "path",
@@ -3113,7 +3113,7 @@
     },
     "/analysis": {
       "post": {
-        "operationId": "queue_analysis_analysis_post",
+        "operationId": "queueAnalysis",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3151,7 +3151,7 @@
     },
     "/assets": {
       "get": {
-        "operationId": "list_assets_assets_get",
+        "operationId": "listAssets",
         "parameters": [
           {
             "in": "query",
@@ -3199,7 +3199,7 @@
                       }
                     ]
                   },
-                  "title": "Response List Assets Assets Get",
+                  "title": "Response Listassets",
                   "type": "array"
                 }
               }
@@ -3222,7 +3222,7 @@
     },
     "/assets/{asset_id}": {
       "delete": {
-        "operationId": "trash_asset_assets__asset_id__delete",
+        "operationId": "trashAsset",
         "parameters": [
           {
             "in": "path",
@@ -3270,7 +3270,7 @@
         "summary": "Trash Asset"
       },
       "get": {
-        "operationId": "get_asset_assets__asset_id__get",
+        "operationId": "getAssetDetail",
         "parameters": [
           {
             "in": "path",
@@ -3303,7 +3303,7 @@
                       "$ref": "#/components/schemas/AssetDetailV2Out"
                     }
                   ],
-                  "title": "Response Get Asset Assets  Asset Id  Get"
+                  "title": "Response Getassetdetail"
                 }
               }
             },
@@ -3325,7 +3325,7 @@
     },
     "/assets/{asset_id}/analysis/retry": {
       "post": {
-        "operationId": "retry_analysis_assets__asset_id__analysis_retry_post",
+        "operationId": "retryAnalysis",
         "parameters": [
           {
             "in": "path",
@@ -3375,7 +3375,7 @@
     },
     "/assets/{asset_id}/burst": {
       "get": {
-        "operationId": "get_asset_burst_assets__asset_id__burst_get",
+        "operationId": "getBurst",
         "parameters": [
           {
             "in": "path",
@@ -3415,7 +3415,7 @@
     },
     "/assets/{asset_id}/burst/representative": {
       "post": {
-        "operationId": "set_burst_representative_assets__asset_id__burst_representative_post",
+        "operationId": "setBurstRepresentative",
         "parameters": [
           {
             "in": "path",
@@ -3465,7 +3465,7 @@
     },
     "/assets/{asset_id}/metadata": {
       "patch": {
-        "operationId": "update_user_state_assets__asset_id__metadata_patch",
+        "operationId": "patchAssetMetadata",
         "parameters": [
           {
             "in": "path",
@@ -3515,7 +3515,7 @@
     },
     "/assets/{asset_id}/original": {
       "get": {
-        "operationId": "original_assets__asset_id__original_get",
+        "operationId": "downloadOriginal",
         "parameters": [
           {
             "in": "path",
@@ -3570,7 +3570,7 @@
     },
     "/assets/{asset_id}/preview": {
       "get": {
-        "operationId": "preview_assets__asset_id__preview_get",
+        "operationId": "getAssetPreview",
         "parameters": [
           {
             "in": "path",
@@ -3637,7 +3637,7 @@
     },
     "/assets/{asset_id}/preview/retry": {
       "post": {
-        "operationId": "retry_preview_assets__asset_id__preview_retry_post",
+        "operationId": "retryPreview",
         "parameters": [
           {
             "in": "path",
@@ -3677,7 +3677,7 @@
     },
     "/assets/{asset_id}/restore": {
       "post": {
-        "operationId": "restore_asset_assets__asset_id__restore_post",
+        "operationId": "restoreAsset",
         "parameters": [
           {
             "in": "path",
@@ -3727,7 +3727,7 @@
     },
     "/assets/{asset_id}/thumbnail": {
       "get": {
-        "operationId": "thumbnail_assets__asset_id__thumbnail_get",
+        "operationId": "getAssetThumbnail",
         "parameters": [
           {
             "in": "path",
@@ -3794,7 +3794,7 @@
     },
     "/assets/{asset_id}/user-state": {
       "patch": {
-        "operationId": "update_user_state_assets__asset_id__user_state_patch",
+        "operationId": "patchAssetUserState",
         "parameters": [
           {
             "in": "path",
@@ -3844,7 +3844,7 @@
     },
     "/faces/move": {
       "post": {
-        "operationId": "move_faces_faces_move_post",
+        "operationId": "moveFaces",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3882,7 +3882,7 @@
     },
     "/faces/{face_id}/thumbnail": {
       "get": {
-        "operationId": "face_thumbnail_faces__face_id__thumbnail_get",
+        "operationId": "getFaceThumbnail",
         "parameters": [
           {
             "in": "path",
@@ -3949,7 +3949,7 @@
     },
     "/health": {
       "get": {
-        "operationId": "health_health_get",
+        "operationId": "getHealth",
         "responses": {
           "200": {
             "content": {
@@ -3967,7 +3967,7 @@
     },
     "/library/assets": {
       "get": {
-        "operationId": "browse_assets_library_assets_get",
+        "operationId": "browseAssets",
         "parameters": [
           {
             "in": "query",
@@ -4162,7 +4162,7 @@
     },
     "/maintenance/verify": {
       "post": {
-        "operationId": "verify_storage_maintenance_verify_post",
+        "operationId": "verifyStorage",
         "parameters": [
           {
             "in": "query",
@@ -4202,7 +4202,7 @@
     },
     "/people": {
       "get": {
-        "operationId": "list_people_people_get",
+        "operationId": "listPeople",
         "parameters": [
           {
             "in": "query",
@@ -4266,7 +4266,7 @@
     },
     "/people/{person_id}": {
       "get": {
-        "operationId": "get_person_people__person_id__get",
+        "operationId": "getPerson",
         "parameters": [
           {
             "in": "path",
@@ -4327,7 +4327,7 @@
         "summary": "Get Person"
       },
       "patch": {
-        "operationId": "rename_person_people__person_id__patch",
+        "operationId": "renamePerson",
         "parameters": [
           {
             "in": "path",
@@ -4377,7 +4377,7 @@
     },
     "/people/{person_id}/merge": {
       "post": {
-        "operationId": "merge_person_people__person_id__merge_post",
+        "operationId": "mergePerson",
         "parameters": [
           {
             "in": "path",
@@ -4427,7 +4427,7 @@
     },
     "/processing": {
       "post": {
-        "operationId": "queue_processing_processing_post",
+        "operationId": "queueProcessing",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4465,7 +4465,7 @@
     },
     "/upload-batches": {
       "get": {
-        "operationId": "get_active_upload_batches_upload_batches_get",
+        "operationId": "listUploadBatches",
         "parameters": [
           {
             "in": "query",
@@ -4488,7 +4488,7 @@
                   "items": {
                     "$ref": "#/components/schemas/UploadBatchOut"
                   },
-                  "title": "Response Get Active Upload Batches Upload Batches Get",
+                  "title": "Response Listuploadbatches",
                   "type": "array"
                 }
               }
@@ -4509,7 +4509,7 @@
         "summary": "Get Active Upload Batches"
       },
       "post": {
-        "operationId": "start_upload_batch_upload_batches_post",
+        "operationId": "createUploadBatch",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4547,7 +4547,7 @@
     },
     "/upload-batches/{batch_id}": {
       "delete": {
-        "operationId": "discard_upload_batch_upload_batches__batch_id__delete",
+        "operationId": "abandonUploadBatch",
         "parameters": [
           {
             "in": "path",
@@ -4585,7 +4585,7 @@
         "summary": "Discard Upload Batch"
       },
       "get": {
-        "operationId": "get_upload_batch_upload_batches__batch_id__get",
+        "operationId": "getUploadBatch",
         "parameters": [
           {
             "in": "path",
@@ -4625,7 +4625,7 @@
     },
     "/upload-batches/{batch_id}/files/{file_id}": {
       "put": {
-        "operationId": "upload_file_upload_batches__batch_id__files__file_id__put",
+        "operationId": "uploadFile",
         "parameters": [
           {
             "in": "path",
@@ -4675,7 +4675,7 @@
     },
     "/upload-batches/{batch_id}/retry": {
       "post": {
-        "operationId": "retry_upload_batch_upload_batches__batch_id__retry_post",
+        "operationId": "retryUploadBatch",
         "parameters": [
           {
             "in": "path",
@@ -4715,7 +4715,7 @@
     },
     "/upload-batches/{batch_id}/seal": {
       "post": {
-        "operationId": "finish_upload_batch_upload_batches__batch_id__seal_post",
+        "operationId": "sealUploadBatch",
         "parameters": [
           {
             "in": "path",
@@ -4755,7 +4755,7 @@
     },
     "/upload-queue": {
       "get": {
-        "operationId": "upload_queue_upload_queue_get",
+        "operationId": "getUploadQueue",
         "responses": {
           "200": {
             "content": {
