@@ -1,0 +1,442 @@
+{
+  "cases": [
+    {
+      "body": {
+        "assetId": "00000000-0000-0000-0000-00000000001f",
+        "caption": "Burst test frame",
+        "deletedAt": null,
+        "favorite": true,
+        "keywords": [
+          "burst",
+          "test"
+        ],
+        "location": {
+          "latitude": -33.8688,
+          "longitude": 151.2093,
+          "name": "Harbor"
+        },
+        "operationId": "fa088d7f-a3c9-51a2-a6cc-02702b60ce36",
+        "rating": 3,
+        "revision": 2
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/user-state",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Revision changed; reload before editing"
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/user-state",
+      "status": 409
+    },
+    {
+      "body": {
+        "assetId": "00000000-0000-0000-0000-00000000001f",
+        "caption": "Burst test frame",
+        "deletedAt": null,
+        "favorite": true,
+        "keywords": [
+          "burst",
+          "test"
+        ],
+        "location": {
+          "latitude": -33.8688,
+          "longitude": 151.2093,
+          "name": "Harbor"
+        },
+        "operationId": "fa088d7f-a3c9-51a2-a6cc-02702b60ce36",
+        "rating": 3,
+        "revision": 2
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/user-state",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Operation ID was reused with a different request"
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/user-state",
+      "status": 409
+    },
+    {
+      "body": {
+        "assetId": "00000000-0000-0000-0000-00000000001f",
+        "caption": "Burst test frame",
+        "deletedAt": "2025-04-01T00:00:00+00:00",
+        "favorite": true,
+        "keywords": [
+          "burst",
+          "test"
+        ],
+        "location": {
+          "latitude": -33.8688,
+          "longitude": 151.2093,
+          "name": "Harbor"
+        },
+        "operationId": "90ca9be6-37df-51bb-a317-0c7aa4d9c5d4",
+        "rating": 3,
+        "revision": 3
+      },
+      "method": "DELETE",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Unhide this item before editing"
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/user-state",
+      "status": 409
+    },
+    {
+      "body": {
+        "assetId": "00000000-0000-0000-0000-00000000001f",
+        "caption": "Burst test frame",
+        "deletedAt": null,
+        "favorite": true,
+        "keywords": [
+          "burst",
+          "test"
+        ],
+        "location": {
+          "latitude": -33.8688,
+          "longitude": 151.2093,
+          "name": "Harbor"
+        },
+        "operationId": "8aba7be8-823c-5a17-a745-f5466f0b0aa9",
+        "rating": 3,
+        "revision": 4
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/restore",
+      "status": 200
+    },
+    {
+      "body": {
+        "assetId": "00000000-0000-0000-0000-000000000020",
+        "caption": "",
+        "deletedAt": null,
+        "favorite": true,
+        "keywords": [],
+        "location": null,
+        "operationId": "f5f8b93e-ca3a-542b-8799-9febeec439dc",
+        "rating": 0,
+        "revision": 2
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-000000000020/metadata",
+      "status": 200
+    },
+    {
+      "body": {
+        "assetId": "00000000-0000-0000-0000-000000000020",
+        "caption": "",
+        "deletedAt": null,
+        "favorite": true,
+        "keywords": [],
+        "location": null,
+        "operationId": "f5f8b93e-ca3a-542b-8799-9febeec439dc",
+        "rating": 0,
+        "revision": 2
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-000000000020/metadata",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": {}
+            },
+            "input": {
+              "operationId": "2b11354d-f3cf-5106-8957-2a56373c1cd4"
+            },
+            "loc": [
+              "body"
+            ],
+            "msg": "Value error, Provide at least one metadata field",
+            "type": "value_error"
+          }
+        ]
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-000000000020/user-state",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "le": 5
+            },
+            "input": 9,
+            "loc": [
+              "body",
+              "rating"
+            ],
+            "msg": "Input should be less than or equal to 5",
+            "type": "less_than_equal"
+          }
+        ]
+      },
+      "method": "PATCH",
+      "path": "/assets/00000000-0000-0000-0000-000000000020/user-state",
+      "status": 422
+    },
+    {
+      "body": {
+        "burstId": "7e57fdb5-c8f0-55d7-997f-8fa1548f2e15",
+        "representativeAssetId": "00000000-0000-0000-0000-000000000021"
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-000000000021/burst/representative",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Asset is not in a burst"
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-000000000024/burst/representative",
+      "status": 409
+    },
+    {
+      "body": {
+        "assets": 3,
+        "jobTypes": [
+          "metadata-v1"
+        ],
+        "jobsAlreadyQueued": 0,
+        "jobsAlreadyRunning": 1,
+        "jobsQueued": 2
+      },
+      "method": "POST",
+      "path": "/processing",
+      "status": 202
+    },
+    {
+      "body": {
+        "assets": 1,
+        "jobTypes": [
+          "metadata-v1"
+        ],
+        "jobsAlreadyQueued": 1,
+        "jobsAlreadyRunning": 0,
+        "jobsQueued": 0
+      },
+      "method": "POST",
+      "path": "/processing",
+      "status": 202
+    },
+    {
+      "body": {
+        "assets": 6,
+        "jobTypes": [
+          "metadata-v1"
+        ],
+        "jobsAlreadyQueued": 2,
+        "jobsAlreadyRunning": 1,
+        "jobsQueued": 3
+      },
+      "method": "POST",
+      "path": "/processing",
+      "status": 202
+    },
+    {
+      "body": {
+        "assets": 3,
+        "jobTypes": [
+          "ai-v1"
+        ],
+        "jobsAlreadyQueued": 1,
+        "jobsAlreadyRunning": 0,
+        "jobsQueued": 2
+      },
+      "method": "POST",
+      "path": "/analysis",
+      "status": 202
+    },
+    {
+      "body": {
+        "assets": 6,
+        "jobTypes": [
+          "ai-v1"
+        ],
+        "jobsAlreadyQueued": 6,
+        "jobsAlreadyRunning": 0,
+        "jobsQueued": 0
+      },
+      "method": "POST",
+      "path": "/analysis",
+      "status": 202
+    },
+    {
+      "body": {
+        "assets": 1,
+        "jobTypes": [
+          "ai-v1"
+        ],
+        "jobsAlreadyQueued": 1,
+        "jobsAlreadyRunning": 0,
+        "jobsQueued": 0
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-000000000020/analysis/retry?forceFull=true",
+      "status": 202
+    },
+    {
+      "body": {
+        "assets": 1,
+        "jobTypes": [
+          "ai-v1"
+        ],
+        "jobsAlreadyQueued": 1,
+        "jobsAlreadyRunning": 0,
+        "jobsQueued": 0
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/analysis/retry",
+      "status": 202
+    },
+    {
+      "body": {
+        "error": null,
+        "status": "running"
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-00000000001f/preview/retry",
+      "status": 200
+    },
+    {
+      "body": {
+        "error": null,
+        "status": "pending"
+      },
+      "method": "POST",
+      "path": "/assets/00000000-0000-0000-0000-000000000020/preview/retry",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "PATCH",
+      "path": "/assets/22222222-2222-4222-8222-222222222222/user-state",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "DELETE",
+      "path": "/assets/22222222-2222-4222-8222-222222222222",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/assets/22222222-2222-4222-8222-222222222222/restore",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Asset not found"
+      },
+      "method": "POST",
+      "path": "/assets/22222222-2222-4222-8222-222222222222/burst/representative",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/processing",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/analysis",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Asset not found"
+      },
+      "method": "POST",
+      "path": "/assets/22222222-2222-4222-8222-222222222222/analysis/retry",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Asset not found"
+      },
+      "method": "POST",
+      "path": "/assets/22222222-2222-4222-8222-222222222222/preview/retry",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'metadata'"
+            },
+            "input": "bogus",
+            "loc": [
+              "body",
+              "stages",
+              0
+            ],
+            "msg": "Input should be 'metadata'",
+            "type": "literal_error"
+          }
+        ]
+      },
+      "method": "POST",
+      "path": "/processing",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "actual_length": 0,
+              "field_type": "List",
+              "min_length": 1
+            },
+            "input": [],
+            "loc": [
+              "body",
+              "assetIds"
+            ],
+            "msg": "List should have at least 1 item after validation, not 0",
+            "type": "too_short"
+          }
+        ]
+      },
+      "method": "POST",
+      "path": "/analysis",
+      "status": 422
+    }
+  ],
+  "description": "phase3b: asset mutations and queue operations on six pinned assets: 31 walks user-state patch (full state) -> stale-revision 409 -> idempotent replay -> operation-id reuse 409 -> delete (pinned wall-clock deletedAt) -> hidden-edit 409 -> restore; 32 patches through the /metadata route (favorite only) with an idempotent replay, plus 422s (no fields, out-of-range rating); burst frames 33-35 move the representative to 33 and asset 36 gets the not-in-a-burst 409; /processing and /analysis run targeted and library-wide over a mixed ready/running/missing/pending/failed job state, then /analysis/retry (forceFull and default) and /preview/retry on running and pending preview jobs; 404s for unknown assets on every endpoint (both detail shapes); 422s on a bogus processing stage and an empty analysis asset list; catalog datetime.now() pinned for the session; no workers started",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase3b"
+}

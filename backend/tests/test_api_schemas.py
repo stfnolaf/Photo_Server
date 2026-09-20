@@ -1,4 +1,4 @@
-"""Unit tests for the phase 1a-2 response models (no services required).
+"""Unit tests for the phase 1a-3b response models (no services required).
 
 Each model in ``photo_server.api_schemas`` is validated against real JSON
 captured in the golden fixtures (``tests/fixtures/api_golden/``) and must
@@ -32,10 +32,12 @@ from photo_server.api_schemas import (
     BlobOut,
     BrowsePageOut,
     BurstDetailOut,
+    BurstRepresentativeOut,
     FaceRefOut,
     HealthOut,
     LocationOut,
     MutationOut,
+    MutationResultOut,
     PeoplePageOut,
     PersonDetailOut,
     PersonSummaryOut,
@@ -43,6 +45,7 @@ from photo_server.api_schemas import (
     PreviewStatusOut,
     ProcessingStatusOut,
     QueueCountsOut,
+    QueueResultOut,
     UploadBatchOut,
     UploadFileOut,
     UploadFileReceipt,
@@ -57,6 +60,7 @@ PHASE1A = FIXTURES / "phase1a.json"
 PHASE1B = FIXTURES / "phase1b.json"
 PHASE2 = FIXTURES / "phase2.json"
 PHASE3A = FIXTURES / "phase3a.json"
+PHASE3B = FIXTURES / "phase3b.json"
 
 
 def normalize(value):
@@ -668,3 +672,183 @@ def test_album_model_rejects_forbidden_shapes():
         AlbumOut.model_validate({**create, "assetIds": ["not-a-uuid"]})
     with pytest.raises(ValidationError):
         AlbumOut.model_validate({**create, "mutation": {**create["mutation"], "action": "album.explode"}})
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b: asset mutation and queue models (the nine mutation/queue
+# endpoints: user-state/metadata patch, delete, restore, burst
+# representative, /processing, /analysis, /analysis/retry, /preview/retry).
+# ---------------------------------------------------------------------------
+
+USER_STATE_KEYS = ("rating", "favorite", "caption", "keywords", "location")
+
+
+def phase3b_cases() -> list[tuple[str, str, int, dict]]:
+    if not PHASE3B.exists():
+        pytest.skip(f"golden fixture {PHASE3B.name} not recorded yet")
+    return [
+        (case["method"], case["path"], case["status"], case["body"])
+        for case in json.loads(PHASE3B.read_text())["cases"]
+    ]
+
+
+def phase3b_mutation_results() -> list[dict]:
+    """Every recorded 200 mutation-result body: the five user-state keys
+    plus the asset/operation identity (the burst representative's 200
+    bodies carry a different key set and are excluded)."""
+    results = [
+        body
+        for method, path, status, body in phase3b_cases()
+        if status == 200
+        and isinstance(body, dict)
+        and {"assetId", "operationId", "revision", "deletedAt"} <= body.keys()
+        and set(USER_STATE_KEYS) <= body.keys()
+    ]
+    assert results, "no mutation results recorded in the phase3b golden"
+    return results
+
+
+def test_mutation_result_model_round_trips():
+    """The model accepts every recorded mutation result and re-emits it
+    unchanged, with the exact key set the wire carries (extra="forbid"
+    would 500 on a key drift in either direction); the embedded user
+    state is itself a valid UserStateOut document."""
+    for result in phase3b_mutation_results():
+        instance = assert_round_trip(MutationResultOut, result)
+        assert set(instance.model_dump(by_alias=True)) == set(result)
+        assert_round_trip(
+            UserStateOut, {key: result[key] for key in USER_STATE_KEYS}
+        )
+    # The section walks the lifecycle: delete results carry the pinned
+    # deletedAt stamp, patch/restore results null; the revision sequence
+    # advances 2 -> 2 (replay) -> 3 -> 4 on the round-trip asset and
+    # 2 -> 2 (replay) on the metadata-route asset.
+    deleted = [r for r in phase3b_mutation_results() if r["deletedAt"] is not None]
+    assert deleted and all(isinstance(r["deletedAt"], str) for r in deleted)
+    assert any(r["deletedAt"] is None for r in phase3b_mutation_results())
+    round_trip_asset = [
+        r for r in phase3b_mutation_results() if r["assetId"] == str(UUID(int=31))
+    ]
+    assert [r["revision"] for r in round_trip_asset] == [2, 2, 3, 4]
+    metadata_route = [
+        r for r in phase3b_mutation_results() if r["assetId"] == str(UUID(int=32))
+    ]
+    assert [r["revision"] for r in metadata_route] == [2, 2]
+    # The metadata-route patch set only the favorite: the other user-state
+    # fields echo their v1 defaults in the recorded bodies.
+    assert all(
+        r["favorite"] and r["rating"] == 0 and r["caption"] == "" and r["keywords"] == []
+        and r["location"] is None
+        for r in metadata_route
+    )
+
+
+def test_burst_representative_model_round_trips():
+    reps = [
+        body
+        for method, path, status, body in phase3b_cases()
+        if status == 200 and isinstance(body, dict) and "burstId" in body
+    ]
+    assert reps, "no burst representative results recorded in the phase3b golden"
+    for body in reps:
+        instance = assert_round_trip(BurstRepresentativeOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+
+
+def test_queue_result_model_round_trips():
+    """Every recorded 202 queue response round-trips, and the three
+    counters partition the selected (asset x job-type) pairs exactly."""
+    results = [
+        body
+        for method, path, status, body in phase3b_cases()
+        if status == 202 and isinstance(body, dict) and "jobTypes" in body
+    ]
+    assert results, "no queue results recorded in the phase3b golden"
+    for body in results:
+        instance = assert_round_trip(QueueResultOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+        assert (
+            body["jobsQueued"]
+            + body["jobsAlreadyQueued"]
+            + body["jobsAlreadyRunning"]
+            == body["assets"] * len(body["jobTypes"])
+        )
+    # The section covers both job families (processing and analysis).
+    assert {tuple(body["jobTypes"]) for body in results} == {("metadata-v1",), ("ai-v1",)}
+
+
+def test_preview_retry_model_round_trips():
+    results = [
+        body
+        for method, path, status, body in phase3b_cases()
+        if status == 200 and isinstance(body, dict) and set(body) == {"status", "error"}
+    ]
+    assert results, "no preview retry results recorded in the phase3b golden"
+    for body in results:
+        instance = assert_round_trip(PreviewStatusOut, body)
+        assert set(instance.model_dump(by_alias=True)) == set(body)
+    # The section exercises a running preview job (unmodified by the
+    # retry upsert) and a pending one.
+    assert {body["status"] for body in results} == {"running", "pending"}
+    assert all(body["error"] is None for body in results)
+
+
+def test_mutation_result_model_rejects_forbidden_shapes():
+    result = phase3b_mutation_results()[0]
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "surprise": 1})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate(
+            {key: value for key, value in result.items() if key != "assetId"}
+        )
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "revision": "2"})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "favorite": "true"})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "assetId": "not-a-uuid"})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "deletedAt": 1})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "rating": 6})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate({**result, "keywords": [1]})
+    with pytest.raises(ValidationError):
+        MutationResultOut.model_validate(
+            {**result, "location": {"name": "Harbor", "latitude": 91, "longitude": 0}}
+        )
+
+
+def test_burst_representative_model_rejects_forbidden_shapes():
+    reps = [
+        body
+        for method, path, status, body in phase3b_cases()
+        if status == 200 and isinstance(body, dict) and "burstId" in body
+    ]
+    rep = reps[0]
+    with pytest.raises(ValidationError):
+        BurstRepresentativeOut.model_validate({**rep, "burstId": "not-a-uuid"})
+    with pytest.raises(ValidationError):
+        BurstRepresentativeOut.model_validate(
+            {"representativeAssetId": rep["representativeAssetId"]}
+        )
+    with pytest.raises(ValidationError):
+        BurstRepresentativeOut.model_validate({**rep, "surprise": 1})
+
+
+def test_queue_result_model_rejects_forbidden_shapes():
+    queue = [
+        body
+        for method, path, status, body in phase3b_cases()
+        if status == 202 and isinstance(body, dict) and "jobTypes" in body
+    ][0]
+    with pytest.raises(ValidationError):
+        QueueResultOut.model_validate({**queue, "jobTypes": "metadata-v1"})
+    with pytest.raises(ValidationError):
+        QueueResultOut.model_validate({**queue, "jobsQueued": "2"})
+    with pytest.raises(ValidationError):
+        QueueResultOut.model_validate(
+            {key: value for key, value in queue.items() if key != "assets"}
+        )
+    with pytest.raises(ValidationError):
+        QueueResultOut.model_validate({**queue, "surprise": 1})

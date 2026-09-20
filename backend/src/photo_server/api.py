@@ -25,9 +25,13 @@ from photo_server.api_schemas import (
     BatchAbandonedOut,
     BrowsePageOut,
     BurstDetailOut,
+    BurstRepresentativeOut,
     HealthOut,
+    MutationResultOut,
     PeoplePageOut,
     PersonDetailOut,
+    PreviewStatusOut,
+    QueueResultOut,
     UploadBatchOut,
     UploadFileReceipt,
     UploadQueueStatusOut,
@@ -268,7 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "userState": service.catalog.user_state(str(asset_id)),
         }
 
-    @app.post("/processing", status_code=202)
+    @app.post("/processing", status_code=202, response_model=QueueResultOut)
     def queue_processing(body: ProcessingRequest):
         return service.queue_processing(
             body.asset_ids,
@@ -276,13 +280,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             body.include_deleted,
         )
 
-    @app.post("/analysis", status_code=202)
+    @app.post("/analysis", status_code=202, response_model=QueueResultOut)
     def queue_analysis(body: AnalysisRequest):
         return service.queue_analysis(
             body.asset_ids, body.include_deleted, body.force_full
         )
 
-    @app.post("/assets/{asset_id}/analysis/retry", status_code=202)
+    @app.post("/assets/{asset_id}/analysis/retry", status_code=202, response_model=QueueResultOut)
     def retry_analysis(asset_id: UUID, force_full: bool = Query(default=False)):
         find(asset_id)
         return service.queue_analysis([asset_id], force_full=force_full)
@@ -389,8 +393,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Cache-Control": "private, max-age=3600"},
         )
 
-    @app.patch("/assets/{asset_id}/user-state")
-    @app.patch("/assets/{asset_id}/metadata")
+    @app.patch("/assets/{asset_id}/user-state", response_model=MutationResultOut)
+    @app.patch("/assets/{asset_id}/metadata", response_model=MutationResultOut)
     def update_user_state(asset_id: UUID, body: UserStatePatch):
         return mutate(
             service,
@@ -403,7 +407,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.delete("/assets/{asset_id}")
+    @app.delete("/assets/{asset_id}", response_model=MutationResultOut)
     def trash_asset(asset_id: UUID, body: OperationRequest):
         return mutate(
             service,
@@ -415,7 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.post("/assets/{asset_id}/restore")
+    @app.post("/assets/{asset_id}/restore", response_model=MutationResultOut)
     def restore_asset(asset_id: UUID, body: OperationRequest):
         return mutate(
             service,
@@ -435,7 +439,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Asset has no burst")
         return detail
 
-    @app.post("/assets/{asset_id}/burst/representative")
+    @app.post("/assets/{asset_id}/burst/representative", response_model=BurstRepresentativeOut)
     def set_burst_representative(asset_id: UUID, body: OperationRequest):
         find(asset_id)
         detail = service.catalog.burst_detail(str(asset_id))
@@ -560,7 +564,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def thumbnail(asset_id: UUID):
         return derivative(asset_id, "thumbnail")
 
-    @app.post("/assets/{asset_id}/preview/retry")
+    @app.post("/assets/{asset_id}/preview/retry", response_model=PreviewStatusOut)
     def retry_preview(asset_id: UUID):
         find(asset_id)
         service.catalog.queue_preview(str(asset_id))

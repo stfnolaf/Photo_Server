@@ -1,6 +1,7 @@
-"""Typed response models for the read-only JSON endpoints (OpenAPI codegen,
+"""Typed response models for the JSON endpoints (OpenAPI codegen,
 phases 1a-1b: asset browse/detail, then people reads; phase 2: upload and
-health endpoints; phase 3a: album CRUD and restore).
+health endpoints; phase 3a: album CRUD and restore; phase 3b: asset
+mutations and queue operations).
 
 These models describe exactly what the endpoints put on the wire: same key sets,
 same nullability, same nesting as the dict literals the handlers build today
@@ -558,3 +559,59 @@ class AlbumOut(ResponseModel):
     description: StrictStr = Field(max_length=10000)
     asset_ids: list[UUID] = Field(max_length=100000)
     deleted_at: StrictStr | None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b: asset mutations and queue operations.
+#
+# The four asset-mutation endpoints (user-state/metadata patch, delete,
+# restore) all return state.mutation_result(): the committed v2 user state
+# plus the mutation's identity. The burst representative endpoint returns
+# the cluster's new identity pair. The three queue endpoints (POST
+# /processing, POST /analysis, POST /assets/{id}/analysis/retry) share
+# catalog.queue_processing's count shape, and the preview retry echoes
+# catalog.preview_status.
+# ---------------------------------------------------------------------------
+
+class MutationResultOut(UserStateOut):
+    """A committed asset mutation result (state.mutation_result for a
+    Manifest).
+
+    The five UserState fields are the post-mutation user state (a patch
+    merges into the previous state, so unset fields echo their previous
+    values). ``deletedAt`` is the deletion's wall-clock ISO timestamp while
+    the asset is hidden and null otherwise: delete results always carry a
+    stamp, patch/restore results always null. ``revision`` is the new
+    revision number (a mutation always increments, so never 1).
+    """
+
+    asset_id: UUID
+    operation_id: UUID
+    revision: StrictInt
+    deleted_at: StrictStr | None
+
+
+class BurstRepresentativeOut(ResponseModel):
+    """POST /assets/{id}/burst/representative: the burst cluster and its
+    newly designated representative frame (bursts.set_representative)."""
+
+    burst_id: UUID
+    representative_asset_id: UUID
+
+
+class QueueResultOut(ResponseModel):
+    """The shared response of POST /processing, POST /analysis, and
+    POST /assets/{id}/analysis/retry (catalog.queue_processing).
+
+    ``assets`` is the number of selected assets; the three job counters
+    partition the selected asset/job-type pairs into newly (re)queued rows,
+    rows already pending, and rows already running. ``jobTypes`` is the
+    database job type per selected stage: ``["metadata-v1"]`` for
+    /processing, ``["ai-v1"]`` for /analysis.
+    """
+
+    assets: StrictInt
+    jobs_queued: StrictInt
+    jobs_already_queued: StrictInt
+    jobs_already_running: StrictInt
+    job_types: list[StrictStr]

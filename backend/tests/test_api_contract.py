@@ -1410,3 +1410,320 @@ def test_phase_3a(backend):
                 "workers started"
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b: asset mutations and queue operations.
+#
+# Asset identities are ``pinned_catalog_fixture`` numbers (uuid5-free,
+# UUID(int=number)); every operation id and the burst cluster id are
+# uuid5-derived, so the whole section is reproducible on a fresh backend.
+# The only wall-clock write that lands in a recorded body is the asset
+# deletion's deletedAt: the catalog module's ``datetime`` is patched for
+# the client session (a distinct pinned instant from phase 3a's), exactly
+# like the phase 3a section. Job rows are seeded directly in SQL (import
+# creates preview-v1/ai-v1 pending and metadata-v1 ready rows), so the
+# queue responses' counters are deterministic and no worker — let alone
+# the AI worker service — is started.
+# ---------------------------------------------------------------------------
+
+PHASE3B_OPS = {
+    "31-userstate": uuid5(GOLDEN_NAMESPACE, "phase3b-31-userstate"),
+    "31-userstate-stale": uuid5(GOLDEN_NAMESPACE, "phase3b-31-userstate-stale"),
+    "31-delete": uuid5(GOLDEN_NAMESPACE, "phase3b-31-delete"),
+    "31-userstate-hidden": uuid5(GOLDEN_NAMESPACE, "phase3b-31-userstate-hidden"),
+    "31-restore": uuid5(GOLDEN_NAMESPACE, "phase3b-31-restore"),
+    "32-userstate": uuid5(GOLDEN_NAMESPACE, "phase3b-32-userstate"),
+    "32-userstate-nofields": uuid5(GOLDEN_NAMESPACE, "phase3b-32-userstate-nofields"),
+    "32-userstate-badrating": uuid5(GOLDEN_NAMESPACE, "phase3b-32-userstate-badrating"),
+    "33-rep": uuid5(GOLDEN_NAMESPACE, "phase3b-33-rep"),
+    "36-rep": uuid5(GOLDEN_NAMESPACE, "phase3b-36-rep"),
+    "unknown-userstate": uuid5(GOLDEN_NAMESPACE, "phase3b-unknown-userstate"),
+    "unknown-delete": uuid5(GOLDEN_NAMESPACE, "phase3b-unknown-delete"),
+    "unknown-restore": uuid5(GOLDEN_NAMESPACE, "phase3b-unknown-restore"),
+    "unknown-rep": uuid5(GOLDEN_NAMESPACE, "phase3b-unknown-rep"),
+}
+PHASE3B_CLUSTER_ID = str(uuid5(GOLDEN_NAMESPACE, "burst-phase3b"))
+# The fixed instant the patched catalog ``datetime.now(UTC)`` returns in
+# this section (distinct from phase 3a's so the two fixtures differ); the
+# asset deletion's deletedAt is its ISO rendering.
+PHASE3B_PINNED_NOW = "2025-04-01T00:00:00+00:00"
+PHASE3B_AI_ERROR = "simulated phase3b AI failure"
+
+
+class _Phase3bPinnedNowDatetime(_PinnedNowDatetime):
+    """Phase 3b's variant of the phase 3a pinned clock: same mechanism,
+    the distinct fixed instant above."""
+
+    @classmethod
+    def now(cls, tz=None):
+        instant = datetime(2025, 4, 1, 0, 0, 0, tzinfo=UTC)
+        return instant if tz is None else instant.astimezone(tz)
+
+
+def _phase3b_json_case(method: str, path: str, payload: dict) -> dict:
+    return {
+        "method": method,
+        "path": path,
+        "body": json.dumps(payload).encode("utf-8"),
+        "headers": {"Content-Type": "application/json"},
+    }
+
+
+def seed_phase_3b(service) -> dict:
+    """Seed the phase 3b scenario: six pinned assets (31-36), a three-frame
+    burst cluster (33-35, representative 34), and job rows in mixed states
+    so the queue operations' counters are interesting: 32's metadata job
+    running and its AI job failed, 33's metadata/AI jobs missing (the
+    import-created rows deleted), 31's preview job running. Returns the
+    pinned asset id per number."""
+    spec = {
+        31: ("2024-06-01T10:00:00+02:00", "JPEG", "Sony"),
+        32: ("2024-06-01T11:00:00+02:00", "JPEG", "Canon"),
+        33: ("2024-06-02T10:00:00+02:00", "JPEG", "Nikon"),
+        34: ("2024-06-02T10:00:01+02:00", "JPEG", "Nikon"),
+        35: ("2024-06-02T10:00:02+02:00", "JPEG", "Nikon"),
+        36: ("2024-06-03T10:00:00+02:00", "RAW", "Apple"),
+    }
+    made = {
+        number: pinned_catalog_fixture(
+            service, number, capture, media=media, camera=camera
+        )
+        for number, (capture, media, camera) in spec.items()
+    }
+    asset_ids = {number: str(manifest.asset_id) for number, manifest in made.items()}
+
+    with service.catalog.engine.begin() as connection:
+        # Burst cluster: frame 34 is the representative until the section
+        # moves it to 33 through the API.
+        connection.execute(
+            insert(burst_clusters).values(
+                id=PHASE3B_CLUSTER_ID,
+                representative_asset_id=asset_ids[34],
+                policy_version="burst-cluster-v1",
+                created_at=datetime.fromisoformat("2025-01-02T12:00:00+00:00"),
+            )
+        )
+        for number in (33, 34, 35):
+            connection.execute(
+                insert(burst_members).values(
+                    cluster_id=PHASE3B_CLUSTER_ID, asset_id=asset_ids[number]
+                )
+            )
+        # Mixed job states for the queue operations.
+        connection.execute(
+            jobs.update()
+            .where(jobs.c.asset_id == asset_ids[32], jobs.c.job_type == "metadata-v1")
+            .values(status="running", attempts=1, lease_until=None)
+        )
+        connection.execute(
+            jobs.update()
+            .where(jobs.c.asset_id == asset_ids[32], jobs.c.job_type == "ai-v1")
+            .values(status="failed", attempts=1, error=PHASE3B_AI_ERROR)
+        )
+        connection.execute(
+            delete(jobs).where(
+                jobs.c.asset_id == asset_ids[33], jobs.c.job_type.in_(("metadata-v1", "ai-v1"))
+            )
+        )
+        connection.execute(
+            jobs.update()
+            .where(jobs.c.asset_id == asset_ids[31], jobs.c.job_type == "preview-v1")
+            .values(status="running", attempts=1, error=None)
+        )
+    return asset_ids
+
+
+def phase_3b_cases(asset_ids: dict) -> list:
+    """The phase 3b request list: the four asset-mutation endpoints
+    (user-state/metadata patch, delete, restore), the burst representative
+    endpoint, and the four queue endpoints, walking every success shape
+    (including the idempotent-replay path), every 409/422 the endpoints
+    raise, and both 404 detail shapes."""
+    a = {number: f"/assets/{asset_ids[number]}" for number in asset_ids}
+    unknown = f"/assets/{UNKNOWN_ASSET_ID}"
+    ops = PHASE3B_OPS
+    full_state = {
+        "rating": 3,
+        "favorite": True,
+        "caption": "Burst test frame",
+        "keywords": ["burst", "test"],
+        "location": {"name": "Harbor", "latitude": -33.8688, "longitude": 151.2093},
+    }
+    cases = [
+        # --- asset 31: the full mutation lifecycle -------------------------
+        # v1 -> v2 user-state patch: the full five-field state.
+        _phase3b_json_case("PATCH", f"{a[31]}/user-state", {
+            "operationId": str(ops["31-userstate"]),
+            **full_state,
+        }),
+        # Stale expectedRevision (asset is at revision 2 now) -> 409.
+        _phase3b_json_case("PATCH", f"{a[31]}/user-state", {
+            "operationId": str(ops["31-userstate-stale"]),
+            "expectedRevision": 1,
+            "caption": "Stale edit",
+        }),
+        # Idempotent replay: the exact first request again -> the stored
+        # result, byte-identical to the first 200.
+        _phase3b_json_case("PATCH", f"{a[31]}/user-state", {
+            "operationId": str(ops["31-userstate"]),
+            **full_state,
+        }),
+        # The same operation id with a different request -> 409.
+        _phase3b_json_case("PATCH", f"{a[31]}/user-state", {
+            "operationId": str(ops["31-userstate"]),
+            "rating": 1,
+        }),
+        # Delete: v2 -> v3 with the pinned wall-clock deletedAt.
+        _phase3b_json_case("DELETE", a[31], {
+            "operationId": str(ops["31-delete"]),
+            "expectedRevision": 2,
+        }),
+        # Editing a hidden asset -> 409 "Unhide this item before editing".
+        _phase3b_json_case("PATCH", f"{a[31]}/user-state", {
+            "operationId": str(ops["31-userstate-hidden"]),
+            "rating": 2,
+        }),
+        # Restore: v3 -> v4, deletedAt back to null.
+        _phase3b_json_case("POST", f"{a[31]}/restore", {
+            "operationId": str(ops["31-restore"]),
+            "expectedRevision": 3,
+        }),
+        # --- asset 32: the second decorator of the dual route --------------
+        # PATCH /metadata is the same endpoint function; favorite-only
+        # change -> v2 with every other user-state field at its default.
+        _phase3b_json_case("PATCH", f"{a[32]}/metadata", {
+            "operationId": str(ops["32-userstate"]),
+            "favorite": True,
+        }),
+        # Idempotent replay of the metadata-route patch.
+        _phase3b_json_case("PATCH", f"{a[32]}/metadata", {
+            "operationId": str(ops["32-userstate"]),
+            "favorite": True,
+        }),
+        # No change fields -> 422 "Provide at least one metadata field".
+        _phase3b_json_case("PATCH", f"{a[32]}/user-state", {
+            "operationId": str(ops["32-userstate-nofields"]),
+        }),
+        # Out-of-range rating -> 422.
+        _phase3b_json_case("PATCH", f"{a[32]}/user-state", {
+            "operationId": str(ops["32-userstate-badrating"]),
+            "rating": 9,
+        }),
+        # --- burst representative ------------------------------------------
+        # Move the cluster's representative from 34 to 33 (a member).
+        _phase3b_json_case("POST", f"{a[33]}/burst/representative", {
+            "operationId": str(ops["33-rep"]),
+        }),
+        # An asset outside any burst -> 409 (before the mutation commits).
+        _phase3b_json_case("POST", f"{a[36]}/burst/representative", {
+            "operationId": str(ops["36-rep"]),
+        }),
+        # --- queue operations ----------------------------------------------
+        # Targeted processing: 31's import-ready row re-queues, 32's running
+        # row is skipped, 33's missing row is created.
+        _phase3b_json_case("POST", "/processing", {
+            "assetIds": [asset_ids[31], asset_ids[32], asset_ids[33]],
+            "stages": ["metadata"],
+            "includeDeleted": False,
+        }),
+        # Same asset again: its row is pending now -> already queued.
+        _phase3b_json_case("POST", "/processing", {
+            "assetIds": [asset_ids[31]],
+            "stages": ["metadata"],
+            "includeDeleted": False,
+        }),
+        # The whole library (defaults: all stages, no hidden assets):
+        # 31/33 pending, 32 running, 34-36 import-ready.
+        _phase3b_json_case("POST", "/processing", {}),
+        # Targeted analysis: 31 pending, 32 failed (re-queued), 33 missing
+        # (created).
+        _phase3b_json_case("POST", "/analysis", {
+            "assetIds": [asset_ids[31], asset_ids[32], asset_ids[33]],
+            "includeDeleted": False,
+            "forceFull": False,
+        }),
+        # The whole library: every AI row is pending by now.
+        _phase3b_json_case("POST", "/analysis", {}),
+        # Single-asset retry with forceFull: the pending row gets the flag
+        # but still counts as already queued.
+        {"method": "POST", "path": f"{a[32]}/analysis/retry?forceFull=true"},
+        # Single-asset retry with the default query.
+        {"method": "POST", "path": f"{a[31]}/analysis/retry"},
+        # Preview retry on a running job: the upsert skips running rows, so
+        # the status echoes back running with a null error.
+        {"method": "POST", "path": f"{a[31]}/preview/retry"},
+        # Preview retry on an import-pending row: stays pending.
+        {"method": "POST", "path": f"{a[32]}/preview/retry"},
+        # --- unknown assets: both 404 detail shapes -------------------------
+        # commit_mutation's FileNotFoundError -> the generic detail string.
+        _phase3b_json_case("PATCH", f"{unknown}/user-state", {
+            "operationId": str(ops["unknown-userstate"]),
+            "rating": 1,
+        }),
+        _phase3b_json_case("DELETE", unknown, {"operationId": str(ops["unknown-delete"])}),
+        _phase3b_json_case("POST", f"{unknown}/restore", {
+            "operationId": str(ops["unknown-restore"]),
+        }),
+        # find()'s HTTPException detail (burst representative, analysis and
+        # preview retry call it before touching the queue).
+        _phase3b_json_case("POST", f"{unknown}/burst/representative", {
+            "operationId": str(ops["unknown-rep"]),
+        }),
+        _phase3b_json_case("POST", "/processing", {"assetIds": [str(UNKNOWN_ASSET_ID)]}),
+        _phase3b_json_case("POST", "/analysis", {"assetIds": [str(UNKNOWN_ASSET_ID)]}),
+        {"method": "POST", "path": f"{unknown}/analysis/retry"},
+        {"method": "POST", "path": f"{unknown}/preview/retry"},
+        # --- request validation 422s ----------------------------------------
+        _phase3b_json_case("POST", "/processing", {"stages": ["bogus"]}),
+        _phase3b_json_case("POST", "/analysis", {"assetIds": []}),
+    ]
+    return cases
+
+
+def test_phase_3b(backend):
+    """Phase 3b: the nine asset-mutation and queue operations become
+    schema-complete (``response_model=MutationResultOut`` /
+    ``BurstRepresentativeOut`` / ``QueueResultOut`` / the reused
+    ``PreviewStatusOut``).
+
+    Golden: asset 31 walks user-state patch (full state) -> stale-revision
+    409 -> idempotent replay -> operation-id reuse 409 -> delete (pinned
+    wall-clock deletedAt) -> hidden-edit 409 -> restore; asset 32 patches
+    through the /metadata route (favorite only) with an idempotent replay
+    plus 422s (no fields, out-of-range rating); the burst cluster (33-35)
+    moves its representative to 33 and asset 36 gets the not-in-a-burst
+    409; /processing and /analysis run targeted and library-wide over a
+    mixed ready/running/missing/pending/failed job state, then the
+    single-asset /analysis/retry (forceFull and default) and /preview/retry
+    on running and pending preview jobs; 404s for unknown assets on every
+    endpoint (both detail shapes); 422s on a bogus processing stage and an
+    empty analysis asset list. The catalog's ``datetime.now()`` is pinned
+    to this section's instant for the session; no workers are started.
+    """
+    asset_ids = seed_phase_3b(backend.service)
+    with mock.patch("photo_server.catalog.datetime", new=_Phase3bPinnedNowDatetime):
+        run_sequence(
+            backend,
+            "phase3b",
+            phase_3b_cases(asset_ids),
+            describe=(
+                "phase3b: asset mutations and queue operations on six "
+                "pinned assets: 31 walks user-state patch (full state) -> "
+                "stale-revision 409 -> idempotent replay -> operation-id "
+                "reuse 409 -> delete (pinned wall-clock deletedAt) -> "
+                "hidden-edit 409 -> restore; 32 patches through the "
+                "/metadata route (favorite only) with an idempotent "
+                "replay, plus 422s (no fields, out-of-range rating); "
+                "burst frames 33-35 move the representative to 33 and "
+                "asset 36 gets the not-in-a-burst 409; /processing and "
+                "/analysis run targeted and library-wide over a mixed "
+                "ready/running/missing/pending/failed job state, then "
+                "/analysis/retry (forceFull and default) and "
+                "/preview/retry on running and pending preview jobs; "
+                "404s for unknown assets on every endpoint (both detail "
+                "shapes); 422s on a bogus processing stage and an empty "
+                "analysis asset list; catalog datetime.now() pinned for "
+                "the session; no workers started"
+            ),
+        )
