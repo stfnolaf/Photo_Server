@@ -1,4 +1,4 @@
-"""Unit tests for the phase 1a response models (no services required).
+"""Unit tests for the phase 1a-1b response models (no services required).
 
 Each model in ``photo_server.api_schemas`` is validated against real JSON
 captured in the golden fixtures (``tests/fixtures/api_golden/``) and must
@@ -30,8 +30,12 @@ from photo_server.api_schemas import (
     BlobOut,
     BrowsePageOut,
     BurstDetailOut,
+    FaceRefOut,
     LocationOut,
     MutationOut,
+    PeoplePageOut,
+    PersonDetailOut,
+    PersonSummaryOut,
     PhotoSummaryOut,
     PreviewStatusOut,
     ProcessingStatusOut,
@@ -41,14 +45,20 @@ from photo_server.api_schemas import (
 FIXTURES = Path(__file__).parent / "fixtures" / "api_golden"
 SEED = FIXTURES / "seed.json"
 PHASE1A = FIXTURES / "phase1a.json"
+PHASE1B = FIXTURES / "phase1b.json"
 
 
 def normalize(value):
-    """Recursive key sorting: JSON object key order is not part of the contract."""
+    """The goldens' comparison normalization (tests/test_api_contract.py):
+    key order is irrelevant and integral-valued floats equal integers
+    (JSON's ``number`` does not distinguish 1 from 1.0); array order is
+    preserved."""
     if isinstance(value, dict):
         return {key: normalize(value[key]) for key in sorted(value)}
     if isinstance(value, list):
         return [normalize(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
     return value
 
 
@@ -267,3 +277,140 @@ def test_models_reject_forbidden_shapes():
     # A v1 document claiming revision 2 is invalid (v1 revisions are always 1).
     with pytest.raises(ValidationError):
         DOC_ADAPTER.validate_python({**v1_doc, "revision": 2})
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b: people-read models (GET /people, GET /people/{id}).
+# ---------------------------------------------------------------------------
+
+
+def un_paged_person_detail(display_name: str) -> dict:
+    """The un-paged detail body of the seeded person with this display name."""
+    for (_method, path), case in cases(PHASE1B).items():
+        if (
+            path.startswith("/people/")
+            and "?" not in path
+            and case["status"] == 200
+            and case["body"]["displayName"] == display_name
+        ):
+            return case["body"]
+    raise AssertionError(f"no un-paged person detail for {display_name!r}")
+
+
+def test_people_page_round_trips():
+    for path in (
+        "/people",
+        "/people?q=ave",
+        "/people?q=photo-10",
+        "/people?q=zzz",
+        "/people?limit=2",
+        "/people?limit=2&offset=2",
+    ):
+        assert_round_trip(PeoplePageOut, body(PHASE1B, path))
+    # The full list counts every matching person, not just the page.
+    full = body(PHASE1B, "/people")
+    assert (full["total"], full["named"], full["unnamed"]) == (3, 2, 1)
+    # Named people sort before unnamed; faceCount breaks the name tie.
+    assert [item["displayName"] for item in full["items"]] == ["Avery", "Sam", ""]
+    # A no-match query keeps the wrapper shape with an empty page.
+    assert body(PHASE1B, "/people?q=zzz")["items"] == []
+
+
+def test_person_detail_round_trips():
+    details = [
+        case["body"]
+        for (_method, path), case in cases(PHASE1B).items()
+        if path.startswith("/people/") and case["status"] == 200
+    ]
+    assert len(details) == 7  # five people, plus Avery's two paged views
+    for detail in details:
+        assert_round_trip(PersonDetailOut, detail)
+    # People whose faces are all invisible keep the empty-array shape.
+    for display_name in ("Ghost", "Stale"):
+        detail = un_paged_person_detail(display_name)
+        assert detail["faceCount"] == 0 and detail["photoCount"] == 0 and detail["faces"] == []
+    # Paged views still report the full counts.
+    paged = body(
+        PHASE1B,
+        next(path for (_method, path) in cases(PHASE1B) if path.endswith("?limit=1&offset=1")),
+    )
+    assert paged["faceCount"] == 2 and paged["photoCount"] == 2 and len(paged["faces"]) == 1
+
+
+def test_face_ref_accepts_both_numeric_encodings():
+    avery_page = body(PHASE1B, "/people")["items"][0]
+    integral, fractional = avery_page["sampleFaces"]
+    # The fixture records the wire as emitted: StrictFloat converges both
+    # producer paths (SQL jsonb copy, Python jsonb parse) to a float
+    # rendering, so the one value the SQL path used to spell as the JSON
+    # integer 1 now spells 1.0 on both roads.
+    assert type(integral["confidence"]) is float and integral["confidence"] == 1.0
+    assert integral["box"] == [0.0, 0.0, 1.0, 1.0]
+    assert fractional["confidence"] == 0.9 and type(fractional["confidence"]) is float
+    for face in avery_page["sampleFaces"]:
+        assert_round_trip(FaceRefOut, face)
+        assert_round_trip(PersonSummaryOut, avery_page)
+    # The same face arriving with the other spelling (a producer that
+    # writes integral numbers, or a jsonb parse that yields Python ints)
+    # must validate and compare identically: the number, not its
+    # spelling, is the contract.
+    int_encoded = {
+        "faceId": integral["faceId"],
+        "assetId": integral["assetId"],
+        "originalFilename": integral["originalFilename"],
+        "box": [int(value) for value in integral["box"]],
+        "confidence": int(integral["confidence"]),
+        "thumbnailUrl": integral["thumbnailUrl"],
+    }
+    assert_round_trip(FaceRefOut, int_encoded)
+    dumped_int = FaceRefOut.model_validate(int_encoded).model_dump(mode="json", by_alias=True)
+    dumped_float = FaceRefOut.model_validate(integral).model_dump(mode="json", by_alias=True)
+    assert normalize(dumped_int) == normalize(dumped_float)
+    for face in un_paged_person_detail("Avery")["faces"]:
+        assert_round_trip(FaceRefOut, face)
+
+
+def test_analysis_face_accepts_integral_encodings():
+    # The analysis path reads a JSONB ``faces`` column whose numeric values
+    # the producer may have written as integers. StrictFloat accepts both
+    # spellings, so an integral box or confidence can never 500 (a latent
+    # hazard before the phase 1b number-spelling policy), and the rendering
+    # converges on floats: the number, not its spelling, is the contract.
+    faces = body(PHASE1A, asset_path(13))["analysis"]["faces"]
+    assert faces
+    for face in faces:
+        integral = integralize(face)
+        assert_round_trip(AnalysisFaceOut, integral)
+        dumped_integral = AnalysisFaceOut.model_validate(integral).model_dump(mode="json", by_alias=True)
+        dumped_float = AnalysisFaceOut.model_validate(face).model_dump(mode="json", by_alias=True)
+        assert normalize(dumped_integral) == normalize(dumped_float)
+
+
+def integralize(value):
+    """Rewrite integral-valued floats as ints (the other spelling of the
+    same JSON number), recursively."""
+    if isinstance(value, dict):
+        return {key: integralize(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [integralize(item) for item in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def test_people_models_reject_forbidden_shapes():
+    avery_page = body(PHASE1B, "/people")["items"][0]
+    face = avery_page["sampleFaces"][1]
+    with pytest.raises(ValidationError):
+        PeoplePageOut.model_validate({**body(PHASE1B, "/people?q=zzz"), "surprise": 1})
+    with pytest.raises(ValidationError):
+        PersonSummaryOut.model_validate({**avery_page, "faceCount": "2"})
+    # PersonDetail exposes faces, not sampleFaces.
+    with pytest.raises(ValidationError):
+        PersonDetailOut.model_validate({**un_paged_person_detail("Avery"), "sampleFaces": []})
+    with pytest.raises(ValidationError):
+        FaceRefOut.model_validate({**face, "confidence": "high"})
+    with pytest.raises(ValidationError):
+        FaceRefOut.model_validate({**face, "box": ["0.1"]})
+    with pytest.raises(ValidationError):
+        FaceRefOut.model_validate({k: v for k, v in face.items() if k != "faceId"})

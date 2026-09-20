@@ -1,0 +1,496 @@
+{
+  "cases": [
+    {
+      "body": {
+        "items": [
+          {
+            "displayName": "Avery",
+            "faceCount": 2,
+            "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+            "photoCount": 2,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000b",
+                "box": [
+                  0.0,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "confidence": 1.0,
+                "faceId": "dbf30b5b-fbe1-5618-9d46-d1368060226d",
+                "originalFilename": "photo-11.JPEG",
+                "thumbnailUrl": "/faces/dbf30b5b-fbe1-5618-9d46-d1368060226d/thumbnail"
+              },
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.1,
+                  0.2,
+                  0.3,
+                  0.4
+                ],
+                "confidence": 0.9,
+                "faceId": "0eb21f7b-13da-578d-bc50-0bb060a38fd4",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/0eb21f7b-13da-578d-bc50-0bb060a38fd4/thumbnail"
+              }
+            ]
+          },
+          {
+            "displayName": "Sam",
+            "faceCount": 1,
+            "personId": "77c216a0-c9be-5b50-8812-82bbcadbe4c5",
+            "photoCount": 1,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.5,
+                  0.6,
+                  0.7,
+                  0.8
+                ],
+                "confidence": 0.75,
+                "faceId": "34c87e87-f786-5639-b5a3-da9c4aec1c02",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/34c87e87-f786-5639-b5a3-da9c4aec1c02/thumbnail"
+              }
+            ]
+          },
+          {
+            "displayName": "",
+            "faceCount": 1,
+            "personId": "7c6780df-5f5d-576c-8265-ab93d87fc0a5",
+            "photoCount": 1,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000c",
+                "box": [
+                  0.2,
+                  0.3,
+                  0.4,
+                  0.5
+                ],
+                "confidence": 0.85,
+                "faceId": "47394b4d-b98b-564b-b176-bbf9c1528f7c",
+                "originalFilename": "photo-12.JPEG",
+                "thumbnailUrl": "/faces/47394b4d-b98b-564b-b176-bbf9c1528f7c/thumbnail"
+              }
+            ]
+          }
+        ],
+        "named": 2,
+        "total": 3,
+        "unnamed": 1
+      },
+      "method": "GET",
+      "path": "/people",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "displayName": "Avery",
+            "faceCount": 2,
+            "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+            "photoCount": 2,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000b",
+                "box": [
+                  0.0,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "confidence": 1.0,
+                "faceId": "dbf30b5b-fbe1-5618-9d46-d1368060226d",
+                "originalFilename": "photo-11.JPEG",
+                "thumbnailUrl": "/faces/dbf30b5b-fbe1-5618-9d46-d1368060226d/thumbnail"
+              },
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.1,
+                  0.2,
+                  0.3,
+                  0.4
+                ],
+                "confidence": 0.9,
+                "faceId": "0eb21f7b-13da-578d-bc50-0bb060a38fd4",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/0eb21f7b-13da-578d-bc50-0bb060a38fd4/thumbnail"
+              }
+            ]
+          }
+        ],
+        "named": 1,
+        "total": 1,
+        "unnamed": 0
+      },
+      "method": "GET",
+      "path": "/people?q=ave",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "displayName": "Avery",
+            "faceCount": 2,
+            "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+            "photoCount": 2,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000b",
+                "box": [
+                  0.0,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "confidence": 1.0,
+                "faceId": "dbf30b5b-fbe1-5618-9d46-d1368060226d",
+                "originalFilename": "photo-11.JPEG",
+                "thumbnailUrl": "/faces/dbf30b5b-fbe1-5618-9d46-d1368060226d/thumbnail"
+              },
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.1,
+                  0.2,
+                  0.3,
+                  0.4
+                ],
+                "confidence": 0.9,
+                "faceId": "0eb21f7b-13da-578d-bc50-0bb060a38fd4",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/0eb21f7b-13da-578d-bc50-0bb060a38fd4/thumbnail"
+              }
+            ]
+          },
+          {
+            "displayName": "Sam",
+            "faceCount": 1,
+            "personId": "77c216a0-c9be-5b50-8812-82bbcadbe4c5",
+            "photoCount": 1,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.5,
+                  0.6,
+                  0.7,
+                  0.8
+                ],
+                "confidence": 0.75,
+                "faceId": "34c87e87-f786-5639-b5a3-da9c4aec1c02",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/34c87e87-f786-5639-b5a3-da9c4aec1c02/thumbnail"
+              }
+            ]
+          }
+        ],
+        "named": 2,
+        "total": 2,
+        "unnamed": 0
+      },
+      "method": "GET",
+      "path": "/people?q=photo-10",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [],
+        "named": 0,
+        "total": 0,
+        "unnamed": 0
+      },
+      "method": "GET",
+      "path": "/people?q=zzz",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "displayName": "Avery",
+            "faceCount": 2,
+            "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+            "photoCount": 2,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000b",
+                "box": [
+                  0.0,
+                  0.0,
+                  1.0,
+                  1.0
+                ],
+                "confidence": 1.0,
+                "faceId": "dbf30b5b-fbe1-5618-9d46-d1368060226d",
+                "originalFilename": "photo-11.JPEG",
+                "thumbnailUrl": "/faces/dbf30b5b-fbe1-5618-9d46-d1368060226d/thumbnail"
+              },
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.1,
+                  0.2,
+                  0.3,
+                  0.4
+                ],
+                "confidence": 0.9,
+                "faceId": "0eb21f7b-13da-578d-bc50-0bb060a38fd4",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/0eb21f7b-13da-578d-bc50-0bb060a38fd4/thumbnail"
+              }
+            ]
+          },
+          {
+            "displayName": "Sam",
+            "faceCount": 1,
+            "personId": "77c216a0-c9be-5b50-8812-82bbcadbe4c5",
+            "photoCount": 1,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000a",
+                "box": [
+                  0.5,
+                  0.6,
+                  0.7,
+                  0.8
+                ],
+                "confidence": 0.75,
+                "faceId": "34c87e87-f786-5639-b5a3-da9c4aec1c02",
+                "originalFilename": "photo-10.JPEG",
+                "thumbnailUrl": "/faces/34c87e87-f786-5639-b5a3-da9c4aec1c02/thumbnail"
+              }
+            ]
+          }
+        ],
+        "named": 2,
+        "total": 3,
+        "unnamed": 1
+      },
+      "method": "GET",
+      "path": "/people?limit=2",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "displayName": "",
+            "faceCount": 1,
+            "personId": "7c6780df-5f5d-576c-8265-ab93d87fc0a5",
+            "photoCount": 1,
+            "sampleFaces": [
+              {
+                "assetId": "00000000-0000-0000-0000-00000000000c",
+                "box": [
+                  0.2,
+                  0.3,
+                  0.4,
+                  0.5
+                ],
+                "confidence": 0.85,
+                "faceId": "47394b4d-b98b-564b-b176-bbf9c1528f7c",
+                "originalFilename": "photo-12.JPEG",
+                "thumbnailUrl": "/faces/47394b4d-b98b-564b-b176-bbf9c1528f7c/thumbnail"
+              }
+            ]
+          }
+        ],
+        "named": 2,
+        "total": 3,
+        "unnamed": 1
+      },
+      "method": "GET",
+      "path": "/people?limit=2&offset=2",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Avery",
+        "faceCount": 2,
+        "faces": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000b",
+            "box": [
+              0.0,
+              0.0,
+              1.0,
+              1.0
+            ],
+            "confidence": 1.0,
+            "faceId": "dbf30b5b-fbe1-5618-9d46-d1368060226d",
+            "originalFilename": "photo-11.JPEG",
+            "thumbnailUrl": "/faces/dbf30b5b-fbe1-5618-9d46-d1368060226d/thumbnail"
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000a",
+            "box": [
+              0.1,
+              0.2,
+              0.3,
+              0.4
+            ],
+            "confidence": 0.9,
+            "faceId": "0eb21f7b-13da-578d-bc50-0bb060a38fd4",
+            "originalFilename": "photo-10.JPEG",
+            "thumbnailUrl": "/faces/0eb21f7b-13da-578d-bc50-0bb060a38fd4/thumbnail"
+          }
+        ],
+        "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+        "photoCount": 2
+      },
+      "method": "GET",
+      "path": "/people/3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Avery",
+        "faceCount": 2,
+        "faces": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000b",
+            "box": [
+              0.0,
+              0.0,
+              1.0,
+              1.0
+            ],
+            "confidence": 1.0,
+            "faceId": "dbf30b5b-fbe1-5618-9d46-d1368060226d",
+            "originalFilename": "photo-11.JPEG",
+            "thumbnailUrl": "/faces/dbf30b5b-fbe1-5618-9d46-d1368060226d/thumbnail"
+          }
+        ],
+        "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+        "photoCount": 2
+      },
+      "method": "GET",
+      "path": "/people/3869b57e-6662-5f38-8304-9a2ba1a2d6be?limit=1",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Avery",
+        "faceCount": 2,
+        "faces": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000a",
+            "box": [
+              0.1,
+              0.2,
+              0.3,
+              0.4
+            ],
+            "confidence": 0.9,
+            "faceId": "0eb21f7b-13da-578d-bc50-0bb060a38fd4",
+            "originalFilename": "photo-10.JPEG",
+            "thumbnailUrl": "/faces/0eb21f7b-13da-578d-bc50-0bb060a38fd4/thumbnail"
+          }
+        ],
+        "personId": "3869b57e-6662-5f38-8304-9a2ba1a2d6be",
+        "photoCount": 2
+      },
+      "method": "GET",
+      "path": "/people/3869b57e-6662-5f38-8304-9a2ba1a2d6be?limit=1&offset=1",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Sam",
+        "faceCount": 1,
+        "faces": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000a",
+            "box": [
+              0.5,
+              0.6,
+              0.7,
+              0.8
+            ],
+            "confidence": 0.75,
+            "faceId": "34c87e87-f786-5639-b5a3-da9c4aec1c02",
+            "originalFilename": "photo-10.JPEG",
+            "thumbnailUrl": "/faces/34c87e87-f786-5639-b5a3-da9c4aec1c02/thumbnail"
+          }
+        ],
+        "personId": "77c216a0-c9be-5b50-8812-82bbcadbe4c5",
+        "photoCount": 1
+      },
+      "method": "GET",
+      "path": "/people/77c216a0-c9be-5b50-8812-82bbcadbe4c5",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "",
+        "faceCount": 1,
+        "faces": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000c",
+            "box": [
+              0.2,
+              0.3,
+              0.4,
+              0.5
+            ],
+            "confidence": 0.85,
+            "faceId": "47394b4d-b98b-564b-b176-bbf9c1528f7c",
+            "originalFilename": "photo-12.JPEG",
+            "thumbnailUrl": "/faces/47394b4d-b98b-564b-b176-bbf9c1528f7c/thumbnail"
+          }
+        ],
+        "personId": "7c6780df-5f5d-576c-8265-ab93d87fc0a5",
+        "photoCount": 1
+      },
+      "method": "GET",
+      "path": "/people/7c6780df-5f5d-576c-8265-ab93d87fc0a5",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Ghost",
+        "faceCount": 0,
+        "faces": [],
+        "personId": "97afaae4-d736-559f-a672-259b5234ba42",
+        "photoCount": 0
+      },
+      "method": "GET",
+      "path": "/people/97afaae4-d736-559f-a672-259b5234ba42",
+      "status": 200
+    },
+    {
+      "body": {
+        "displayName": "Stale",
+        "faceCount": 0,
+        "faces": [],
+        "personId": "82066a90-7345-50f1-9b12-9cc710046b78",
+        "photoCount": 0
+      },
+      "method": "GET",
+      "path": "/people/82066a90-7345-50f1-9b12-9cc710046b78",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Person not found"
+      },
+      "method": "GET",
+      "path": "/people/33333333-3333-4333-8333-333333333333",
+      "status": 404
+    }
+  ],
+  "description": "phase1b: four pinned assets and five pinned people \u2014 Avery (two faces on two photos, one of them an integral box with confidence 1.0), Sam (sharing Avery's first photo), an unnamed person, Ghost (face on a hidden asset), and Stale (face on a non-current run); GET /people (full, q by name, q by filename, no match, limit/offset paging), a person detail for every person (including empty face arrays) plus limit/offset paging on Avery's faces, and a 404 unknown person",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase1b"
+}

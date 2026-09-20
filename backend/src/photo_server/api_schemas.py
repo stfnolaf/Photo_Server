@@ -1,4 +1,5 @@
-"""Typed response models for the read-only JSON endpoints (OpenAPI codegen, phase 1a).
+"""Typed response models for the read-only JSON endpoints (OpenAPI codegen,
+phases 1a-1b: asset browse/detail, then people reads).
 
 These models describe exactly what the endpoints put on the wire: same key sets,
 same nullability, same nesting as the dict literals the handlers build today
@@ -11,6 +12,16 @@ Design rules (plan decisions 3 and 7):
 - Field types are strict primitives (``StrictInt``/``StrictStr``/...) so
   validation can never rewrite a wire value; ``UUID`` fields stay lax because
   str -> UUID -> str round-trips stably and the JSON body is always text.
+  The one sanctioned exception is the int/float duality of JSON numbers:
+  JSON has a single ``number`` type and every consumer treats ``1`` and
+  ``1.0`` identically, so numeric fields are declared ``StrictFloat`` (which
+  accepts both int and float input in this pydantic). The golden *comparison*
+  (``normalize`` in ``tests/test_api_contract.py``) equates integral-valued
+  floats with integers, and golden *recording* stays faithful (as emitted):
+  a ``StrictFloat`` field converges every producer spelling to a float
+  rendering, so the recorded bytes are deterministic. Settled in phase 1b,
+  when Postgres jsonb's rendering of an integral ``float8`` confidence as
+  the JSON integer ``1`` made the duality concrete.
 - The asset manifest document exists in two schema versions (the v1 document
   has exactly 11 keys; v2 adds ``userState``/``deletedAt`` and a non-null
   ``mutation``). A single flat model cannot express both without adding or
@@ -298,3 +309,63 @@ class AssetDetailV2Out(AssetDocV2Out):
 AssetDetailOut = Annotated[
     Union[AssetDetailV1Out, AssetDetailV2Out], Field(discriminator="schema_version")
 ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b: people reads (GET /people, GET /people/{id}).
+# ---------------------------------------------------------------------------
+
+
+class FaceRefOut(ResponseModel):
+    """One face reference inside a person response.
+
+    ``catalog.list_people`` builds its ``sampleFaces`` rows in SQL
+    (``jsonb_build_object``) while ``catalog.person_detail`` builds its
+    ``faces`` rows in Python, so the same numeric field arrives through two
+    different decoders: the SQL path copies the stored jsonb and casts the
+    ``float8`` confidence (jsonb normalizes 1.0 to the JSON integer 1),
+    while the Python path parses the jsonb box column and reads the raw
+    ``float8`` confidence. The field is therefore a plain ``StrictFloat``:
+    it accepts both int and float input (no producer spelling can 500), the
+    spec stays a clean ``{"type": "number"}``, and both producer paths
+    converge on a float rendering on the wire; the golden comparison (see
+    the module docstring) equates the spellings and the golden recording
+    pins the emitted floats.
+    """
+
+    face_id: UUID
+    asset_id: UUID
+    original_filename: StrictStr
+    box: list[StrictFloat] = Field(description="Normalized [x0, y0, x1, y1].")
+    confidence: StrictFloat
+    thumbnail_url: StrictStr
+
+
+class PersonSummaryOut(ResponseModel):
+    """One row of GET /people (catalog.list_people): counts plus up to four
+    highest-confidence sample faces."""
+
+    person_id: UUID
+    display_name: StrictStr
+    face_count: StrictInt
+    photo_count: StrictInt
+    sample_faces: list[FaceRefOut]
+
+
+class PeoplePageOut(ResponseModel):
+    """GET /people: the page plus named/unnamed counts over all matches."""
+
+    items: list[PersonSummaryOut]
+    total: StrictInt
+    named: StrictInt
+    unnamed: StrictInt
+
+
+class PersonDetailOut(ResponseModel):
+    """GET /people/{id} (catalog.person_detail): the paged face list."""
+
+    person_id: UUID
+    display_name: StrictStr
+    face_count: StrictInt
+    photo_count: StrictInt
+    faces: list[FaceRefOut]

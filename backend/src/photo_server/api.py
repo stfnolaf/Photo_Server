@@ -23,6 +23,8 @@ from photo_server.api_schemas import (
     AssetDocOut,
     BrowsePageOut,
     BurstDetailOut,
+    PeoplePageOut,
+    PersonDetailOut,
 )
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
@@ -279,7 +281,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         find(asset_id)
         return service.queue_analysis([asset_id], force_full=force_full)
 
-    @app.get("/people")
+    @app.get("/people", response_model=PeoplePageOut)
     def list_people(
         q: str = Query(default="", max_length=200),
         limit: int = Query(default=500, ge=1, le=1000),
@@ -287,7 +289,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         return service.catalog.list_people(q, limit, offset)
 
-    @app.get("/people/{person_id}")
+    @app.get("/people/{person_id}", response_model=PersonDetailOut)
     def get_person(
         person_id: UUID,
         limit: int = Query(default=2000, ge=1, le=5000),

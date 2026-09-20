@@ -24,16 +24,25 @@ database, torn down after the test). Every non-deterministic input is pinned
   ``/health``) are pinned in the fixture, so the goldens are stable when the
   surrounding environment changes.
 
-Bodies are captured as ``(method, path, status, body)`` cases. The only
-normalization is recursive dictionary-key sorting, because JSON object key
-order is not part of the contract (Postgres jsonb stores its own key order,
-and Pydantic serializes in model field order); array order is preserved.
+Bodies are captured as ``(method, path, status, body)`` cases and recorded
+*as emitted*: only dictionary keys are sorted (JSON object key order is not
+part of the contract — Postgres jsonb stores its own key order and
+Pydantic serializes in model field order), while array order and numeric
+spellings are preserved, so the fixture file is a faithful byte-level
+transcript of the wire. The *comparison* against a recorded fixture applies
+one further leniency: integral-valued floats equal integers, because JSON
+has a single ``number`` type and no consumer can distinguish ``1`` from
+``1.0``. That leniency never accepts a different *value* — it only closes
+the spelling gap that lets a numeric field be declared ``StrictFloat``
+(see ``api_schemas.py``) when one producer spells an integral number as
+``1`` and another as ``1.0``.
 
 Recording and verification
 --------------------------
 The first run of a section writes its fixture file under
-``tests/fixtures/api_golden/``; every later run must match it after
-normalization. Run a section twice after recording to prove determinism.
+``tests/fixtures/api_golden/`` (recorded as emitted); every later run must
+match it under the comparison normalization above. Run a section twice
+after recording to prove determinism.
 
 Adding sections (Phases 1a onward)
 ----------------------------------
@@ -88,6 +97,7 @@ pytestmark = [
 GOLDEN_LIBRARY_ID = UUID("11111111-1111-4111-8111-111111111111")
 GOLDEN_NAMESPACE = uuid5(NAMESPACE_DNS, "photo-server:api-golden")
 UNKNOWN_ASSET_ID = UUID("22222222-2222-4222-8222-222222222222")
+UNKNOWN_PERSON_ID = UUID("33333333-3333-4333-8333-333333333333")
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_golden"
 
@@ -205,12 +215,32 @@ def pinned_catalog_fixture(
     return manifest
 
 
-def normalize(value):
-    """Recursive key sorting: JSON object key order is not part of the contract."""
+def key_sort(value):
+    """Recursive dictionary-key sorting — the only change made at recording.
+
+    JSON object key order is not part of the contract (Postgres jsonb
+    stores its own key order and Pydantic serializes in model field
+    order); array order and numeric spellings are preserved, so the
+    recorded fixture is a faithful byte-level transcript of the wire.
+    """
     if isinstance(value, dict):
-        return {key: normalize(value[key]) for key in sorted(value)}
+        return {key: key_sort(value[key]) for key in sorted(value)}
     if isinstance(value, list):
-        return [normalize(item) for item in value]
+        return [key_sort(item) for item in value]
+    return value
+
+
+def normalize(value):
+    """The comparison normalization: key sorting plus number spelling.
+
+    JSON has one ``number`` type and no consumer can distinguish ``1``
+    from ``1.0``, so when a live body is compared against a recorded
+    fixture, integral-valued floats equal their integers. No other value
+    is ever rewritten or accepted.
+    """
+    value = key_sort(value)
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
     return value
 
 
@@ -220,7 +250,7 @@ def capture(client, method, path) -> dict:
         "method": method.upper(),
         "path": path,
         "status": response.status_code,
-        "body": normalize(response.json()) if response.content else None,
+        "body": key_sort(response.json()) if response.content else None,
     }
 
 
@@ -238,7 +268,12 @@ def run_sequence(backend: Backend, section: str, cases: list[tuple[str, str]], *
         "section": section,
         "libraryId": str(GOLDEN_LIBRARY_ID),
         "description": describe,
-        "normalization": "dict keys sorted recursively; array order preserved",
+        "normalization": (
+            "recorded as emitted: dict keys sorted recursively, array "
+            "order and numeric spellings preserved; comparison "
+            "additionally equates integral-valued floats with integers "
+            "(JSON numbers do not distinguish 1 from 1.0)"
+        ),
         "cases": recorded,
     }
     if not fixture.exists():
@@ -248,7 +283,9 @@ def run_sequence(backend: Backend, section: str, cases: list[tuple[str, str]], *
         return
 
     expected = json.loads(fixture.read_text())
-    if normalize(expected) != normalize(payload):
+    # The contract is the request -> response mapping; the metadata
+    # fields (description, normalization policy) are prose for reviewers.
+    if normalize(expected["cases"]) != normalize(payload["cases"]):
         raise AssertionError(
             f"golden section {section!r} diverged from the recorded fixture:\n"
             f"{_case_diff(expected, payload)}\n"
@@ -564,5 +601,192 @@ def test_phase_1a(backend):
             "404 for an asset with no burst, browse pages (full, limit=2 with a "
             "pinned cursor, media_type, date window, q, rating_min+favorite, "
             "deleted), a 422 on an inverted date range, and a 404 unknown asset"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b: response_model types for the two people-read endpoints
+# (GET /people, GET /people/{id}).
+# ---------------------------------------------------------------------------
+
+PHASE1B_MINIMAL_RESULT = {
+    "summary": "Phase 1b golden probe.",
+    "photoTypes": ["portrait"],
+    "scene": "indoor",
+    "setting": "indoor",
+    "objects": [],
+    "activities": [],
+    "tags": [],
+    "visibleText": [],
+    "faceCount": 1,
+    "personCount": 1,
+}
+
+
+def seed_phase_1b(service) -> dict:
+    """Seed the phase 1b scenario and return the pinned person id per key.
+
+    Shapes covered: a named person with two faces on two distinct photos
+    (``avery``; one face carries an all-integer bounding box and a confidence
+    of exactly 1.0, exercising jsonb's integer normalization inside the
+    SQL-built ``sampleFaces`` arrays), a second named person sharing that
+    first photo (``sam``), an unnamed person (``unnamed``), a person whose
+    only face sits on a hidden asset (``ghost``; excluded from ``/people``
+    but whose detail returns empty arrays), and a person whose only face
+    belongs to a non-current analysis run (``stale``; likewise excluded).
+    """
+    assets = {
+        number: pinned_catalog_fixture(
+            service,
+            number,
+            capture,
+            media=media,
+        )
+        for number, (capture, media) in {
+            10: ("2024-05-01T00:10:00+08:00", "JPEG"),
+            11: ("2024-05-02T00:10:00+08:00", "JPEG"),
+            12: ("2024-05-03T00:10:00+08:00", "JPEG"),
+            13: (None, "HEIF"),
+        }.items()
+    }
+    asset_ids = {number: str(manifest.asset_id) for number, manifest in assets.items()}
+    persons = {
+        key: str(uuid5(GOLDEN_NAMESPACE, f"phase1b-person-{number}"))
+        for key, number in {"avery": 1, "sam": 2, "unnamed": 3, "ghost": 4, "stale": 5}.items()
+    }
+
+    with service.catalog.engine.begin() as connection:
+        for key, (name, created) in {
+            "avery": ("Avery", "2025-01-02T12:00:00+00:00"),
+            "sam": ("Sam", "2025-01-02T12:05:00+00:00"),
+            "unnamed": ("", "2025-01-02T12:10:00+00:00"),
+            "ghost": ("Ghost", "2025-01-02T12:15:00+00:00"),
+            "stale": ("Stale", "2025-01-02T12:20:00+00:00"),
+        }.items():
+            connection.execute(
+                insert(people).values(
+                    id=persons[key],
+                    display_name=name,
+                    created_at=datetime.fromisoformat(created),
+                )
+            )
+        for number in (10, 11, 12, 13):
+            run_id = str(uuid5(GOLDEN_NAMESPACE, f"phase1b-run-{number}"))
+            connection.execute(
+                insert(analysis_runs).values(
+                    id=run_id,
+                    asset_id=asset_ids[number],
+                    analysis_type="photo-ai",
+                    model_name="stub-vlm",
+                    model_version="stub-digest-1",
+                    pipeline_version="photo-ai-v1",
+                    input_hash="0" * 64,
+                    object_key=f"analysis/{asset_ids[number]}/photo-ai-v1/{run_id}.json",
+                    result=PHASE1B_MINIMAL_RESULT,
+                    searchable_text="Phase 1b golden probe portrait indoor",
+                    is_current=True,
+                    semantic_origin="computed",
+                    created_at=datetime.fromisoformat("2025-01-05T08:30:00+00:00"),
+                )
+            )
+        # A second, non-current run on asset 12; the ``stale`` face points
+        # at it, so it never appears in a people response.
+        stale_run = str(uuid5(GOLDEN_NAMESPACE, "phase1b-run-12b"))
+        connection.execute(
+            insert(analysis_runs).values(
+                id=stale_run,
+                asset_id=asset_ids[12],
+                analysis_type="photo-ai",
+                model_name="stub-vlm",
+                model_version="stub-digest-2",
+                pipeline_version="photo-ai-v1",
+                input_hash="f" * 64,
+                object_key=f"analysis/{asset_ids[12]}/photo-ai-v1/{stale_run}.json",
+                result=PHASE1B_MINIMAL_RESULT,
+                searchable_text="Phase 1b golden probe portrait indoor",
+                is_current=False,
+                semantic_origin="computed",
+                created_at=datetime.fromisoformat("2025-01-06T08:30:00+00:00"),
+            )
+        )
+        for tag, (number, run_key, person, index, box, confidence) in {
+            "10-0": (10, "10", "avery", 0, [0.1, 0.2, 0.3, 0.4], 0.9),
+            "11-0": (11, "11", "avery", 0, [0.0, 0.0, 1.0, 1.0], 1.0),
+            "12-0": (12, "12", "unnamed", 0, [0.2, 0.3, 0.4, 0.5], 0.85),
+            "10-1": (10, "10", "sam", 1, [0.5, 0.6, 0.7, 0.8], 0.75),
+            "13-0": (13, "13", "ghost", 0, [0.3, 0.4, 0.5, 0.6], 0.7),
+            "12-1": (12, "12b", "stale", 0, [0.4, 0.5, 0.6, 0.7], 0.65),
+        }.items():
+            run_id = (
+                stale_run
+                if run_key == "12b"
+                else str(uuid5(GOLDEN_NAMESPACE, f"phase1b-run-{run_key}"))
+            )
+            connection.execute(
+                insert(faces).values(
+                    id=str(uuid5(GOLDEN_NAMESPACE, f"phase1b-face-{tag}")),
+                    asset_id=asset_ids[number],
+                    analysis_run_id=run_id,
+                    person_id=persons[person],
+                    face_index=index,
+                    bounding_box=box,
+                    confidence=confidence,
+                    embedding=[0.1, 0.2, 0.3, 0.4],
+                )
+            )
+
+    # Hide asset 13 so ``ghost``'s only face points at a deleted asset.
+    service.catalog.commit_mutation(
+        uuid5(GOLDEN_NAMESPACE, "phase1b-hide-13"),
+        Mutation(action="asset.delete", entity_id=UUID(int=13), changes={}),
+    )
+    return persons
+
+
+def phase_1b_cases(persons: dict) -> list[tuple[str, str]]:
+    """The fixed request list for the phase 1b golden section."""
+    return [
+        ("GET", "/people"),
+        ("GET", "/people?q=ave"),
+        ("GET", "/people?q=photo-10"),
+        ("GET", "/people?q=zzz"),
+        ("GET", "/people?limit=2"),
+        ("GET", "/people?limit=2&offset=2"),
+        ("GET", f"/people/{persons['avery']}"),
+        ("GET", f"/people/{persons['avery']}?limit=1"),
+        ("GET", f"/people/{persons['avery']}?limit=1&offset=1"),
+        ("GET", f"/people/{persons['sam']}"),
+        ("GET", f"/people/{persons['unnamed']}"),
+        ("GET", f"/people/{persons['ghost']}"),
+        ("GET", f"/people/{persons['stale']}"),
+        ("GET", f"/people/{UNKNOWN_PERSON_ID}"),
+    ]
+
+
+def test_phase_1b(backend):
+    """Phase 1b: the two people-read endpoints typed with response_model.
+
+    The request list exercises every shape the phase 1b models declare:
+    named and unnamed people, SQL-built ``sampleFaces`` arrays (including
+    the jsonb integer normalization of integral boxes/confidences), paged
+    face lists, people with no visible faces (empty arrays), the query
+    filters, and the 404 unknown person. The AI worker service is never
+    started; all analysis/face state is seeded.
+    """
+    persons = seed_phase_1b(backend.service)
+    run_sequence(
+        backend,
+        "phase1b",
+        phase_1b_cases(persons),
+        describe=(
+            "phase1b: four pinned assets and five pinned people — Avery "
+            "(two faces on two photos, one of them an integral box with "
+            "confidence 1.0), Sam (sharing Avery's first photo), an unnamed "
+            "person, Ghost (face on a hidden asset), and Stale (face on a "
+            "non-current run); GET /people (full, q by name, q by filename, "
+            "no match, limit/offset paging), a person detail for every "
+            "person (including empty face arrays) plus limit/offset paging "
+            "on Avery's faces, and a 404 unknown person"
         ),
     )

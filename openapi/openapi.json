@@ -975,6 +975,52 @@
         "title": "FaceMoveRequest",
         "type": "object"
       },
+      "FaceRefOut": {
+        "additionalProperties": false,
+        "description": "One face reference inside a person response.\n\n``catalog.list_people`` builds its ``sampleFaces`` rows in SQL\n(``jsonb_build_object``) while ``catalog.person_detail`` builds its\n``faces`` rows in Python, so the same numeric field arrives through two\ndifferent decoders: the SQL path copies the stored jsonb and casts the\n``float8`` confidence (jsonb normalizes 1.0 to the JSON integer 1),\nwhile the Python path parses the jsonb box column and reads the raw\n``float8`` confidence. The field is therefore a plain ``StrictFloat``:\nit accepts both int and float input (no producer spelling can 500), the\nspec stays a clean ``{\"type\": \"number\"}``, and both producer paths\nconverge on a float rendering on the wire; the golden comparison (see\nthe module docstring) equates the spellings and the golden recording\npins the emitted floats.",
+        "properties": {
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "box": {
+            "description": "Normalized [x0, y0, x1, y1].",
+            "items": {
+              "type": "number"
+            },
+            "title": "Box",
+            "type": "array"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "faceId": {
+            "format": "uuid",
+            "title": "Faceid",
+            "type": "string"
+          },
+          "originalFilename": {
+            "title": "Originalfilename",
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "title": "Thumbnailurl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "faceId",
+          "assetId",
+          "originalFilename",
+          "box",
+          "confidence",
+          "thumbnailUrl"
+        ],
+        "title": "FaceRefOut",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1148,6 +1194,78 @@
         "title": "OperationRequest",
         "type": "object"
       },
+      "PeoplePageOut": {
+        "additionalProperties": false,
+        "description": "GET /people: the page plus named/unnamed counts over all matches.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PersonSummaryOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "named": {
+            "title": "Named",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unnamed": {
+            "title": "Unnamed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "named",
+          "unnamed"
+        ],
+        "title": "PeoplePageOut",
+        "type": "object"
+      },
+      "PersonDetailOut": {
+        "additionalProperties": false,
+        "description": "GET /people/{id} (catalog.person_detail): the paged face list.",
+        "properties": {
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          },
+          "faceCount": {
+            "title": "Facecount",
+            "type": "integer"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceRefOut"
+            },
+            "title": "Faces",
+            "type": "array"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "photoCount": {
+            "title": "Photocount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "personId",
+          "displayName",
+          "faceCount",
+          "photoCount",
+          "faces"
+        ],
+        "title": "PersonDetailOut",
+        "type": "object"
+      },
       "PersonMergeRequest": {
         "properties": {
           "operationId": {
@@ -1186,6 +1304,45 @@
           "operationId"
         ],
         "title": "PersonNameRequest",
+        "type": "object"
+      },
+      "PersonSummaryOut": {
+        "additionalProperties": false,
+        "description": "One row of GET /people (catalog.list_people): counts plus up to four\nhighest-confidence sample faces.",
+        "properties": {
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          },
+          "faceCount": {
+            "title": "Facecount",
+            "type": "integer"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "photoCount": {
+            "title": "Photocount",
+            "type": "integer"
+          },
+          "sampleFaces": {
+            "items": {
+              "$ref": "#/components/schemas/FaceRefOut"
+            },
+            "title": "Samplefaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "personId",
+          "displayName",
+          "faceCount",
+          "photoCount",
+          "sampleFaces"
+        ],
+        "title": "PersonSummaryOut",
         "type": "object"
       },
       "PhotoSummaryOut": {
@@ -3031,7 +3188,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PeoplePageOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -3092,7 +3251,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PersonDetailOut"
+                }
               }
             },
             "description": "Successful Response"
