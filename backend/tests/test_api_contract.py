@@ -81,7 +81,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
@@ -1171,3 +1171,242 @@ def test_phase_2(backend):
             "started"
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a: albums (CRUD + restore).
+#
+# Every album identity is client-chosen: POST /albums derives the album id
+# as uuid5(libraryId, "album:{operationId}"), so the whole section is a
+# function of the pinned operation ids and the recorded bytes are
+# reproducible on a fresh backend. The only wall-clock write that lands in
+# a recorded body is the album deletion's deletedAt: the catalog module's
+# ``datetime`` is patched for the client session (the TestClient lifespan
+# and every request run inside the patch) so ``datetime.now(UTC)`` returns
+# a fixed instant. The pre-seed below hides an asset before the patch
+# starts; its stamp is pinned in SQL like the phase 1a seed and is never
+# recorded. No worker — let alone the AI worker service — is started.
+# ---------------------------------------------------------------------------
+
+UNKNOWN_ALBUM_ID = UUID("66666666-6666-4666-8666-666666666666")
+
+ALBUM_A_OPS = {
+    "create": uuid5(GOLDEN_NAMESPACE, "phase3a-a-create"),
+    "rename": uuid5(GOLDEN_NAMESPACE, "phase3a-a-rename"),
+    "stale": uuid5(GOLDEN_NAMESPACE, "phase3a-a-stale"),
+    "add-third": uuid5(GOLDEN_NAMESPACE, "phase3a-a-add-third"),
+    "add-hidden": uuid5(GOLDEN_NAMESPACE, "phase3a-a-add-hidden"),
+    "delete": uuid5(GOLDEN_NAMESPACE, "phase3a-a-delete"),
+    "restore": uuid5(GOLDEN_NAMESPACE, "phase3a-a-restore"),
+}
+ALBUM_B_OPS = {
+    "create": uuid5(GOLDEN_NAMESPACE, "phase3a-b-create"),
+    "unknown-patch": uuid5(GOLDEN_NAMESPACE, "phase3a-unknown-patch"),
+    "unknown-delete": uuid5(GOLDEN_NAMESPACE, "phase3a-unknown-delete"),
+    "unknown-restore": uuid5(GOLDEN_NAMESPACE, "phase3a-unknown-restore"),
+}
+ALBUM_422_OPS = {"null-name": uuid5(GOLDEN_NAMESPACE, "phase3a-422-null-name")}
+# The album ids the endpoint derives from the create operation ids.
+ALBUM_A = uuid5(GOLDEN_LIBRARY_ID, f"album:{ALBUM_A_OPS['create']}")
+ALBUM_B = uuid5(GOLDEN_LIBRARY_ID, f"album:{ALBUM_B_OPS['create']}")
+
+# The fixed instant the patched catalog ``datetime.now(UTC)`` returns; the
+# deletion's deletedAt is its ISO rendering.
+PHASE3A_PINNED_NOW = "2025-03-01T00:00:00+00:00"
+PHASE3A_HIDDEN_ASSET_STAMP = "2025-02-01T00:00:00+00:00"
+
+
+class _PinnedNowDatetime(datetime):
+    """Stand-in for the catalog module's ``datetime``: ``now()`` returns a
+    fixed instant so the wall-clock ``deletedAt`` a deletion mutation
+    writes is deterministic in the golden; every other ``datetime``
+    operation keeps behaving normally."""
+
+    @classmethod
+    def now(cls, tz=None):
+        instant = datetime(2025, 3, 1, 0, 0, 0, tzinfo=UTC)
+        return instant if tz is None else instant.astimezone(tz)
+
+
+def _phase3a_json_case(method: str, path: str, payload: dict) -> dict:
+    return {
+        "method": method,
+        "path": path,
+        "body": json.dumps(payload).encode("utf-8"),
+        "headers": {"Content-Type": "application/json"},
+    }
+
+
+def seed_phase_3a(service) -> dict:
+    """Seed three live assets and one hidden one for the membership
+    checks. The hidden asset's deletion is a pre-seed step, so its
+    wall-clock stamp is pinned in SQL (like the phase 1a seed) and never
+    recorded."""
+    made = {
+        number: pinned_catalog_fixture(
+            service, number, "2024-06-01T08:30:00+02:00", media="HEIF", camera="Leica"
+        )
+        for number in (71, 72, 73)
+    }
+    made[74] = pinned_catalog_fixture(service, 74, None, media="RAW", camera="Canon")
+    hidden = made[74]
+    service.catalog.commit_mutation(
+        uuid5(GOLDEN_NAMESPACE, "phase3a-hide-74"),
+        Mutation(action="asset.delete", entity_id=hidden.asset_id, changes={}),
+    )
+    with service.catalog.engine.begin() as connection:
+        document = connection.execute(
+            select(assets.c.manifest).where(assets.c.id == str(hidden.asset_id))
+        ).scalar_one()
+        document["deletedAt"] = PHASE3A_HIDDEN_ASSET_STAMP
+        connection.execute(
+            update(assets)
+            .where(assets.c.id == str(hidden.asset_id))
+            .values(deleted_at=PHASE3A_HIDDEN_ASSET_STAMP, manifest=document)
+        )
+    return {
+        "members": [str(made[number].asset_id) for number in (71, 72, 73)],
+        "hidden": str(made[74].asset_id),
+    }
+
+
+def phase_3a_cases(seeded: dict) -> list:
+    a, unknown = str(ALBUM_A), str(UNKNOWN_ALBUM_ID)
+    first_two, third = seeded["members"][:2], seeded["members"][2]
+    return [
+        # Album A: the full lifecycle.
+        _phase3a_json_case(
+            "POST",
+            "/albums",
+            {
+                "operationId": str(ALBUM_A_OPS["create"]),
+                "name": "Golden Trip",
+                "description": "Pinned holiday frames.",
+                "assetIds": first_two,
+            },
+        ),
+        ("GET", "/albums"),
+        ("GET", f"/albums/{a}"),
+        _phase3a_json_case(
+            "PATCH",
+            f"/albums/{a}",
+            {
+                "operationId": str(ALBUM_A_OPS["rename"]),
+                "expectedRevision": 1,
+                "name": "Golden Trip II",
+            },
+        ),
+        _phase3a_json_case(
+            "PATCH",
+            f"/albums/{a}",
+            {
+                "operationId": str(ALBUM_A_OPS["stale"]),
+                "expectedRevision": 1,
+                "description": "Stale revision conflict.",
+            },
+        ),
+        _phase3a_json_case(
+            "PATCH",
+            f"/albums/{a}",
+            {
+                "operationId": str(ALBUM_A_OPS["add-third"]),
+                "expectedRevision": 2,
+                "assetIds": first_two + [third],
+            },
+        ),
+        _phase3a_json_case(
+            "PATCH",
+            f"/albums/{a}",
+            {
+                "operationId": str(ALBUM_A_OPS["add-hidden"]),
+                "expectedRevision": 3,
+                "assetIds": [seeded["hidden"]],
+            },
+        ),
+        _phase3a_json_case(
+            "DELETE",
+            f"/albums/{a}",
+            {
+                "operationId": str(ALBUM_A_OPS["delete"]),
+                "expectedRevision": 3,
+            },
+        ),
+        ("GET", "/albums"),
+        ("GET", "/albums?deleted=true"),
+        _phase3a_json_case(
+            "POST", f"/albums/{a}/restore", {"operationId": str(ALBUM_A_OPS["restore"])}
+        ),
+        ("GET", "/albums"),
+        ("GET", f"/albums/{a}"),
+        ("GET", "/albums?deleted=true"),
+        # Album B: a minimal create, pinning the list order.
+        _phase3a_json_case(
+            "POST",
+            "/albums",
+            {"operationId": str(ALBUM_B_OPS["create"]), "name": "Second"},
+        ),
+        ("GET", "/albums"),
+        # Unknown album: both 404 shapes (the endpoint's own and the
+        # commit path's "requested item does not exist").
+        ("GET", f"/albums/{unknown}"),
+        _phase3a_json_case(
+            "PATCH",
+            f"/albums/{unknown}",
+            {
+                "operationId": str(ALBUM_B_OPS["unknown-patch"]),
+                "expectedRevision": 1,
+                "name": "Ghost",
+            },
+        ),
+        _phase3a_json_case(
+            "DELETE",
+            f"/albums/{unknown}",
+            {"operationId": str(ALBUM_B_OPS["unknown-delete"])},
+        ),
+        _phase3a_json_case(
+            "POST",
+            f"/albums/{unknown}/restore",
+            {"operationId": str(ALBUM_B_OPS["unknown-restore"])},
+        ),
+        # Request validation: a bodyless create (operationId missing) and
+        # an explicit null field.
+        _phase3a_json_case("POST", "/albums", {}),
+        _phase3a_json_case(
+            "POST",
+            "/albums",
+            {"operationId": str(ALBUM_422_OPS["null-name"]), "name": None},
+        ),
+    ]
+
+
+def test_phase_3a(backend):
+    """Phase 3a: the six album operations become schema-complete
+    (``response_model=AlbumOut``).
+
+    Golden: create (with members) -> list -> get -> rename -> stale
+    409 -> add member -> hidden-add 409 -> delete (pinned clock) ->
+    deleted list -> restore; a second album pins the list order; 404s on
+    get/patch/delete/restore of an unknown album; 422s on a bodyless
+    create and a null name. The catalog's ``datetime.now()`` is pinned
+    for the session, so the deletion's ``deletedAt`` is the fixed
+    instant; no workers are started.
+    """
+    seeded = seed_phase_3a(backend.service)
+    with mock.patch("photo_server.catalog.datetime", new=_PinnedNowDatetime):
+        run_sequence(
+            backend,
+            "phase3a",
+            phase_3a_cases(seeded),
+            describe=(
+                "phase3a: album CRUD and restore on two pinned albums "
+                "(ids derived from client-chosen operation ids): A walks "
+                "create (with members) -> list -> get -> rename -> "
+                "stale-revision 409 -> add third member -> add hidden "
+                "asset 409 -> delete (pinned wall-clock deletedAt) -> "
+                "deleted list -> restore; B is a minimal create pinning "
+                "the list order; 404s on get/patch/delete/restore of an "
+                "unknown album; 422s on a bodyless create and a null "
+                "name; catalog datetime.now() pinned for the session; no "
+                "workers started"
+            ),
+        )

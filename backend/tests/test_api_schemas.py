@@ -18,6 +18,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from photo_server.api_schemas import (
+    AlbumOut,
     AnalysisFaceOut,
     AnalysisResultOut,
     AnalysisStatusOut,
@@ -55,6 +56,7 @@ SEED = FIXTURES / "seed.json"
 PHASE1A = FIXTURES / "phase1a.json"
 PHASE1B = FIXTURES / "phase1b.json"
 PHASE2 = FIXTURES / "phase2.json"
+PHASE3A = FIXTURES / "phase3a.json"
 
 
 def normalize(value):
@@ -582,3 +584,87 @@ def test_upload_models_reject_forbidden_shapes():
     # legal: a batch can be observed in the deleting window, and the
     # frozen-wire model must accept it (decision 7).
     assert_round_trip(UploadBatchOut, {**accepting, "status": "deleting"})
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a: album models (all six album endpoints).
+# ---------------------------------------------------------------------------
+
+
+def phase3a_album_bodies() -> list[dict]:
+    """Every recorded body in the album-document shape: the 201 creates, the
+    200 patch/delete/restore responses, the single-album GETs, and every
+    item of every list response."""
+    if not PHASE3A.exists():
+        pytest.skip(f"golden fixture {PHASE3A.name} not recorded yet")
+    albums = []
+    for case in json.loads(PHASE3A.read_text())["cases"]:
+        body = case["body"]
+        if isinstance(body, dict) and "albumId" in body and "mutation" in body:
+            albums.append(body)
+        elif isinstance(body, list) and body and all(
+            isinstance(item, dict) and "albumId" in item and "mutation" in item
+            for item in body
+        ):
+            albums.extend(body)
+    return albums
+
+
+def test_album_model_round_trips():
+    """The model accepts every recorded album document and re-emits it
+    unchanged, with the exact key set the wire carries (extra="forbid"
+    would 500 on a key drift in either direction)."""
+    albums = phase3a_album_bodies()
+    assert albums, "no album documents recorded in the phase3a golden"
+    for album in albums:
+        instance = assert_round_trip(AlbumOut, album)
+        assert set(instance.model_dump(by_alias=True)) == set(album)
+        assert_round_trip(MutationOut, album["mutation"])
+        assert album["mutation"]["entityId"] == album["albumId"]
+    # The section exercises every album mutation action, both
+    # previousRevision spellings, and both deletedAt states.
+    actions = {album["mutation"]["action"] for album in albums}
+    assert actions == {"album.create", "album.patch", "album.delete", "album.restore"}
+    creates = [a for a in albums if a["mutation"]["action"] == "album.create"]
+    later = [a for a in albums if a["mutation"]["action"] != "album.create"]
+    assert creates and all(a["previousRevision"] is None for a in creates)
+    assert later and all(
+        isinstance(a["previousRevision"], int) and a["previousRevision"] >= 1 for a in later
+    )
+    stamped = [a for a in albums if a["deletedAt"] is not None]
+    assert stamped and all(a["mutation"]["action"] == "album.delete" for a in stamped)
+    assert any(a["deletedAt"] is None for a in albums)
+    # The change set carries exactly the album fields the client sent:
+    # the create/patch fields on those actions, nothing on delete/restore.
+    for album in albums:
+        action = album["mutation"]["action"]
+        if action in {"album.delete", "album.restore"}:
+            assert album["mutation"]["changes"] == {}
+        else:
+            assert set(album["mutation"]["changes"]) <= {"name", "description", "assetIds"}
+
+
+def test_album_model_rejects_forbidden_shapes():
+    albums = phase3a_album_bodies()
+    create = next(a for a in albums if a["mutation"]["action"] == "album.create")
+    deleted = next(a for a in albums if a["deletedAt"] is not None)
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "surprise": 1})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "revision": "1"})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "schemaVersion": 2})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "name": ""})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "name": "x" * 201})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({k: v for k, v in create.items() if k != "mutation"})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "previousRevision": 0})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**deleted, "deletedAt": 1})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "assetIds": ["not-a-uuid"]})
+    with pytest.raises(ValidationError):
+        AlbumOut.model_validate({**create, "mutation": {**create["mutation"], "action": "album.explode"}})

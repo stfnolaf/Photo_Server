@@ -1,0 +1,485 @@
+{
+  "cases": [
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048"
+        ],
+        "deletedAt": null,
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.create",
+          "changes": {
+            "assetIds": [
+              "00000000-0000-0000-0000-000000000047",
+              "00000000-0000-0000-0000-000000000048"
+            ],
+            "description": "Pinned holiday frames.",
+            "name": "Golden Trip"
+          },
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": null
+        },
+        "name": "Golden Trip",
+        "operationId": "c84ce7a4-abc1-57f1-8793-d8047d8c0774",
+        "previousRevision": null,
+        "revision": 1,
+        "schemaVersion": 1
+      },
+      "method": "POST",
+      "path": "/albums",
+      "status": 201
+    },
+    {
+      "body": [
+        {
+          "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "assetIds": [
+            "00000000-0000-0000-0000-000000000047",
+            "00000000-0000-0000-0000-000000000048"
+          ],
+          "deletedAt": null,
+          "description": "Pinned holiday frames.",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "mutation": {
+            "action": "album.create",
+            "changes": {
+              "assetIds": [
+                "00000000-0000-0000-0000-000000000047",
+                "00000000-0000-0000-0000-000000000048"
+              ],
+              "description": "Pinned holiday frames.",
+              "name": "Golden Trip"
+            },
+            "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+            "expectedRevision": null
+          },
+          "name": "Golden Trip",
+          "operationId": "c84ce7a4-abc1-57f1-8793-d8047d8c0774",
+          "previousRevision": null,
+          "revision": 1,
+          "schemaVersion": 1
+        }
+      ],
+      "method": "GET",
+      "path": "/albums",
+      "status": 200
+    },
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048"
+        ],
+        "deletedAt": null,
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.create",
+          "changes": {
+            "assetIds": [
+              "00000000-0000-0000-0000-000000000047",
+              "00000000-0000-0000-0000-000000000048"
+            ],
+            "description": "Pinned holiday frames.",
+            "name": "Golden Trip"
+          },
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": null
+        },
+        "name": "Golden Trip",
+        "operationId": "c84ce7a4-abc1-57f1-8793-d8047d8c0774",
+        "previousRevision": null,
+        "revision": 1,
+        "schemaVersion": 1
+      },
+      "method": "GET",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 200
+    },
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048"
+        ],
+        "deletedAt": null,
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.patch",
+          "changes": {
+            "name": "Golden Trip II"
+          },
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": 1
+        },
+        "name": "Golden Trip II",
+        "operationId": "399227ed-06d7-5655-bc0e-593e584f720d",
+        "previousRevision": 1,
+        "revision": 2,
+        "schemaVersion": 1
+      },
+      "method": "PATCH",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Revision changed; reload before editing"
+      },
+      "method": "PATCH",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 409
+    },
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048",
+          "00000000-0000-0000-0000-000000000049"
+        ],
+        "deletedAt": null,
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.patch",
+          "changes": {
+            "assetIds": [
+              "00000000-0000-0000-0000-000000000047",
+              "00000000-0000-0000-0000-000000000048",
+              "00000000-0000-0000-0000-000000000049"
+            ]
+          },
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": 2
+        },
+        "name": "Golden Trip II",
+        "operationId": "7c1015c0-4438-5bd7-a3c3-5bbc769dfa96",
+        "previousRevision": 2,
+        "revision": 3,
+        "schemaVersion": 1
+      },
+      "method": "PATCH",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Unhide asset before adding it to an album: 00000000-0000-0000-0000-00000000004a"
+      },
+      "method": "PATCH",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 409
+    },
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048",
+          "00000000-0000-0000-0000-000000000049"
+        ],
+        "deletedAt": "2025-03-01T00:00:00+00:00",
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.delete",
+          "changes": {},
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": 3
+        },
+        "name": "Golden Trip II",
+        "operationId": "501700da-660b-5ed4-a677-2b4bebe38d41",
+        "previousRevision": 3,
+        "revision": 4,
+        "schemaVersion": 1
+      },
+      "method": "DELETE",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 200
+    },
+    {
+      "body": [],
+      "method": "GET",
+      "path": "/albums",
+      "status": 200
+    },
+    {
+      "body": [
+        {
+          "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "assetIds": [
+            "00000000-0000-0000-0000-000000000047",
+            "00000000-0000-0000-0000-000000000048",
+            "00000000-0000-0000-0000-000000000049"
+          ],
+          "deletedAt": "2025-03-01T00:00:00+00:00",
+          "description": "Pinned holiday frames.",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "mutation": {
+            "action": "album.delete",
+            "changes": {},
+            "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+            "expectedRevision": 3
+          },
+          "name": "Golden Trip II",
+          "operationId": "501700da-660b-5ed4-a677-2b4bebe38d41",
+          "previousRevision": 3,
+          "revision": 4,
+          "schemaVersion": 1
+        }
+      ],
+      "method": "GET",
+      "path": "/albums?deleted=true",
+      "status": 200
+    },
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048",
+          "00000000-0000-0000-0000-000000000049"
+        ],
+        "deletedAt": null,
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.restore",
+          "changes": {},
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": null
+        },
+        "name": "Golden Trip II",
+        "operationId": "c9863b9b-e19b-543a-9543-484c990af1ae",
+        "previousRevision": 4,
+        "revision": 5,
+        "schemaVersion": 1
+      },
+      "method": "POST",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f/restore",
+      "status": 200
+    },
+    {
+      "body": [
+        {
+          "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "assetIds": [
+            "00000000-0000-0000-0000-000000000047",
+            "00000000-0000-0000-0000-000000000048",
+            "00000000-0000-0000-0000-000000000049"
+          ],
+          "deletedAt": null,
+          "description": "Pinned holiday frames.",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "mutation": {
+            "action": "album.restore",
+            "changes": {},
+            "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+            "expectedRevision": null
+          },
+          "name": "Golden Trip II",
+          "operationId": "c9863b9b-e19b-543a-9543-484c990af1ae",
+          "previousRevision": 4,
+          "revision": 5,
+          "schemaVersion": 1
+        }
+      ],
+      "method": "GET",
+      "path": "/albums",
+      "status": 200
+    },
+    {
+      "body": {
+        "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+        "assetIds": [
+          "00000000-0000-0000-0000-000000000047",
+          "00000000-0000-0000-0000-000000000048",
+          "00000000-0000-0000-0000-000000000049"
+        ],
+        "deletedAt": null,
+        "description": "Pinned holiday frames.",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.restore",
+          "changes": {},
+          "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "expectedRevision": null
+        },
+        "name": "Golden Trip II",
+        "operationId": "c9863b9b-e19b-543a-9543-484c990af1ae",
+        "previousRevision": 4,
+        "revision": 5,
+        "schemaVersion": 1
+      },
+      "method": "GET",
+      "path": "/albums/0f4a1813-1ad6-5525-89d6-9a837915d93f",
+      "status": 200
+    },
+    {
+      "body": [],
+      "method": "GET",
+      "path": "/albums?deleted=true",
+      "status": 200
+    },
+    {
+      "body": {
+        "albumId": "07bfa31f-a7ab-5ef6-9f29-4a6045dfe5ad",
+        "assetIds": [],
+        "deletedAt": null,
+        "description": "",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "mutation": {
+          "action": "album.create",
+          "changes": {
+            "name": "Second"
+          },
+          "entityId": "07bfa31f-a7ab-5ef6-9f29-4a6045dfe5ad",
+          "expectedRevision": null
+        },
+        "name": "Second",
+        "operationId": "a6c4ca33-990b-5603-8141-d4dcb5e304ad",
+        "previousRevision": null,
+        "revision": 1,
+        "schemaVersion": 1
+      },
+      "method": "POST",
+      "path": "/albums",
+      "status": 201
+    },
+    {
+      "body": [
+        {
+          "albumId": "07bfa31f-a7ab-5ef6-9f29-4a6045dfe5ad",
+          "assetIds": [],
+          "deletedAt": null,
+          "description": "",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "mutation": {
+            "action": "album.create",
+            "changes": {
+              "name": "Second"
+            },
+            "entityId": "07bfa31f-a7ab-5ef6-9f29-4a6045dfe5ad",
+            "expectedRevision": null
+          },
+          "name": "Second",
+          "operationId": "a6c4ca33-990b-5603-8141-d4dcb5e304ad",
+          "previousRevision": null,
+          "revision": 1,
+          "schemaVersion": 1
+        },
+        {
+          "albumId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+          "assetIds": [
+            "00000000-0000-0000-0000-000000000047",
+            "00000000-0000-0000-0000-000000000048",
+            "00000000-0000-0000-0000-000000000049"
+          ],
+          "deletedAt": null,
+          "description": "Pinned holiday frames.",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "mutation": {
+            "action": "album.restore",
+            "changes": {},
+            "entityId": "0f4a1813-1ad6-5525-89d6-9a837915d93f",
+            "expectedRevision": null
+          },
+          "name": "Golden Trip II",
+          "operationId": "c9863b9b-e19b-543a-9543-484c990af1ae",
+          "previousRevision": 4,
+          "revision": 5,
+          "schemaVersion": 1
+        }
+      ],
+      "method": "GET",
+      "path": "/albums",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Album not found"
+      },
+      "method": "GET",
+      "path": "/albums/66666666-6666-4666-8666-666666666666",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "PATCH",
+      "path": "/albums/66666666-6666-4666-8666-666666666666",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "DELETE",
+      "path": "/albums/66666666-6666-4666-8666-666666666666",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": "Requested item does not exist"
+      },
+      "method": "POST",
+      "path": "/albums/66666666-6666-4666-8666-666666666666/restore",
+      "status": 404
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": {},
+            "loc": [
+              "body",
+              "operationId"
+            ],
+            "msg": "Field required",
+            "type": "missing"
+          }
+        ]
+      },
+      "method": "POST",
+      "path": "/albums",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": {}
+            },
+            "input": {
+              "name": null,
+              "operationId": "d6706d36-f98d-5dea-84b5-6003fce06fb6"
+            },
+            "loc": [
+              "body"
+            ],
+            "msg": "Value error, Provide album fields; null is not allowed",
+            "type": "value_error"
+          }
+        ]
+      },
+      "method": "POST",
+      "path": "/albums",
+      "status": 422
+    }
+  ],
+  "description": "phase3a: album CRUD and restore on two pinned albums (ids derived from client-chosen operation ids): A walks create (with members) -> list -> get -> rename -> stale-revision 409 -> add third member -> add hidden asset 409 -> delete (pinned wall-clock deletedAt) -> deleted list -> restore; B is a minimal create pinning the list order; 404s on get/patch/delete/restore of an unknown album; 422s on a bodyless create and a null name; catalog datetime.now() pinned for the session; no workers started",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase3a"
+}

@@ -1,6 +1,6 @@
 """Typed response models for the read-only JSON endpoints (OpenAPI codegen,
 phases 1a-1b: asset browse/detail, then people reads; phase 2: upload and
-health endpoints).
+health endpoints; phase 3a: album CRUD and restore).
 
 These models describe exactly what the endpoints put on the wire: same key sets,
 same nullability, same nesting as the dict literals the handlers build today
@@ -105,7 +105,12 @@ class UserStateOut(ResponseModel):
 
 
 class MutationOut(ResponseModel):
-    """The last mutation applied to a v2 manifest document (models.py Mutation)."""
+    """The last mutation applied to a v2 manifest or album document
+    (models.py Mutation). ``entityId`` equals the owning asset/album id on
+    the wire (the source model's validator enforces it); ``expectedRevision``
+    is null when the client did not send one; ``changes`` is a genuinely
+    open object (UserState patch fields, EXIF metadata, album
+    name/description/membership)."""
 
     action: MUTATION_ACTIONS
     entity_id: UUID
@@ -520,3 +525,36 @@ class HealthOut(QueueCountsOut):
     uploads_waiting: StrictInt
     postgres_backup_key: StrictStr | None
     postgres_backup_at: StrictStr | None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a: albums (CRUD + restore).
+#
+# All six album operations return the committed album document: the
+# models.py Album DurableModel fields in declaration order plus the mutation
+# that produced the revision. ``album.document()`` always carries
+# ``mutation`` — the frontend's Album interface never declared it, but it is
+# part of the frozen wire, so the model keeps it (decision 7).
+# ---------------------------------------------------------------------------
+
+class AlbumOut(ResponseModel):
+    """A committed album document (models.py Album).
+
+    ``previousRevision`` is null on the first revision and the previous
+    revision number after that (catalog._apply_album); ``deletedAt`` is the
+    deletion's wall-clock ISO timestamp while the album is hidden and null
+    otherwise; ``assetIds`` is the membership in display order (the catalog
+    rejects duplicates and hidden additions at commit time).
+    """
+
+    schema_version: Literal[1]
+    library_id: UUID
+    album_id: UUID
+    revision: StrictInt = Field(ge=1, le=99999999)
+    previous_revision: StrictInt | None = Field(ge=1)
+    operation_id: UUID
+    mutation: MutationOut
+    name: StrictStr = Field(min_length=1, max_length=200)
+    description: StrictStr = Field(max_length=10000)
+    asset_ids: list[UUID] = Field(max_length=100000)
+    deleted_at: StrictStr | None

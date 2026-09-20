@@ -1,6 +1,99 @@
 {
   "components": {
     "schemas": {
+      "AlbumOut": {
+        "additionalProperties": false,
+        "description": "A committed album document (models.py Album).\n\n``previousRevision`` is null on the first revision and the previous\nrevision number after that (catalog._apply_album); ``deletedAt`` is the\ndeletion's wall-clock ISO timestamp while the album is hidden and null\notherwise; ``assetIds`` is the membership in display order (the catalog\nrejects duplicates and hidden additions at commit time).",
+        "properties": {
+          "albumId": {
+            "format": "uuid",
+            "title": "Albumid",
+            "type": "string"
+          },
+          "assetIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 100000,
+            "title": "Assetids",
+            "type": "array"
+          },
+          "deletedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletedat"
+          },
+          "description": {
+            "maxLength": 10000,
+            "title": "Description",
+            "type": "string"
+          },
+          "libraryId": {
+            "format": "uuid",
+            "title": "Libraryid",
+            "type": "string"
+          },
+          "mutation": {
+            "$ref": "#/components/schemas/MutationOut"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "operationId": {
+            "format": "uuid",
+            "title": "Operationid",
+            "type": "string"
+          },
+          "previousRevision": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previousrevision"
+          },
+          "revision": {
+            "maximum": 99999999.0,
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "libraryId",
+          "albumId",
+          "revision",
+          "previousRevision",
+          "operationId",
+          "mutation",
+          "name",
+          "description",
+          "assetIds",
+          "deletedAt"
+        ],
+        "title": "AlbumOut",
+        "type": "object"
+      },
       "AlbumPatch": {
         "additionalProperties": false,
         "properties": {
@@ -1286,7 +1379,7 @@
       },
       "MutationOut": {
         "additionalProperties": false,
-        "description": "The last mutation applied to a v2 manifest document (models.py Mutation).",
+        "description": "The last mutation applied to a v2 manifest or album document\n(models.py Mutation). ``entityId`` equals the owning asset/album id on\nthe wire (the source model's validator enforces it); ``expectedRevision``\nis null when the client did not send one; ``changes`` is a genuinely\nopen object (UserState patch fields, EXIF metadata, album\nname/description/membership).",
         "properties": {
           "action": {
             "enum": [
@@ -2469,7 +2562,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AlbumOut"
+                  },
+                  "title": "Response List Albums Albums Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2503,7 +2602,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AlbumOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -2524,6 +2625,7 @@
     },
     "/albums/{album_id}": {
       "delete": {
+        "description": "DELETE with a JSON request body (the durable-mutation journal\nprotocol): the body carries the client-chosen ``operationId`` and\noptionally ``expectedRevision``. Generated clients must send it\nexplicitly; a bodyless DELETE is rejected as 422.",
         "operationId": "trash_album_albums__album_id__delete",
         "parameters": [
           {
@@ -2551,7 +2653,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AlbumOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -2587,7 +2691,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AlbumOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -2633,7 +2739,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AlbumOut"
+                }
               }
             },
             "description": "Successful Response"
@@ -2681,7 +2789,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AlbumOut"
+                }
               }
             },
             "description": "Successful Response"

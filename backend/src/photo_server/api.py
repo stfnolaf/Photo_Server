@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from photo_server.api_schemas import (
+    AlbumOut,
     AssetDetailOut,
     AssetDocOut,
     BatchAbandonedOut,
@@ -450,11 +451,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.get("/albums")
+    @app.get("/albums", response_model=list[AlbumOut])
     def list_albums(deleted: bool = False):
         return service.catalog.list_albums(deleted)
 
-    @app.post("/albums", status_code=201)
+    @app.post("/albums", status_code=201, response_model=AlbumOut)
     def create_album(body: AlbumPatch):
         if body.name is None:
             raise HTTPException(422, "Provide an album name")
@@ -470,14 +471,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.get("/albums/{album_id}")
+    @app.get("/albums/{album_id}", response_model=AlbumOut)
     def get_album(album_id: UUID):
         album = service.catalog.get_album(str(album_id))
         if album is None:
             raise HTTPException(404, "Album not found")
         return album.document()
 
-    @app.patch("/albums/{album_id}")
+    @app.patch("/albums/{album_id}", response_model=AlbumOut)
     def update_album(album_id: UUID, body: AlbumPatch):
         return mutate(
             service,
@@ -490,8 +491,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.delete("/albums/{album_id}")
+    @app.delete("/albums/{album_id}", response_model=AlbumOut)
     def trash_album(album_id: UUID, body: OperationRequest):
+        """DELETE with a JSON request body (the durable-mutation journal
+        protocol): the body carries the client-chosen ``operationId`` and
+        optionally ``expectedRevision``. Generated clients must send it
+        explicitly; a bodyless DELETE is rejected as 422."""
         return mutate(
             service,
             body.operation_id,
@@ -502,7 +507,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.post("/albums/{album_id}/restore")
+    @app.post("/albums/{album_id}/restore", response_model=AlbumOut)
     def restore_album(album_id: UUID, body: OperationRequest):
         return mutate(
             service,
