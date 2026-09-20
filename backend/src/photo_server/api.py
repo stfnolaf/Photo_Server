@@ -18,6 +18,12 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
+from photo_server.api_schemas import (
+    AssetDetailOut,
+    AssetDocOut,
+    BrowsePageOut,
+    BurstDetailOut,
+)
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
 from photo_server.metadata import technical_fields
@@ -223,13 +229,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def upload_queue():
         return {**service.catalog.queue_counts(), **upload_gate.status()}
 
-    @app.get("/assets")
+    @app.get("/assets", response_model=list[AssetDocOut])
     def list_assets(
         limit: int = Query(default=100, ge=1, le=1000), offset: int = Query(default=0, ge=0)
     ):
         return service.catalog.list_assets(limit, offset)
 
-    @app.get("/library/assets")
+    @app.get("/library/assets", response_model=BrowsePageOut)
     def browse_assets(query: Annotated[BrowseQuery, Query()]):
         try:
             return service.catalog.browse(query)
@@ -242,7 +248,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Asset not found")
         return manifest
 
-    @app.get("/assets/{asset_id}")
+    @app.get("/assets/{asset_id}", response_model=AssetDetailOut)
     def get_asset(asset_id: UUID):
         manifest = find(asset_id)
         return {
@@ -413,7 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.get("/assets/{asset_id}/burst")
+    @app.get("/assets/{asset_id}/burst", response_model=BurstDetailOut)
     def get_asset_burst(asset_id: UUID):
         find(asset_id)
         detail = service.catalog.burst_detail(str(asset_id))

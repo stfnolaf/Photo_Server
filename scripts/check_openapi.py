@@ -10,10 +10,11 @@ CI failure instead of a silent contract divergence.
 With --strict-coverage it additionally fails if any JSON operation still
 declares the empty response schema FastAPI emits for untyped operations
 (content: {"application/json": {"schema": {}}}). A covered response is a
-`$ref` or an object schema with `properties`. The flag is wired into CI in the
-phase that lands the last response models (plan Phase 4) so that from then on
-any new untyped endpoint breaks the build; until then the flag exists but is
-opt-in.
+`$ref`, an object schema with `properties`, or a composite (`anyOf`/`oneOf`)
+schema — the latter is how discriminated unions (typed model variants selected
+by a discriminator) are emitted. The flag is wired into CI in the phase that
+lands the last response models (plan Phase 4) so that from then on any new
+untyped endpoint breaks the build; until then the flag exists but is opt-in.
 
 No services are contacted (see dump_openapi.py).
 """
@@ -33,6 +34,7 @@ HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 def _uncovered_json_responses(spec: dict) -> list[str]:
     """List `METHOD /path -> status` responses whose JSON schema is the empty
     schema FastAPI emits for untyped operations."""
+    covered_keys = ("$ref", "properties", "anyOf", "oneOf")
     uncovered = []
     for path, item in sorted(spec.get("paths", {}).items()):
         for method, operation in item.items():
@@ -45,7 +47,7 @@ def _uncovered_json_responses(spec: dict) -> list[str]:
                 if media is None:
                     continue
                 schema = media.get("schema") or {}
-                if schema and ("$ref" in schema or "properties" in schema):
+                if schema and any(key in schema for key in covered_keys):
                     continue
                 uncovered.append(f"{method.upper()} {path} -> {status}")
     return uncovered

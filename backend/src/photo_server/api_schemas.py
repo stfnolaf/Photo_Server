@@ -1,0 +1,300 @@
+"""Typed response models for the read-only JSON endpoints (OpenAPI codegen, phase 1a).
+
+These models describe exactly what the endpoints put on the wire: same key sets,
+same nullability, same nesting as the dict literals the handlers build today
+(the golden fixtures in tests/test_api_contract.py are the proof obligation).
+They carry no business logic; all values arrive pre-computed from the catalog.
+
+Design rules (plan decisions 3 and 7):
+- ``extra="forbid"``: an unexpected key is a contract break and fails loud
+  (500) instead of being silently dropped or passed through.
+- Field types are strict primitives (``StrictInt``/``StrictStr``/...) so
+  validation can never rewrite a wire value; ``UUID`` fields stay lax because
+  str -> UUID -> str round-trips stably and the JSON body is always text.
+- The asset manifest document exists in two schema versions (the v1 document
+  has exactly 11 keys; v2 adds ``userState``/``deletedAt`` and a non-null
+  ``mutation``). A single flat model cannot express both without adding or
+  dropping keys, so the doc types are a discriminated union on
+  ``schema_version``: one variant per version, each ``extra="forbid"``.
+- ``dict[str, Any]`` is used only for genuinely open fields (EXIF ``metadata``,
+  derived ``technical``, ``Mutation.changes``); the container itself is enforced.
+
+The OpenAPI spec emitted from these models is the source of truth for client
+code generation; the golden fixtures pin the wire bytes.
+"""
+
+from typing import Annotated, Any, Literal, Union
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr
+from pydantic.alias_generators import to_camel
+
+# The 12 semantic photo classes the VLM reports (analysis.py SemanticAnalysis).
+PHOTO_TYPES = Literal[
+    "portrait",
+    "group",
+    "street",
+    "travel",
+    "landscape",
+    "wildlife",
+    "architecture",
+    "event",
+    "food",
+    "document",
+    "screenshot",
+    "other",
+]
+
+# The 10 mutation actions a manifest can carry (models.py Mutation).
+MUTATION_ACTIONS = Literal[
+    "asset.patch",
+    "asset.delete",
+    "asset.restore",
+    "asset.migrate",
+    "asset.metadata",
+    "album.create",
+    "album.patch",
+    "album.delete",
+    "album.restore",
+    "burst.setRepresentative",
+]
+
+
+class ResponseModel(BaseModel):
+    """Base class for all response models.
+
+    camelCase on the wire (matching the hand-built dict literals), strict
+    primitives, and ``extra="forbid"`` so any key drift fails loud.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+
+class LocationOut(ResponseModel):
+    """A location tag: a name plus an optional lat/long pair (models.py Location)."""
+
+    name: StrictStr
+    latitude: StrictFloat | None = Field(
+        default=None, ge=-90, le=90, allow_inf_nan=False, description="Degrees north."
+    )
+    longitude: StrictFloat | None = Field(
+        default=None, ge=-180, le=180, allow_inf_nan=False, description="Degrees east."
+    )
+
+
+class UserStateOut(ResponseModel):
+    """User-edited state for one asset (models.py UserState)."""
+
+    rating: StrictInt = Field(ge=0, le=5, description="0-5 star rating.")
+    favorite: StrictBool
+    caption: StrictStr
+    keywords: list[StrictStr]
+    location: LocationOut | None
+
+
+class MutationOut(ResponseModel):
+    """The last mutation applied to a v2 manifest document (models.py Mutation)."""
+
+    action: MUTATION_ACTIONS
+    entity_id: UUID
+    changes: dict[str, Any]
+    expected_revision: StrictInt | None = Field(default=None, ge=1)
+
+
+class BlobOut(ResponseModel):
+    """One blob reference inside a manifest document (models.py Blob)."""
+
+    blob_id: UUID
+    role: Literal["ORIGINAL_RAW", "ORIGINAL_JPEG", "ORIGINAL_HEIF", "SIDECAR"]
+    original_filename: StrictStr
+    object_key: StrictStr
+    sha256: StrictStr = Field(pattern=r"^[0-9a-f]{64}$", description="Hex SHA-256.")
+    size_bytes: StrictInt = Field(gt=0)
+    mime_type: StrictStr
+
+
+class PreviewStatusOut(ResponseModel):
+    """Derivative (preview/thumbnail) job state for one asset (catalog.preview_status)."""
+
+    status: Literal["missing", "pending", "running", "ready", "failed", "unavailable"]
+    error: StrictStr | None
+
+
+class ProcessingStatusOut(ResponseModel):
+    """One reprocessing stage job (catalog.processing_status entries).
+
+    ``job_type`` is the one snake_case key in an otherwise camelCase API:
+    the catalog copies the database row mapping verbatim, and the goldens
+    pin it, so the alias overrides the camelCase generator.
+    """
+
+    job_type: StrictStr = Field(alias="job_type")
+    status: StrictStr
+    attempts: StrictInt
+    error: StrictStr | None
+
+
+class AnalysisObjectOut(ResponseModel):
+    """One detected object in a semantic analysis (analysis.py DetectedObject)."""
+
+    name: StrictStr
+    count: StrictInt = Field(ge=1)
+
+
+class AnalysisFaceOut(ResponseModel):
+    """One detected face, as exposed in the analysis status (catalog.analysis_status)."""
+
+    face_index: StrictInt
+    box: list[StrictFloat] = Field(description="Normalized [x0, y0, x1, y1].")
+    confidence: StrictFloat
+    person_id: UUID
+    person_name: StrictStr | None
+
+
+class AnalysisResultOut(ResponseModel):
+    """The stored public analysis result (analysis_runs.result jsonb).
+
+    This is exactly what the AI worker writes: the semantic document fields
+    plus ``faceCount`` and ``personCount``.
+    """
+
+    summary: StrictStr
+    photoTypes: list[PHOTO_TYPES]
+    scene: StrictStr
+    setting: Literal["indoor", "outdoor", "mixed", "unknown"]
+    objects: list[AnalysisObjectOut]
+    activities: list[StrictStr]
+    tags: list[StrictStr]
+    visibleText: list[StrictStr]
+    faceCount: StrictInt
+    personCount: StrictInt
+
+
+class AnalysisStatusOut(ResponseModel):
+    """AI analysis job + latest run for one asset (catalog.analysis_status)."""
+
+    status: Literal["missing", "pending", "running", "ready", "failed"]
+    attempts: StrictInt
+    error: StrictStr | None
+    run_id: UUID | None
+    model: StrictStr | None
+    model_version: StrictStr | None
+    pipeline_version: StrictStr | None
+    analyzed_at: StrictStr | None = Field(description="ISO-8601 timestamp of the current run.")
+    artifact_key: StrictStr | None = Field(description="S3 key of the full analysis artifact.")
+    result: AnalysisResultOut | None
+    faces: list[AnalysisFaceOut]
+
+
+class AssetDocV1Out(ResponseModel):
+    """A v1 manifest document: exactly the 11 keys the v1 writer emits.
+
+    v1 documents have ``revision`` fixed at 1, ``previousRevision`` null, and
+    no ``userState``/``deletedAt``/``mutation`` keys at all.
+    """
+
+    schema_version: Literal[1]
+    library_id: UUID
+    asset_id: UUID
+    revision: Literal[1]
+    previous_revision: None
+    operation_id: UUID
+    primary_blob_id: UUID
+    blobs: list[BlobOut] = Field(min_length=1)
+    imported_at: StrictStr
+    capture_time: StrictStr | None
+    metadata: dict[str, Any]
+
+
+class AssetDocV2Out(AssetDocV1Out):
+    """A v2 manifest document: v1 fields plus user state and mutation ancestry."""
+
+    schema_version: Literal[2]
+    revision: StrictInt
+    previous_revision: StrictInt
+    user_state: UserStateOut
+    deleted_at: StrictStr | None
+    mutation: MutationOut
+
+
+# The asset document as exposed by GET /assets: one variant per schema
+# version, selected by the ``schemaVersion`` discriminator.
+AssetDocOut = Annotated[Union[AssetDocV1Out, AssetDocV2Out], Field(discriminator="schema_version")]
+
+
+class PhotoSummaryOut(ResponseModel):
+    """One browse row (browsing.asset_summary): the compact card data."""
+
+    asset_id: UUID
+    original_filename: StrictStr
+    media_type: Literal["RAW", "JPEG", "HEIF"]
+    timeline_time: StrictStr
+    date_source: Literal["capture", "import"]
+    capture_time: StrictStr | None
+    imported_at: StrictStr
+    width: StrictInt | None
+    height: StrictInt | None
+    camera_make: StrictStr | None
+    camera_model: StrictStr | None
+    lens: StrictStr | None
+    technical: dict[str, Any]
+    size_bytes: StrictInt
+    rating: StrictInt
+    favorite: StrictBool
+    caption: StrictStr
+    deleted_at: StrictStr | None
+    revision: StrictInt
+    burst_id: UUID | None
+    burst_size: StrictInt | None
+    burst_representative_asset_id: UUID | None
+    preview: PreviewStatusOut
+    thumbnail_url: StrictStr | None
+    preview_url: StrictStr | None
+
+
+class BrowsePageOut(ResponseModel):
+    """One page of GET /library/assets (catalog.browse)."""
+
+    items: list[PhotoSummaryOut]
+    total: StrictInt
+    next_cursor: StrictStr | None = Field(
+        description="Opaque cursor for the next page; null when exhausted."
+    )
+
+
+class BurstDetailOut(ResponseModel):
+    """A burst cluster and its frames (catalog.burst_detail)."""
+
+    burst_id: UUID
+    representative_asset_id: UUID
+    frames: list[PhotoSummaryOut]
+
+
+class AssetDetailV1Out(AssetDocV1Out):
+    """GET /assets/{id} for a v1 document: the document plus derived blocks."""
+
+    technical: dict[str, Any]
+    processing: list[ProcessingStatusOut]
+    analysis: AnalysisStatusOut
+    preview: PreviewStatusOut
+    user_state: UserStateOut
+
+
+class AssetDetailV2Out(AssetDocV2Out):
+    """GET /assets/{id} for a v2 document: the document plus derived blocks.
+
+    ``userState`` is inherited from the document variant; the endpoint
+    overwrites it with the same (column-synced) values.
+    """
+
+    technical: dict[str, Any]
+    processing: list[ProcessingStatusOut]
+    analysis: AnalysisStatusOut
+    preview: PreviewStatusOut
+
+
+# The asset detail as exposed by GET /assets/{id}: one variant per schema
+# version, selected by the ``schemaVersion`` discriminator.
+AssetDetailOut = Annotated[
+    Union[AssetDetailV1Out, AssetDetailV2Out], Field(discriminator="schema_version")
+]

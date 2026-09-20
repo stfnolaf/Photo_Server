@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
 
@@ -56,11 +57,22 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg import sql
+from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.engine import make_url
 
 from photo_server.api import create_app
+from photo_server.browsing import BrowseQuery
+from photo_server.catalog import (
+    analysis_runs,
+    assets,
+    burst_clusters,
+    burst_members,
+    faces,
+    jobs,
+    people,
+)
 from photo_server.config import Settings
-from photo_server.models import Blob, Manifest
+from photo_server.models import Blob, Manifest, Mutation
 from photo_server.service import Service
 from photo_server.storage import Storage, canonical_json
 
@@ -154,6 +166,7 @@ def pinned_catalog_fixture(
     name=None,
     media="JPEG",
     camera="SONY",
+    extra_metadata=None,
 ):
     """Tiny durable synthetic record with every id pinned from ``number``.
 
@@ -174,6 +187,9 @@ def pinned_catalog_fixture(
         size_bytes=100,
         mime_type="image/jpeg",
     )
+    metadata = {"Make": camera, "Model": "Camera", "LensModel": "35mm Prime"}
+    if extra_metadata:
+        metadata.update(extra_metadata)
     manifest = Manifest(
         library_id=service.library_id,
         asset_id=asset_id,
@@ -182,7 +198,7 @@ def pinned_catalog_fixture(
         blobs=[blob],
         imported_at=imported,
         capture_time=capture,
-        metadata={"Make": camera, "Model": "Camera", "LensModel": "35mm Prime"},
+        metadata=metadata,
     )
     service.storage.put(blob.object_key, str(number).encode().ljust(100, b"0"), "image/jpeg")
     service.catalog.apply(manifest)
@@ -290,5 +306,263 @@ def test_seed(backend):
             "no capture time); GET /assets, GET /library/assets (full page and a limit=2 "
             "page carrying a cursor), GET /assets/{id}, GET /health, 404 unknown asset, "
             "422 invalid BrowseQuery (limit=0)"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1a: response_model types for the four asset-read endpoints
+# (GET /assets, GET /assets/{id}, GET /library/assets, GET /assets/{id}/burst).
+# ---------------------------------------------------------------------------
+
+PHASE1A_TECHNICAL = {
+    "ImageWidth": 4000,
+    "ImageHeight": 3000,
+    "FNumber": 2.8,
+    "FocalLength": 50.0,
+    "FocalLengthIn35mmFormat": 50.0,
+    "ISO": 100,
+    "ExposureTime": "1/250",
+    "ShutterSpeed": "1/250",
+    "ExposureCompensation": 0,
+    "ExposureProgram": "Manual",
+    "MeteringMode": "Spot",
+    "Flash": "auto",
+    "WhiteBalance": "Auto",
+}
+
+PHASE1A_ANALYSIS_RESULT = {
+    "summary": "A calm river at golden hour.",
+    "photoTypes": ["landscape", "travel"],
+    "scene": "riverside",
+    "setting": "outdoor",
+    "objects": [{"name": "river", "count": 1}, {"name": "tree", "count": 3}],
+    "activities": ["walking"],
+    "tags": ["golden", "river", "evening"],
+    "visibleText": [],
+    "faceCount": 1,
+    "personCount": 1,
+}
+
+
+def seed_phase_1a(service) -> dict:
+    """Seed the phase 1a scenario and return the pinned asset id per number.
+
+    Shapes covered: a three-frame burst (cluster seeded directly), a v2
+    user-state edit (asset 13), a completed AI analysis with a face and a
+    person (asset 13), preview jobs in every status (10 pending, 11 running,
+    12 ready, 13 failed, 14 missing, 15 unavailable, 16 pending), a failed
+    metadata stage (asset 14), every analysis status (10/11/12/16 pending,
+    13 ready, 14 failed, 15 missing), and a hidden v2 asset (16).
+    """
+    spec = {
+        10: ("2024-05-01T00:10:00+08:00", "JPEG", "Canon", {}),
+        11: ("2024-05-01T00:10:00+08:00", "JPEG", "Canon", {}),
+        12: ("2024-05-01T00:10:01+08:00", "JPEG", "Canon", {}),
+        13: ("2024-05-02T09:30:00-08:00", "JPEG", "Sony", PHASE1A_TECHNICAL),
+        14: (None, "HEIF", "Apple", {}),
+        15: ("2024-05-03T18:00:00Z", "RAW", "Nikon", {}),
+        16: ("2024-05-04T12:00:00+05:30", "JPEG", "Fujifilm", {}),
+    }
+    made = {
+        number: pinned_catalog_fixture(
+            service, number, capture, media=media, camera=camera, extra_metadata=extra
+        )
+        for number, (capture, media, camera, extra) in spec.items()
+    }
+    asset_ids = {number: str(manifest.asset_id) for number, manifest in made.items()}
+
+    with service.catalog.engine.begin() as connection:
+        # Burst cluster: frame 11 is the representative.
+        cluster_id = str(uuid5(GOLDEN_NAMESPACE, "burst-phase1a"))
+        connection.execute(
+            insert(burst_clusters).values(
+                id=cluster_id,
+                representative_asset_id=asset_ids[11],
+                policy_version="burst-cluster-v1",
+                created_at=datetime.fromisoformat("2025-01-02T12:00:00+00:00"),
+            )
+        )
+        for number in (10, 11, 12):
+            connection.execute(
+                insert(burst_members).values(cluster_id=cluster_id, asset_id=asset_ids[number])
+            )
+
+    # v2 user-state edit on asset 13 (rating/favorite/caption/keywords/location).
+    service.catalog.commit_mutation(
+        uuid5(GOLDEN_NAMESPACE, "phase1a-operation-13"),
+        Mutation(
+            action="asset.patch",
+            entity_id=made[13].asset_id,
+            changes={
+                "rating": 4,
+                "favorite": True,
+                "caption": "Golden hour by the river",
+                "keywords": ["golden", "river"],
+                "location": {"name": "Riverside Park", "latitude": 47.6062, "longitude": -122.3321},
+            },
+        ),
+    )
+
+    # Hide asset 16, then pin the wall-clock deletedAt stamp the mutation
+    # writes so the recorded bytes are stable across runs.
+    service.catalog.commit_mutation(
+        uuid5(GOLDEN_NAMESPACE, "phase1a-operation-16"),
+        Mutation(action="asset.delete", entity_id=made[16].asset_id, changes={}),
+    )
+    pinned_deleted_at = "2025-02-01T00:00:00+00:00"
+    with service.catalog.engine.begin() as connection:
+        document = (
+            connection.execute(
+                select(assets.c.manifest).where(assets.c.id == asset_ids[16])
+            )
+            .scalar_one()
+        )
+        document["deletedAt"] = pinned_deleted_at
+        connection.execute(
+            update(assets)
+            .where(assets.c.id == asset_ids[16])
+            .values(deleted_at=pinned_deleted_at, manifest=document)
+        )
+
+    with service.catalog.engine.begin() as connection:
+        # Preview jobs in every status.
+        for number, (status, error) in {
+            11: ("running", None),
+            12: ("ready", None),
+            13: ("failed", "Decoder failure"),
+            15: ("unavailable", "No embedded preview available"),
+        }.items():
+            connection.execute(
+                update(jobs)
+                .where(and_(jobs.c.asset_id == asset_ids[number], jobs.c.job_type == "preview-v1"))
+                .values(status=status, attempts=1, error=error)
+            )
+        # 14 has no preview job row at all -> status "missing".
+        connection.execute(
+            delete(jobs).where(
+                and_(jobs.c.asset_id == asset_ids[14], jobs.c.job_type == "preview-v1")
+            )
+        )
+        # Asset 14's metadata stage failed; asset 15 has no AI job row
+        # at all -> analysis status "missing"; asset 14's AI job failed.
+        connection.execute(
+            update(jobs)
+            .where(and_(jobs.c.asset_id == asset_ids[14], jobs.c.job_type == "metadata-v1"))
+            .values(status="failed", attempts=1, error="exiftool not found")
+        )
+        connection.execute(
+            delete(jobs).where(
+                and_(jobs.c.asset_id == asset_ids[15], jobs.c.job_type == "ai-v1")
+            )
+        )
+        connection.execute(
+            update(jobs)
+            .where(and_(jobs.c.asset_id == asset_ids[14], jobs.c.job_type == "ai-v1"))
+            .values(status="failed", attempts=1, error="simulated AI failure")
+        )
+        # Asset 13: a completed AI analysis with one face and one person.
+        person_id = str(uuid5(GOLDEN_NAMESPACE, "phase1a-person-1"))
+        run_id = str(uuid5(GOLDEN_NAMESPACE, "phase1a-run-13"))
+        connection.execute(
+            insert(people).values(
+                id=person_id,
+                display_name="Avery",
+                created_at=datetime.fromisoformat("2025-01-02T12:00:00+00:00"),
+            )
+        )
+        connection.execute(
+            insert(analysis_runs).values(
+                id=run_id,
+                asset_id=asset_ids[13],
+                analysis_type="photo-ai",
+                model_name="stub-vlm",
+                model_version="stub-digest-1",
+                pipeline_version="photo-ai-v1",
+                input_hash=made[13].primary.sha256,
+                object_key=f"analysis/{asset_ids[13]}/photo-ai-v1/{run_id}.json",
+                result=PHASE1A_ANALYSIS_RESULT,
+                searchable_text=(
+                    "A calm river at golden hour. landscape travel riverside outdoor "
+                    "river tree walking golden river evening"
+                ),
+                is_current=True,
+                semantic_origin="computed",
+                created_at=datetime.fromisoformat("2025-01-05T08:30:00+00:00"),
+            )
+        )
+        connection.execute(
+            insert(faces).values(
+                id=str(uuid5(GOLDEN_NAMESPACE, "phase1a-face-13-0")),
+                asset_id=asset_ids[13],
+                analysis_run_id=run_id,
+                person_id=person_id,
+                face_index=0,
+                bounding_box=[0.1, 0.2, 0.3, 0.4],
+                confidence=0.9,
+                embedding=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+            )
+        )
+        connection.execute(
+            update(jobs)
+            .where(and_(jobs.c.asset_id == asset_ids[13], jobs.c.job_type == "ai-v1"))
+            .values(status="ready", attempts=1, error=None)
+        )
+
+    return made
+
+
+def test_phase_1a(backend):
+    """Phase 1a: the four asset-read endpoints typed with response_model.
+
+    The request list exercises every shape the phase 1a models declare:
+    both document schema versions, every preview/analysis status, the burst
+    detail, cursor paging, each browse filter, and the 404/422 error cases.
+    The AI worker service is never started; the analysis state is seeded.
+    """
+    service = backend.service
+    made = seed_phase_1a(service)
+    ids = {number: str(manifest.asset_id) for number, manifest in made.items()}
+
+    # The page-2 cursor derives from the exact page-1 boundary row (asset 15,
+    # the newest-first ordering); the cursor is a pure function of the query
+    # and that row, so it is computed here rather than read from the response.
+    cursor = BrowseQuery(limit=2).encode_cursor(
+        {"timeline_at": datetime(2024, 5, 3, 18, 0, 0), "id": ids[15]}
+    )
+
+    run_sequence(
+        backend,
+        "phase1a",
+        [
+            ("GET", "/assets"),
+            ("GET", "/assets?limit=3&offset=3"),
+            ("GET", f"/assets/{ids[10]}"),
+            ("GET", f"/assets/{ids[13]}"),
+            ("GET", f"/assets/{ids[14]}"),
+            ("GET", f"/assets/{ids[15]}"),
+            ("GET", f"/assets/{ids[16]}"),
+            ("GET", f"/assets/{ids[11]}/burst"),
+            ("GET", f"/assets/{ids[14]}/burst"),
+            ("GET", "/library/assets"),
+            ("GET", "/library/assets?limit=2"),
+            ("GET", f"/library/assets?limit=2&cursor={cursor}"),
+            ("GET", "/library/assets?media_type=RAW"),
+            ("GET", "/library/assets?date_from=2024-05-01&date_to=2024-05-01"),
+            ("GET", "/library/assets?q=river"),
+            ("GET", "/library/assets?rating_min=4&favorite=true"),
+            ("GET", "/library/assets?deleted=true"),
+            ("GET", "/library/assets?date_from=2024-06-01&date_to=2024-05-01"),
+            ("GET", f"/assets/{UNKNOWN_ASSET_ID}"),
+        ],
+        describe=(
+            "phase1a: seven pinned assets covering a three-frame burst, a v2 "
+            "user-state edit, a completed AI analysis (run + face + person), a "
+            "hidden asset, preview jobs in every status, a failed metadata "
+            "stage, and every analysis status; GET /assets (full and "
+            "paginated), an asset detail for each shape, the burst detail and a "
+            "404 for an asset with no burst, browse pages (full, limit=2 with a "
+            "pinned cursor, media_type, date window, q, rating_min+favorite, "
+            "deleted), a 422 on an inverted date range, and a 404 unknown asset"
         ),
     )
