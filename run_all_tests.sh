@@ -28,8 +28,6 @@
 #   3. Backend tests: unit + integration + AI-worker e2e   (PHOTO_RUN_INTEGRATION=1)
 #   4. Frontend typecheck (tsc) + unit tests (vitest) + API codegen check:api
 #      (skipped if node/npm missing)
-#   5. Backend API codegen drift (openapi-python check:api)  (no services needed;
-#      self-contained via npm ci from the committed lockfile; skipped if npm missing)
 #
 # Exit code: 0 if every recorded section passed (or was skipped), 1 if any failed,
 #            2 if the environment is unusable (e.g. venv missing).
@@ -269,45 +267,6 @@ else
   record "frontend-typecheck" "SKIP"
   record "frontend-tests" "SKIP"
   record "frontend-api-codegen" "SKIP"
-  log
-fi
-
-# --- Section 5: Backend API codegen drift (openapi-python) -------------------
-# The backend's Python client models are committed generated output
-# (backend/src/photo_server/generated, docs/openapi-codegen-plan.md Phase 6),
-# produced by @hey-api/openapi-python from the checked-in spec — the same
-# generator family as the web client. Regenerate into a temp dir and diff.
-# No services are contacted; the input is the checked-in spec. `npm ci` runs
-# first (committed lockfile) so this section is self-contained on a fresh
-# checkout, mirroring how `run_all_tests.sh` verifies the whole chain in one
-# pass.
-log "==================================================================="
-log " SECTION 5: Backend API codegen (openapi-python check:api)"
-log "==================================================================="
-BE_DIR="$ROOT/backend"
-if command -v npm >/dev/null 2>&1 && [ -d "$BE_DIR" ]; then
-  run_capture bash -c "cd '$BE_DIR' && npm ci --no-audit --no-fund"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    log "RESULT: Backend codegen deps (npm ci) -> FAIL (exit $rc)"
-    record "backend-codegen" "FAIL"
-  else
-    # Regenerate the OpenAPI Python client into a temp dir and diff it
-    # against the committed src/photo_server/generated.
-    run_capture bash -c "cd '$BE_DIR' && npm run check:api"
-    rc=$?
-    if [ "$rc" -eq 0 ]; then
-      log "RESULT: Backend generated client (openapi-python check:api) -> PASS"
-      record "backend-codegen" "PASS"
-    else
-      log "RESULT: Backend generated client (openapi-python check:api) -> FAIL (exit $rc)"
-      record "backend-codegen" "FAIL"
-    fi
-  fi
-  log
-else
-  log "npm not available or $BE_DIR missing — skipping backend codegen check"
-  record "backend-codegen" "SKIP"
   log
 fi
 

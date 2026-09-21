@@ -945,34 +945,35 @@ manual smoke passes.
   an empty query string. The request *line* differs by that one byte; the
   query string is empty in both cases, so no key, value, or decoded
   parameter changes — noted for the "no wire change" audit only.
-- **Phase 6: the Python client's drift check needs a second config file.**
-  The generator's `-o <path>` CLI flag replaces the whole `output` config
-  object (its `getOutput()` then keeps only `{path}`, dropping
-  `pythonVersion` and falling back to the 3.9 defaults, which changes the
-  emitted style — `Optional`/`Union`/`(str, Enum)` vs `| None`/`StrEnum`)
-  and would fail every byte-diff. `check:api` therefore runs
-  `openapi-python -f openapi-python.check.ts` (identical to
-  `openapi-python.config.ts` except the output path points at a throwaway
-  `node_modules/` dir) instead of using `-o`. Related pitfall found while
-  testing this: `--dry-run` performs the output-dir *clean* before skipping
-  the writes, so a bare `openapi-python --dry-run` deletes the committed
-  `src/photo_server/generated` tree (it happened once in this phase; the
-  warning now lives in the config file's comments).
-- **Phase 6: `run_all_tests.sh` gained Section 5 instead of pure
-  verification.** The phase text expected only the existing spec-drift and
-  frontend `check:api` sections to be re-verified; in reality no backend
-  codegen drift check existed, so Section 5 adds
-  `openapi-python check:api` (self-contained: `npm ci` from the committed
-  lockfile, then regenerate-into-temp + `diff -r`), mirroring Section 4.
-  `upload_client.py` validates its outgoing declaration and every
-  describe/receipt/seal/poll response through `generated/pydantic_gen`
-  (a contract violation is a `RuntimeError`, not a `KeyError`), while the
-  transport stays hand-written httpx because the 0.0.24 `Sdk` stubs take
-  no parameters. The generated *request* models ship without
-  `populate_by_name` (generator config is inconsistent between request and
-  response models), so the CLI validates the hand-built wire dict with
-  `model_validate` and sends that same dict — request bytes unchanged.
-  The optional polish items were already resolved: face-thumbnail's 202
-  branch shares `derivative_responses()` (`Pending202Out`) since Phase 4,
-  and no `GET /assets` consumer exists yet, so `AssetListOut` stays
-  deferred until one appears.
+- **Phase 6: the CLI validates through the server's own models; no Python
+  codegen in the backend.** The phase text offered two options (generate a
+  Python SDK with `@hey-api/openapi-python`, or at minimum validate with
+  the server's models) and the implementation started from the generator —
+  then the design was re-examined and the generated toolchain removed. The
+  CLI lives in the server's package, so regenerating its models from the
+  spec was a lossy round trip of models that already exist: the generated
+  request models shipped without `populate_by_name` (generator config is
+  inconsistent between request and response models), the 0.0.24 `Sdk`
+  stubs take no parameters, and the node toolchain brought two generator
+  footguns — the `-o <path>` CLI flag replaces the whole `output` config
+  object (dropping `pythonVersion`, changing the emitted style), and
+  `--dry-run` performs the output-dir clean (a bare dry run deleted the
+  committed tree once). Both footguns would warrant an upstream issue to
+  `@hey-api/openapi-python` if that tool is ever used here again. The CLI
+  now imports `photo_server.api_schemas` directly: the upload request
+  models (`UploadBatchRequest`, `UploadFileDeclaration`) moved there from
+  `api.py` so the module is the single Python representation of the spec,
+  the outgoing declaration is built by constructing those models (the
+  construction is the validation; the JSON dump is what is sent) and every
+  response is validated through the same classes the routes use — a
+  contract violation is a `RuntimeError`, not a `KeyError`.
+  `run_all_tests.sh` lost its Section 5; the only codegen drift check left
+  is the web client's (Section 4), which the phase's one-pass verification
+  still covers. Codegen stays for consumers that cannot share the server's
+  code — currently, only the web app. If the CLI ever becomes a standalone
+  shippable artifact (installed where the server package is not), a
+  generated SDK is the right surface again, and this record is the design
+  rationale for that re-add. The optional polish items were already
+  resolved: face-thumbnail's 202 branch shares `derivative_responses()`
+  (`Pending202Out`) since Phase 4, and no `GET /assets` consumer exists
+  yet, so `AssetListOut` stays deferred until one appears.

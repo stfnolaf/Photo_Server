@@ -1,4 +1,4 @@
-"""Typed response models for the JSON endpoints (OpenAPI codegen,
+"""Typed request and response models for the JSON endpoints (OpenAPI codegen,
 phases 1a-1b: asset browse/detail, then people reads; phase 2: upload and
 health endpoints; phase 3a: album CRUD and restore; phase 3b: asset
 mutations and queue operations; phase 4: people/face operation results and
@@ -40,6 +40,13 @@ Design rules (plan decisions 3 and 7):
 
 The OpenAPI spec emitted from these models is the source of truth for client
 code generation; the golden fixtures pin the wire bytes.
+
+The upload request models (``UploadFileDeclaration``, ``UploadBatchRequest``)
+live here with the responses rather than in ``api.py``: the ``photo-upload``
+CLI validates its outgoing declaration through the same classes the server
+validates its inputs with, so this module is the single Python representation
+of the spec (codegen from the spec is reserved for consumers that cannot
+share the server's code — currently, only the web app).
 """
 
 from typing import Annotated, Any, Literal, Union
@@ -427,6 +434,21 @@ UPLOAD_FILE_STATUSES = Literal[
 
 # The four onboarding-job states (catalog.onboarding_jobs.status).
 UPLOAD_JOB_STATUSES = Literal["pending", "running", "complete", "failed"]
+
+
+class UploadFileDeclaration(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    path: str = Field(min_length=1, max_length=1024)
+    size_bytes: int = Field(gt=0)
+    mime_type: str | None = Field(default=None, max_length=255)
+
+
+class UploadBatchRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    batch_id: UUID | None = None
+    files: list[UploadFileDeclaration] = Field(min_length=1, max_length=10000)
 
 
 class UploadFileOut(ResponseModel):

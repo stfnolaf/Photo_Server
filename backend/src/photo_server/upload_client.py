@@ -1,20 +1,20 @@
 """The photo-upload CLI: upload photos to a Photo Server over HTTP.
 
 Phase 6 of docs/openapi-codegen-plan.md: every JSON exchange with the API
-is validated through the Pydantic models generated from the checked-in
-OpenAPI spec (``photo_server/generated``, regenerated with ``npm run
-generate:api`` in ``backend/``), so the CLI, the web app, and the server all
-read the same contract through the same generator ecosystem. A server
-response that drifts from the spec (a key the model does not declare, a
-missing required key, a wrong type) fails loudly here as a contract
-violation instead of surfacing later as a ``KeyError`` deep in the flow.
+is validated through the server's own Pydantic models (``photo_server
+.api_schemas`` — the classes the routes validate with and the source of
+the checked-in OpenAPI spec). The CLI lives in the server's package, so it
+imports those models directly instead of regenerating them from the spec;
+spec-to-client codegen is for consumers that cannot share the server's
+code (the web app's TypeScript client). A server response that drifts from
+the spec (a key the model does not declare, a missing required key, a
+wrong type) fails loudly here as a contract violation instead of
+surfacing later as a ``KeyError`` deep in the flow.
 
-The transport stays hand-written: the generated ``Sdk``'s method stubs take
-no parameters in @hey-api/openapi-python 0.0.24, and this CLI's PUT sends a
-raw binary body to the per-file batch endpoint — a plain ``httpx.Client``
-with the spec's relative URLs covers both. The final stdout is the raw wire
-JSON of the last response (server key order, byte-identical to the
-pre-Phase-6 CLI for the same server output).
+The transport stays a small hand-written httpx client (the CLI's PUT sends
+a raw binary body to the per-file batch endpoint). The final stdout is the
+raw wire JSON of the last response (server key order, byte-identical to
+the pre-Phase-6 CLI for the same server output).
 """
 
 import argparse
@@ -30,12 +30,11 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import ValidationError
 
-from photo_server.generated.pydantic_gen import (
+from photo_server.api_schemas import (
     UploadBatchOut,
-    UploadBatchOutStatus,
     UploadBatchRequest,
+    UploadFileDeclaration,
     UploadFileOut,
-    UploadFileOutStatus,
     UploadFileReceipt,
 )
 from photo_server.selection import MEDIA
@@ -87,9 +86,9 @@ def _check(response: httpx.Response) -> httpx.Response:
 
 
 def _validate(model: type, payload: Any, source: str = "Server response"):
-    """Validate a wire JSON payload through a generated model. A contract
-    violation fails loudly (plan decision 3): the model is the declaration
-    and the enforcement."""
+    """Validate a wire JSON payload through the model the server validates
+    with. A contract violation fails loudly (plan decision 3): the model is
+    the declaration and the enforcement."""
     try:
         return model.model_validate(payload)
     except ValidationError as error:
@@ -120,29 +119,29 @@ def upload(
     paths = _files(root, inputs, recursive)
     root = root.resolve()
     local_by_relative = {path.relative_to(root).as_posix(): path for path in paths}
-    declaration_payload = {
-        "batchId": str(batch_id),
-        "files": [
-            {
-                "path": relative,
-                "sizeBytes": path.stat().st_size,
-                "mimeType": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-            }
+    # Constructing the request model *is* the validation of the outgoing
+    # declaration (non-empty path, size > 0, at least one file), and the
+    # JSON dump is the exact wire spelling that is sent — the request
+    # bytes are what the model declares.
+    declaration = UploadBatchRequest(
+        batch_id=batch_id,
+        files=[
+            UploadFileDeclaration(
+                path=relative,
+                size_bytes=path.stat().st_size,
+                mime_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            )
             for relative, path in local_by_relative.items()
         ],
-    }
-    # Validate the outgoing declaration through the generated request model
-    # (the same model the server validates it against) so a local drift from
-    # the spec fails before the first byte is sent; the raw dict is what is
-    # actually sent, so the request bytes are unchanged.
-    _validate(UploadBatchRequest, declaration_payload, source="Outgoing declaration")
+    )
+    declaration_payload = declaration.model_dump(mode="json", by_alias=True)
     timeout = httpx.Timeout(connect=10, read=300, write=300, pool=300)
     with httpx.Client(base_url=server.rstrip("/"), timeout=timeout) as client:
         batch, _ = _batch_response(client.post("/upload-batches", json=declaration_payload))
         required = [
             file
             for file in batch.files
-            if file.required and file.status == UploadFileOutStatus.WAITING
+            if file.required and file.status == "waiting"
         ]
 
         def send(file: UploadFileOut) -> UploadFileReceipt:
@@ -170,7 +169,8 @@ def upload(
 
         batch, raw = _batch_response(client.post(f"/upload-batches/{batch_id}/seal"))
         if wait:
-            while batch.status in {UploadBatchOutStatus.QUEUED, UploadBatchOutStatus.PROCESSING}:
+            # Poll while onboarding is still queued or in progress.
+            while batch.status in {"queued", "processing"}:
                 time.sleep(1)
                 batch, raw = _batch_response(client.get(f"/upload-batches/{batch_id}"))
         return batch, raw
@@ -202,7 +202,7 @@ def main():
             args.wait,
         )
         print(json.dumps(raw, indent=2))
-        if result.status == UploadBatchOutStatus.FAILED:
+        if result.status == "failed":
             raise SystemExit(1)
     except KeyboardInterrupt:
         raise SystemExit(130) from None

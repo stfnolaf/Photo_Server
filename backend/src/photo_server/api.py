@@ -38,6 +38,7 @@ from photo_server.api_schemas import (
     PreviewStatusOut,
     QueueResultOut,
     UploadBatchOut,
+    UploadBatchRequest,
     UploadFileReceipt,
     UploadQueueStatusOut,
     VerifyOut,
@@ -64,21 +65,6 @@ from photo_server.worker import cache_paths
 # served per process lifetime; a per-request DB UPDATE would be wasteful.
 _preview_touches: dict[str, float] = {}
 _PREVIEW_TOUCH_COOLDOWN = 30.0
-
-
-class UploadFileDeclaration(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-    path: str = Field(min_length=1, max_length=1024)
-    size_bytes: int = Field(gt=0)
-    mime_type: str | None = Field(default=None, max_length=255)
-
-
-class UploadBatchRequest(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-    batch_id: UUID | None = None
-    files: list[UploadFileDeclaration] = Field(min_length=1, max_length=10000)
 
 
 class ProcessingRequest(BaseModel):
