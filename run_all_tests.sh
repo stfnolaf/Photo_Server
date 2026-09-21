@@ -26,7 +26,8 @@
 #   1. Lint (ruff, backend)
 #   2. OpenAPI spec drift (scripts/check_openapi.py)       (no services needed)
 #   3. Backend tests: unit + integration + AI-worker e2e   (PHOTO_RUN_INTEGRATION=1)
-#   4. Frontend typecheck (tsc) + unit tests (vitest)      (skipped if node/npm missing)
+#   4. Frontend typecheck (tsc) + unit tests (vitest) + API codegen check:api
+#      (skipped if node/npm missing)
 #
 # Exit code: 0 if every recorded section passed (or was skipped), 1 if any failed,
 #            2 if the environment is unusable (e.g. venv missing).
@@ -221,9 +222,9 @@ else
 fi
 log
 
-# --- Section 4: Frontend (typecheck + unit tests) ---------------------------
+# --- Section 4: Frontend (typecheck + unit tests + API codegen) -------------
 log "==================================================================="
-log " SECTION 4: Frontend (tsc typecheck + vitest)"
+log " SECTION 4: Frontend (tsc typecheck + vitest + openapi-ts check:api)"
 log "==================================================================="
 if command -v npm >/dev/null 2>&1 && [ -d "$FE_DIR" ]; then
   run_capture bash -c "cd '$FE_DIR' && npm run check"
@@ -247,10 +248,25 @@ if command -v npm >/dev/null 2>&1 && [ -d "$FE_DIR" ]; then
     record "frontend-tests" "FAIL"
   fi
   log
+
+  # Regenerate the OpenAPI client into a temp dir and diff it against the
+  # committed src/api/generated (docs/openapi-codegen-plan.md Phase 5a).
+  # No services are contacted; the input is the checked-in spec.
+  run_capture bash -c "cd '$FE_DIR' && npm run check:api"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    log "RESULT: Frontend generated client (openapi-ts check:api) -> PASS"
+    record "frontend-api-codegen" "PASS"
+  else
+    log "RESULT: Frontend generated client (openapi-ts check:api) -> FAIL (exit $rc)"
+    record "frontend-api-codegen" "FAIL"
+  fi
+  log
 else
   log "node/npm not available or $FE_DIR missing — skipping frontend checks"
   record "frontend-typecheck" "SKIP"
   record "frontend-tests" "SKIP"
+  record "frontend-api-codegen" "SKIP"
   log
 fi
 

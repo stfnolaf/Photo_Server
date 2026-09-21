@@ -10,12 +10,24 @@ import {
 } from "react";
 import { api } from "./client";
 import type { MutationMethod, PendingMutation } from "./types";
+import type { OperationRequest } from "./generated/types.gen";
 import { createOperationId } from "../domain/library";
+
+/**
+ * Per-field changes a caller may attach to a durable mutation: any payload
+ * field (the journal protocol is endpoint-agnostic) plus the protocol
+ * fields the generated `OperationRequest` contract declares. The journal
+ * itself injects `operationId`; callers supply `expectedRevision` (and the
+ * endpoint's own fields, untyped here — the raw `sendMutation` path cannot
+ * be statically mapped to one generated operation because the path is
+ * dynamic).
+ */
+export type MutationChanges = Record<string, unknown> & Partial<OperationRequest>;
 
 interface MutationContextValue {
   pending: PendingMutation | null;
   saving: boolean;
-  mutate: <T>(path: string, method: MutationMethod, changes?: Record<string, unknown>) => Promise<T>;
+  mutate: <T>(path: string, method: MutationMethod, changes?: MutationChanges) => Promise<T>;
   retry: <T>() => Promise<T>;
   discard: () => void;
 }
@@ -77,7 +89,7 @@ export function DurableMutationProvider({
     async <T,>(
       path: string,
       method: MutationMethod,
-      changes: Record<string, unknown> = {},
+      changes: MutationChanges = {},
     ): Promise<T> => {
       if (pendingRef.current) throw new Error("Retry or discard the pending change first.");
       const mutation: PendingMutation = {

@@ -1,3 +1,55 @@
+/**
+ * Hand-written facade over the OpenAPI-generated SDK
+ * (`./generated`, per `docs/openapi-codegen-plan.md` phase 5a).
+ *
+ * Feature code keeps calling the `api` methods with exactly the signatures
+ * they have always had; this module is the only place that knows the
+ * generated operation names exist. It also owns the two behaviors the
+ * generated SDK deliberately leaves to the caller:
+ *
+ * - API prefixing: the SDK client below is created with `baseUrl: API_ROOT`.
+ *   The spec defines no servers, so every generated URL stays relative and
+ *   flows through the Vite dev proxy / nginx `/api` proxy (or a full-URL
+ *   `VITE_API_ROOT` for cross-origin deployments).
+ * - Error normalization: operations run with the SDK's default
+ *   `throwOnError: false`, and `call()` turns a failed result into the app's
+ *   `ApiError` with the same message extraction the old hand-rolled
+ *   `request()` had (FastAPI `{detail: string}` bodies, `{detail: [...]}`
+ *   422 arrays, non-JSON proxy pages, network failures).
+ *
+ * The one endpoint that stays outside the generated SDK is `uploadFile`:
+ * multipart upload with XHR progress reporting. Its request/response shapes
+ * come from the generated types; only the transport is hand-rolled.
+ */
+import { createClient } from "./generated/client";
+import {
+  abandonUploadBatch,
+  browseAssets,
+  createUploadBatch,
+  getAssetDetail,
+  getBurst,
+  getHealth,
+  getPerson,
+  getUploadBatch,
+  getUploadQueue,
+  listAlbums,
+  listPeople,
+  listUploadBatches,
+  retryAnalysis,
+  retryPreview,
+  retryUploadBatch,
+  sealUploadBatch,
+} from "./generated/sdk.gen";
+import type {
+  BatchAbandonedOut,
+  BrowseAssetsData,
+  BrowsePageOut,
+  BurstDetailOut,
+  PhotoSummaryOut,
+  PreviewStatusOut,
+  QueueResultOut,
+  UploadBatchOut,
+} from "./generated/types.gen";
 import type {
   Album,
   BrowsePage,
@@ -7,13 +59,21 @@ import type {
   PeoplePage,
   PersonDetail,
   PhotoDetail,
+  PhotoSummary,
   PendingMutation,
-  PreviewStatus,
   UploadBatch,
   UploadQueueStatus,
 } from "./types";
 
-const API_ROOT = import.meta.env.VITE_API_ROOT ?? "/api";
+const API_ROOT: string = import.meta.env.VITE_API_ROOT ?? "/api";
+
+/**
+ * Shared client instance for every generated SDK operation. Passing
+ * `API_ROOT` as the SDK's `baseUrl` is how the facade applies the API
+ * prefix: request URLs resolve against it here, while the generated
+ * `client.gen.ts` default stays prefix-agnostic.
+ */
+const client = createClient({ baseUrl: API_ROOT });
 
 export class ApiError extends Error {
   constructor(
@@ -28,26 +88,76 @@ export class ApiError extends Error {
 export const apiUrl = (path: string) =>
   `${API_ROOT}${path.startsWith("/") ? path : `/${path}`}`;
 
-export async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const response = await fetch(apiUrl(path), options);
-  if (!response.ok) {
-    let message = `Request failed (${response.status}).`;
-    try {
-      const body = (await response.json()) as { detail?: string | Array<{ msg?: string }> };
-      if (typeof body.detail === "string") message = body.detail;
-      if (Array.isArray(body.detail)) {
-        message = body.detail.map((item) => item.msg ?? "Invalid value").join("; ");
-      }
-    } catch {
-      // A reverse proxy can return a non-JSON error page.
+/**
+ * Convert a failed SDK result into the app's `ApiError`, with the message
+ * extraction the previous hand-rolled `request()` used: `{detail: string}`
+ * bodies become that string; `{detail: [...]}` (422) bodies become the
+ * joined `msg` values; anything else (raw proxy pages, non-JSON bodies)
+ * falls back to the status-line message. A missing `Response` means the
+ * network itself failed.
+ */
+function normalizeApiError(error: unknown, response: Response): ApiError {
+  let message = `Request failed (${response.status}).`;
+  if (error !== null && typeof error === "object") {
+    const detail = (error as { detail?: unknown }).detail;
+    if (typeof detail === "string") message = detail;
+    if (Array.isArray(detail)) {
+      message = detail
+        .map((item) =>
+          item !== null && typeof item === "object"
+            ? ((item as { msg?: string }).msg ?? "Invalid value")
+            : "Invalid value",
+        )
+        .join("; ");
     }
-    throw new ApiError(message, response.status);
   }
-  return response.json() as Promise<T>;
+  return new ApiError(message, response.status);
 }
+
+/** Shape the generated SDK reports for a finished request (any operation). */
+type GeneratedResult = { data?: unknown; error?: unknown; response?: Response };
+
+/**
+ * Run a generated operation with the SDK's default `throwOnError: false`
+ * and convert the result into the app's promise conventions: reject with
+ * `ApiError` on failure, resolve with the response data on success.
+ */
+async function call<T>(run: () => Promise<GeneratedResult>): Promise<T> {
+  const { data, error, response } = await run();
+  if (response === undefined) {
+    // The network itself failed before a response arrived. The previous
+    // request() let that raw fetch error (TypeError/AbortError) propagate
+    // untouched; TanStack Query relies on the AbortError identity to treat
+    // aborted queries as cancellations rather than failures, so rethrow it.
+    throw error ?? new ApiError("Network error", 0);
+  }
+  if (error !== undefined) throw normalizeApiError(error, response);
+  return data as T;
+}
+
+/**
+ * Enforce the `PhotoSummary` producer-guaranteed URL invariants (see the
+ * `types.ts` header) at the boundary: if a summary ever arrives with null
+ * thumbnail/preview URLs, reconstruct the deterministic backend-relative
+ * URLs instead of letting nulls reach an image source.
+ */
+function mapSummary(item: PhotoSummaryOut): PhotoSummary {
+  return {
+    ...item,
+    thumbnailUrl: item.thumbnailUrl ?? `/assets/${item.assetId}/thumbnail`,
+    previewUrl: item.previewUrl ?? `/assets/${item.assetId}/preview`,
+  };
+}
+
+const browsePage = (page: BrowsePageOut): BrowsePage => ({
+  ...page,
+  items: page.items.map(mapSummary),
+});
+
+const burstDetail = (burst: BurstDetailOut): BurstDetail => ({
+  ...burst,
+  frames: burst.frames.map(mapSummary),
+});
 
 function uploadError(status: number, responseText: string): ApiError {
   let message = status ? `Upload failed (${status}).` : "The upload connection was interrupted.";
@@ -64,50 +174,54 @@ function uploadError(status: number, responseText: string): ApiError {
 }
 
 export const api = {
-  health: (signal?: AbortSignal) => request<Health>("/health", { signal }),
+  health: (signal?: AbortSignal) =>
+    call<Health>(() => getHealth({ client, signal })),
 
   albums: (deleted = false, signal?: AbortSignal) =>
-    request<Album[]>(`/albums${deleted ? "?deleted=true" : ""}`, { signal }),
+    call<Album[]>(() =>
+      listAlbums({ client, signal, ...(deleted ? { query: { deleted: true } } : {}) }),
+    ),
 
   photo: (assetId: string, signal?: AbortSignal) =>
-    request<PhotoDetail>(`/assets/${assetId}`, { signal }),
+    call<PhotoDetail>(() => getAssetDetail({ client, signal, path: { asset_id: assetId } })),
 
   burst: (assetId: string, signal?: AbortSignal) =>
-    request<BurstDetail>(`/assets/${assetId}/burst`, { signal }),
+    call<BurstDetailOut>(() => getBurst({ client, signal, path: { asset_id: assetId } })).then(
+      burstDetail,
+    ),
 
-  people: (q = "", signal?: AbortSignal) => {
-    const params = new URLSearchParams({ limit: "1000" });
-    if (q) params.set("q", q);
-    return request<PeoplePage>(`/people?${params}`, { signal });
-  },
+  people: (q = "", signal?: AbortSignal) =>
+    call<PeoplePage>(() =>
+      listPeople({ client, signal, query: { limit: 1000, ...(q ? { q } : {}) } }),
+    ),
 
   person: (personId: string, signal?: AbortSignal) =>
-    request<PersonDetail>(`/people/${personId}`, { signal }),
+    call<PersonDetail>(() => getPerson({ client, signal, path: { person_id: personId } })),
 
   browse: (filters: LibraryFilters, cursor?: string | null, signal?: AbortSignal) => {
-    const params = new URLSearchParams();
-    if (filters.q) params.set("q", filters.q);
-    if (filters.dateFrom) params.set("date_from", filters.dateFrom);
-    if (filters.dateTo) params.set("date_to", filters.dateTo);
-    if (filters.mediaType) params.set("media_type", filters.mediaType);
-    if (filters.ratingMin) params.set("rating_min", String(filters.ratingMin));
-    if (filters.sort !== "newest") params.set("sort", filters.sort);
-    if (filters.view === "favorites") params.set("favorite", "true");
-    if (filters.view === "hidden") params.set("deleted", "true");
-    if (filters.albumId) params.set("album_id", filters.albumId);
-    if (cursor) params.set("cursor", cursor);
-    return request<BrowsePage>(`/library/assets?${params}`, { signal });
+    // Parameter set and order mirror the previous request exactly; the SDK's
+    // query serializer omits undefined keys, so unset filters stay off the wire.
+    const query: BrowseAssetsData["query"] = {};
+    if (filters.q) query.q = filters.q;
+    if (filters.dateFrom) query.date_from = filters.dateFrom;
+    if (filters.dateTo) query.date_to = filters.dateTo;
+    if (filters.mediaType) query.media_type = filters.mediaType;
+    if (filters.ratingMin) query.rating_min = filters.ratingMin;
+    if (filters.sort !== "newest") query.sort = filters.sort;
+    if (filters.view === "favorites") query.favorite = true;
+    if (filters.view === "hidden") query.deleted = true;
+    if (filters.albumId) query.album_id = filters.albumId;
+    if (cursor) query.cursor = cursor;
+    return call<BrowsePageOut>(() => browseAssets({ client, signal, query })).then(browsePage);
   },
 
   createUploadBatch: (
     batchId: string,
     files: Array<{ path: string; sizeBytes: number; mimeType: string }>,
   ) =>
-    request<UploadBatch>("/upload-batches", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ batchId, files }),
-    }),
+    call<UploadBatch>(() =>
+      createUploadBatch({ client, body: { batchId, files } }),
+    ),
 
   uploadFile: (
     path: string,
@@ -134,39 +248,47 @@ export const api = {
   }),
 
   uploadBatch: (batchId: string, signal?: AbortSignal) =>
-    request<UploadBatch>(`/upload-batches/${batchId}`, { signal }),
+    call<UploadBatch>(() => getUploadBatch({ client, signal, path: { batch_id: batchId } })),
 
   activeUploadBatches: (signal?: AbortSignal) =>
-    request<UploadBatch[]>("/upload-batches", { signal }),
+    call<UploadBatch[]>(() => listUploadBatches({ client, signal })),
 
   uploadQueue: (signal?: AbortSignal) =>
-    request<UploadQueueStatus>("/upload-queue", { signal }),
+    call<UploadQueueStatus>(() => getUploadQueue({ client, signal })),
 
   sealUploadBatch: (batchId: string) =>
-    request<UploadBatch>(`/upload-batches/${batchId}/seal`, { method: "POST" }),
+    call<UploadBatchOut>(() => sealUploadBatch({ client, path: { batch_id: batchId } })),
 
   retryUploadBatch: (batchId: string) =>
-    request<UploadBatch>(`/upload-batches/${batchId}/retry`, { method: "POST" }),
+    call<UploadBatchOut>(() => retryUploadBatch({ client, path: { batch_id: batchId } })),
 
   abandonUploadBatch: (batchId: string) =>
-    request<{ batchId: string; status: "deleted" }>(`/upload-batches/${batchId}`, {
-      method: "DELETE",
-    }),
+    call<BatchAbandonedOut>(() => abandonUploadBatch({ client, path: { batch_id: batchId } })),
 
-  sendMutation: <T>(pending: PendingMutation) =>
-    request<T>(pending.path, {
+  // The durable-mutation journal protocol sends a dynamic (path, method)
+  // pair, so this one path goes through the generated client's raw
+  // request() rather than a named operation; the body always carries the
+  // journal's operationId (and optionally expectedRevision). This is the
+  // only raw-client call site in the facade: `pending.method` passes
+  // through unconverted because the journal's MutationMethod values are
+  // already the uppercase HTTP tokens the SDK's method enum expects in
+  // this hey-api version (the wire bytes are unchanged from the old
+  // fetch-based client). If a future SDK pin changes that enum, tsc will
+  // surface it here.
+  sendMutation: async <T>(pending: PendingMutation): Promise<T> => {
+    const { data, error, response } = await client.request({
+      url: pending.path,
       method: pending.method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(pending.body),
-    }),
+      body: pending.body,
+    });
+    if (response === undefined) throw error ?? new ApiError("Network error", 0);
+    if (error !== undefined) throw normalizeApiError(error, response);
+    return data as T;
+  },
 
   retryPreview: (assetId: string) =>
-    request<{ status: PreviewStatus }>(`/assets/${assetId}/preview/retry`, {
-      method: "POST",
-    }),
+    call<PreviewStatusOut>(() => retryPreview({ client, path: { asset_id: assetId } })),
 
   reanalyze: (assetId: string) =>
-    request<{ assets: number; jobsQueued: number; jobsAlreadyQueued: number; jobsAlreadyRunning: number }>(`/assets/${assetId}/analysis/retry`, {
-      method: "POST",
-    }),
+    call<QueueResultOut>(() => retryAnalysis({ client, path: { asset_id: assetId } })),
 };

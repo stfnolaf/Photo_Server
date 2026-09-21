@@ -1,189 +1,79 @@
-export type MediaType = "RAW" | "JPEG" | "HEIF";
-export type PreviewStatus = "missing" | "pending" | "ready" | "failed" | "unavailable";
+/**
+ * Client-facing type shims over the OpenAPI-generated contract
+ * (`./generated/types.gen.ts`, generated from `openapi/openapi.json` per
+ * `docs/openapi-codegen-plan.md` phase 5a).
+ *
+ * Every wire type below derives from the generated module — no hand-written
+ * contract definitions remain in this file. The only hand-written types are
+ * the client-internal ones (`LibraryFilters`, `MutationMethod`,
+ * `PendingMutation`), which name no wire field of their own.
+ *
+ * Two shims are deliberately not plain aliases; each encodes a documented
+ * producer invariant rather than the conservative nullability the spec models:
+ *
+ * - `PhotoSummary` tightens `thumbnailUrl`/`previewUrl` from `string | null`
+ *   to `string`. The producer always emits both as f-strings
+ *   (`browsing.asset_summary()`), and `<img src>` / `PreviewImage` demand
+ *   non-null values. If a response ever regresses to null, the facade's
+ *   `mapSummary` reconstructs the deterministic backend-relative URLs
+ *   instead of letting a null reach an image source.
+ *
+ * - `PhotoDetail` aliases the schema-v2 member of the `AssetDetailOut`
+ *   union (`AssetDetailV2Out`). The photo feature page is a v2-shaped
+ *   consumer: it reads `deletedAt` (absent on v1 documents, where the runtime
+ *   value is `undefined` — identical to `null` under its only uses,
+ *   `Boolean(...)` / `!detail.deletedAt`) and it writes v2 documents back
+ *   after every mutation (any asset mutation upgrades the document to v2).
+ *   Typing the query-cache slot as the v2 member also keeps the TanStack
+ *   `setQueryData` updater assignable, because the v1 member pins
+ *   `revision: 1` as a literal while post-mutation revisions are numbers.
+ *   Every field the client reads exists on both variants.
+ */
+import type * as Generated from "./generated/types.gen";
 
-export interface Health {
-  status: string;
-  libraryId: string;
-  assets: number;
-  blobs: number;
-  [key: string]: unknown;
-}
+export type MediaType = Generated.PhotoSummaryOut["mediaType"];
+export type PreviewStatus = Generated.PreviewStatusOut["status"];
 
-export interface LocationValue {
-  name: string;
-  latitude: number | null;
-  longitude: number | null;
-}
+export type Health = Generated.HealthOut;
+export type LocationValue = Generated.LocationOut;
+export type UserState = Generated.UserStateOut;
 
-export interface UserState {
-  rating: number;
-  favorite: boolean;
-  caption: string;
-  keywords: string[];
-  location: LocationValue | null;
-}
-
-export interface PhotoSummary {
-  assetId: string;
-  originalFilename: string;
-  mediaType: MediaType;
-  timelineTime: string;
-  dateSource: "capture" | "import";
-  captureTime: string | null;
-  importedAt: string;
-  width: number | null;
-  height: number | null;
-  cameraMake: string | null;
-  cameraModel: string | null;
-  lens: string | null;
-  technical: Record<string, unknown>;
-  sizeBytes: number;
-  rating: number;
-  favorite: boolean;
-  caption: string;
-  deletedAt: string | null;
-  revision: number;
-  burstId: string | null;
-  burstSize: number | null;
-  burstRepresentativeAssetId: string | null;
-  preview: { status: PreviewStatus; error: string | null };
+/** See the module header: `thumbnailUrl`/`previewUrl` are producer-guaranteed. */
+export type PhotoSummary = Generated.PhotoSummaryOut & {
   thumbnailUrl: string;
   previewUrl: string;
-}
+};
 
-export interface BurstDetail {
-  burstId: string;
-  representativeAssetId: string;
-  frames: PhotoSummary[];
-}
+// `Omit` (not plain intersection) so the `frames`/`items` property is a
+// single declaration of the tightened type — consumers union these with
+// `?? []`, which a property-level intersection would defeat.
+export type BurstDetail = Omit<Generated.BurstDetailOut, "frames"> & { frames: PhotoSummary[] };
+export type BrowsePage = Omit<Generated.BrowsePageOut, "items"> & { items: PhotoSummary[] };
 
-export interface BrowsePage {
-  items: PhotoSummary[];
-  total: number;
-  nextCursor: string | null;
-}
+export type BlobInfo = Generated.BlobOut;
 
-export interface BlobInfo {
-  blobId: string;
-  role: "ORIGINAL_RAW" | "ORIGINAL_JPEG" | "ORIGINAL_HEIF" | "SIDECAR";
-  originalFilename: string;
-  objectKey: string;
-  sha256: string;
-  sizeBytes: number;
-  mimeType: string;
-}
+/** See the module header: the schema-v2 member of the `AssetDetailOut` union. */
+export type PhotoDetail = Generated.AssetDetailV2Out;
 
-export interface PhotoDetail {
-  schemaVersion: number;
-  libraryId: string;
-  assetId: string;
-  revision: number;
-  primaryBlobId: string;
-  blobs: BlobInfo[];
-  importedAt: string;
-  captureTime: string | null;
-  metadata: Record<string, unknown>;
-  technical: Record<string, unknown>;
-  userState: UserState;
-  deletedAt: string | null;
-  preview: { status: PreviewStatus; error?: string | null };
-  analysis: PhotoAnalysis;
-}
+export type AnalysisObject = Generated.AnalysisObjectOut;
+export type AnalysisResult = Generated.AnalysisResultOut;
+export type PhotoAnalysis = Generated.AnalysisStatusOut;
+export type FaceReference = Generated.FaceRefOut;
+export type PersonSummary = Generated.PersonSummaryOut;
+export type PeoplePage = Generated.PeoplePageOut;
+export type PersonDetail = Generated.PersonDetailOut;
+/**
+ * The three face-mutation endpoints return different result shapes; this
+ * intersection covers every field the client reads from any of them.
+ */
+export type FaceMutationResult = Generated.PersonRenameOut &
+  Generated.PersonMergeOut &
+  Generated.FaceMoveOut;
 
-export interface AnalysisObject {
-  name: string;
-  count: number;
-}
+export type Album = Generated.AlbumOut;
+export type MutationResult = Generated.MutationResultOut;
 
-export interface AnalysisResult {
-  summary: string;
-  photoTypes: string[];
-  scene: string;
-  setting: "indoor" | "outdoor" | "mixed" | "unknown";
-  objects: AnalysisObject[];
-  activities: string[];
-  tags: string[];
-  visibleText: string[];
-  faceCount: number;
-  personCount: number;
-}
-
-export interface PhotoAnalysis {
-  status: "missing" | "pending" | "running" | "ready" | "failed";
-  attempts: number;
-  error: string | null;
-  runId: string | null;
-  model: string | null;
-  modelVersion: string | null;
-  pipelineVersion: string | null;
-  analyzedAt: string | null;
-  artifactKey: string | null;
-  result: AnalysisResult | null;
-  faces: Array<{
-    faceIndex: number;
-    box: number[];
-    confidence: number;
-    personId: string;
-    personName: string | null;
-  }>;
-}
-
-export interface FaceReference {
-  faceId: string;
-  assetId: string;
-  originalFilename: string;
-  box: number[];
-  confidence: number;
-  thumbnailUrl: string;
-}
-
-export interface PersonSummary {
-  personId: string;
-  displayName: string;
-  faceCount: number;
-  photoCount: number;
-  sampleFaces: FaceReference[];
-}
-
-export interface PeoplePage {
-  items: PersonSummary[];
-  total: number;
-  named: number;
-  unnamed: number;
-}
-
-export interface PersonDetail extends Omit<PersonSummary, "sampleFaces"> {
-  faces: FaceReference[];
-}
-
-export interface FaceMutationResult {
-  operationId: string;
-  personId: string;
-  displayName?: string;
-  mergedPersonId?: string;
-  movedFaces?: number;
-  createdPerson?: boolean;
-}
-
-export interface Album {
-  schemaVersion: number;
-  libraryId: string;
-  albumId: string;
-  revision: number;
-  previousRevision: number | null;
-  operationId: string;
-  name: string;
-  description: string;
-  assetIds: string[];
-  deletedAt: string | null;
-}
-
-export interface MutationResult extends UserState {
-  assetId: string;
-  operationId: string;
-  revision: number;
-  deletedAt: string | null;
-}
+// --- Client-internal types (no wire shape of their own) ---------------------
 
 export interface LibraryFilters {
   q: string;
@@ -204,63 +94,11 @@ export interface PendingMutation {
   body: Record<string, unknown> & { operationId: string };
 }
 
-export type UploadBatchStatus = "accepting" | "queued" | "processing" | "complete" | "failed";
-export type UploadFileStatus =
-  | "waiting"
-  | "uploading"
-  | "uploaded"
-  | "skipped"
-  | "queued"
-  | "processing"
-  | "imported"
-  | "duplicate"
-  | "failed";
+// --- Upload queue ------------------------------------------------------------
 
-export interface UploadBatchFile {
-  fileId: string;
-  path: string;
-  sizeBytes: number;
-  mimeType: string | null;
-  required: boolean;
-  status: UploadFileStatus;
-  reason: string | null;
-  assetId: string | null;
-  error: string | null;
-  uploadUrl: string | null;
-}
-
-export interface UploadBatchJob {
-  jobId: string;
-  status: "pending" | "running" | "complete" | "failed";
-  attempts: number;
-  result: Record<string, unknown> | null;
-  error: string | null;
-}
-
-export interface UploadBatch {
-  batchId: string;
-  status: UploadBatchStatus;
-  createdAt: number;
-  sealedAt: number | null;
-  files: UploadBatchFile[];
-  jobs: UploadBatchJob[];
-}
-
-export interface UploadQueueStatus {
-  uploadWorkers: number;
-  uploadsActive: number;
-  uploadsWaiting: number;
-  uploadBatchesQueued: number;
-  onboardingPending: number;
-  onboardingRunning: number;
-  onboardingFailed: number;
-  processingPending: number;
-  processingRunning: number;
-  processingFailed: number;
-  previewPending: number;
-  previewRunning: number;
-  previewFailed: number;
-  analysisPending: number;
-  analysisRunning: number;
-  analysisFailed: number;
-}
+export type UploadBatchStatus = Generated.UploadBatchOut["status"];
+export type UploadFileStatus = Generated.UploadFileOut["status"];
+export type UploadBatchFile = Generated.UploadFileOut;
+export type UploadBatchJob = Generated.UploadJobOut;
+export type UploadBatch = Generated.UploadBatchOut;
+export type UploadQueueStatus = Generated.UploadQueueStatusOut;
