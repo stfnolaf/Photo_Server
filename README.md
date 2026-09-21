@@ -93,8 +93,10 @@ The relevant queue settings are:
 | `PHOTO_UPLOAD_ABANDON_SECONDS` | 86400 | Idle time before an unsealed upload and its staging objects are discarded |
 | `PHOTO_WORKER_THREADS` | 4 | Concurrent onboarding/preview jobs in the worker process |
 | `PHOTO_UPLOAD_PART_BYTES` | 8 MiB | Memory and S3 multipart chunk size per active upload |
-| `PHOTO_AI_MODEL` | `qwen3-vl:8b-instruct-q4_K_M` | Local Ollama vision model and quantization |
-| `PHOTO_AI_CONTEXT_TOKENS` | 4096 | Bounded VLM context to retain GPU headroom |
+| `PHOTO_AI_BASE_URL` | `http://ollama:11434/v1` | OpenAI-compatible VLM endpoint: local Ollama (default), a remote Ollama, or any hosted provider |
+| `PHOTO_AI_MODEL` | `qwen3-vl:8b-instruct-q4_K_M` | Vision model id supplied to the VLM endpoint |
+| `PHOTO_AI_API_KEY` | empty | Bearer token sent to the VLM endpoint (Ollama accepts any non-empty value) |
+| `PHOTO_AI_EXTRA_BODY` | empty | JSON object merged into the VLM request for provider extensions (e.g. Ollama `options.num_ctx`); contract fields win |
 | `PHOTO_AI_FACE_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to YuNet/AdaFace |
 | `PHOTO_AI_VLM_MAX_IMAGE_SIDE` | 1280 | Longest image edge supplied to Qwen |
 | `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into the AI worker |

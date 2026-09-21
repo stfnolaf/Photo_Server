@@ -81,3 +81,48 @@ def test_ai_image_sizes_have_separate_environment_overrides(monkeypatch, tmp_pat
     )
     assert settings.ai_face_max_image_side == 1800
     assert settings.ai_vlm_max_image_side == 1024
+
+
+def test_ai_settings_use_openai_endpoint_defaults(monkeypatch):
+    clear_credentials(monkeypatch)
+    settings = Settings(
+        _env_file=None,
+        s3_endpoint="http://localhost:9000",
+        database_url="postgresql+psycopg://test@localhost/test",
+    )
+    assert settings.ai_base_url == "http://ollama:11434/v1"
+    assert settings.ai_api_key == ""
+    assert settings.ai_extra_body == ""
+
+
+def test_ai_endpoint_settings_come_from_environment(monkeypatch, tmp_path):
+    clear_credentials(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text(
+        "PHOTO_AI_BASE_URL=http://vlm.example.com:11434/v1\n"
+        "PHOTO_AI_API_KEY=sk-test\n"
+        'PHOTO_AI_EXTRA_BODY={"options": {"num_ctx": 8192}}\n'
+    )
+    settings = Settings(
+        _env_file=env,
+        s3_endpoint="http://localhost:9000",
+        database_url="postgresql+psycopg://test@localhost/test",
+    )
+    assert settings.ai_base_url == "http://vlm.example.com:11434/v1"
+    assert settings.ai_api_key == "sk-test"
+    assert settings.ai_extra_body == '{"options": {"num_ctx": 8192}}'
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ['{"options": 1', '[1, 2]', '"options"', "42"],
+)
+def test_ai_extra_body_must_be_a_json_object(monkeypatch, extra):
+    clear_credentials(monkeypatch)
+    with pytest.raises(ValidationError, match="PHOTO_AI_EXTRA_BODY"):
+        Settings(
+            _env_file=None,
+            s3_endpoint="http://localhost:9000",
+            database_url="postgresql+psycopg://test@localhost/test",
+            ai_extra_body=extra,
+        )

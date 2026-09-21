@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -38,10 +39,13 @@ class Settings(BaseSettings):
     )
     cors_origins: str = ""
     exiftool: str = "exiftool"
-    ai_ollama_url: str = "http://ollama:11434"
+    # OpenAI-compatible VLM endpoint: local Ollama's /v1 path by default,
+    # or any remote/hosted provider (an empty default lands in Phase 3A).
+    ai_base_url: str = "http://ollama:11434/v1"
     ai_model: str = "qwen3-vl:8b-instruct-q4_K_M"
     ai_timeout_seconds: int = Field(default=600, ge=30, le=3600)
-    ai_context_tokens: int = Field(default=4096, ge=2048, le=32768)
+    ai_api_key: str = ""
+    ai_extra_body: str = ""
     ai_face_max_image_side: int = Field(default=2000, ge=512, le=4096)
     ai_vlm_max_image_side: int = Field(default=1280, ge=512, le=4096)
     # Semantic-reuse rollout mode: "off" always invokes the VLM, "observe" records
@@ -82,6 +86,20 @@ class Settings(BaseSettings):
                 port=self.postgres_port,
                 database=self.postgres_db,
             ).render_as_string(hide_password=False)
+        return self
+
+    @model_validator(mode="after")
+    def validate_ai_extra_body(self):
+        # Provider extensions merged into the VLM request body (e.g. Ollama
+        # options.num_ctx). Must be a JSON object when set, so a typo is a
+        # startup error, not a failure mid-analysis.
+        if self.ai_extra_body:
+            try:
+                value = json.loads(self.ai_extra_body)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"PHOTO_AI_EXTRA_BODY must be a JSON object: {error.msg}") from error
+            if not isinstance(value, dict):
+                raise ValueError("PHOTO_AI_EXTRA_BODY must be a JSON object")
         return self
 
 
