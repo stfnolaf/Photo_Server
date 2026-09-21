@@ -1196,6 +1196,10 @@
     },
     {
       "body": {
+        "aiFaceConfigured": false,
+        "aiFaceReachable": false,
+        "aiSemanticConfigured": false,
+        "aiSemanticReachable": false,
         "analysisFailed": 0,
         "analysisPending": 0,
         "analysisRunning": 0,

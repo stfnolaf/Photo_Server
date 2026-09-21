@@ -168,7 +168,7 @@ class RemoteFaceAnalyzer:
             headers=headers,
         )
 
-    def health(self) -> dict:
+    def health(self, timeout: float = HEALTH_TIMEOUT_SECONDS) -> dict:
         """Probe the service and verify the embedding-model identity.
 
         Returns the ``/health`` payload (provenance plus live queue state).
@@ -176,8 +176,13 @@ class RemoteFaceAnalyzer:
         timing out, pacing (429), 502-504, still starting (503), or reporting
         an embedding model that does not match ``ADAFACE_IDENTITY``;
         ``FaceServiceError`` on 401 or other 4xx and unusable shapes.
+
+        ``timeout`` defaults to the worker's 5 s liveness budget; Phase 3B's
+        API ``/health`` probe passes its shorter 3 s budget, reusing this
+        exact probe and identity check (a drift therefore shows as
+        unreachable there too).
         """
-        with self._client(HEALTH_TIMEOUT_SECONDS) as client:
+        with self._client(timeout) as client:
             try:
                 response = client.get("/health")
             except httpx.TransportError as error:

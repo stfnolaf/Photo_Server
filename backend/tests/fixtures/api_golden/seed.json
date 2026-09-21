@@ -405,6 +405,10 @@
     },
     {
       "body": {
+        "aiFaceConfigured": false,
+        "aiFaceReachable": false,
+        "aiSemanticConfigured": false,
+        "aiSemanticReachable": false,
         "analysisFailed": 0,
         "analysisPending": 3,
         "analysisRunning": 0,
@@ -464,7 +468,7 @@
   ],
   "description": "seed: three pinned synthetic assets (RAW/Canon, JPEG/SONY, HEIF/Apple with no capture time); GET /assets, GET /library/assets (full page and a limit=2 page carrying a cursor), GET /assets/{id}, GET /health, 404 unknown asset, 422 invalid BrowseQuery (limit=0)",
   "libraryId": "11111111-1111-4111-8111-111111111111",
-  "normalization": "dict keys sorted recursively; array order preserved",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
   "schemaVersion": 1,
   "section": "seed"
 }

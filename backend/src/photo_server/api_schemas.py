@@ -556,6 +556,19 @@ class HealthOut(QueueCountsOut):
     uploads_waiting: StrictInt
     postgres_backup_key: StrictStr | None
     postgres_backup_at: StrictStr | None
+    # Phase 3B of the AI service split plan (docs/ai-service-split-plan.md):
+    # service visibility. ``Configured`` is a config check on the API
+    # process's own settings (empty URL = not configured); ``Reachable`` is a
+    # live probe the API process runs itself (3 s timeout, cached 30 s per
+    # process): a GET {ai_base_url}/models for the OpenAI-compatible VLM and
+    # the face client's identity-checked GET /health, so an embedding-model
+    # drift shows as unreachable — never as a silently different embedding
+    # space. A probe failure makes only the reachable flag false; it never
+    # fails the endpoint.
+    ai_semantic_configured: StrictBool
+    ai_semantic_reachable: StrictBool
+    ai_face_configured: StrictBool
+    ai_face_reachable: StrictBool
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid5
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -45,6 +46,7 @@ from photo_server.api_schemas import (
 )
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
+from photo_server.face_client import RemoteFaceAnalyzer
 from photo_server.metadata import technical_fields
 from photo_server.models import Mutation
 from photo_server.service import Service
@@ -65,6 +67,56 @@ from photo_server.worker import cache_paths
 # served per process lifetime; a per-request DB UPDATE would be wasteful.
 _preview_touches: dict[str, float] = {}
 _PREVIEW_TOUCH_COOLDOWN = 30.0
+
+# Phase 3B of the AI service split plan (docs/ai-service-split-plan.md):
+# /health reports whether each AI service is configured and reachable. The
+# API process runs its own probes — a GET {ai_base_url}/models for the
+# OpenAI-compatible VLM and the face client's identity-checked GET /health —
+# at a 3 s timeout (shorter than the worker gate's 5 s, because /health is
+# user-facing and must not stall on a dead service), cached 30 s per process
+# (the same Q4 cadence the worker gate uses). Any probe failure makes the
+# reachable flag false; it never fails the endpoint. The face probe reuses
+# face_client's logic (a name/revision/weightsSha256 drift in the reported
+# embedding model therefore shows as unreachable — one embedding space,
+# global invariant), and a not-configured service (empty URL) is simply not
+# probed.
+_AI_PROBE_TIMEOUT_SECONDS = 3.0
+_AI_PROBE_CACHE_SECONDS = 30.0
+
+
+def _probe_vlm(settings: Settings) -> bool:
+    """The /health VLM probe: GET {ai_base_url}/models (3 s, bearer key when
+    set). The same classification the worker gate's probe applies at its
+    5 s timeout — any failure (connection error, timeout, or a non-2xx, a
+    bad-key 401 included) is unreachable, so a misconfigured endpoint shows
+    as unreachable instead of burning the backlog into failed jobs — but at
+    the shorter /health budget."""
+    if not settings.ai_base_url:
+        return False
+    headers = {"Authorization": f"Bearer {settings.ai_api_key}"} if settings.ai_api_key else {}
+    try:
+        with httpx.Client(timeout=_AI_PROBE_TIMEOUT_SECONDS) as client:
+            response = client.get(f"{settings.ai_base_url}/models", headers=headers)
+        return response.status_code < 400
+    except Exception:
+        # A probe failure never fails the endpoint: unreachable.
+        return False
+
+
+def _probe_face(settings: Settings) -> bool:
+    """The /health face-service probe: the face client's own
+    identity-checked GET /health (face_client.RemoteFaceAnalyzer.health) at
+    the 3 s API budget — reused, not duplicated: an unreachable host, a
+    timeout, a bad token, 429 pacing, 502-504, and an embedding-model
+    identity mismatch all surface as unreachable."""
+    if not settings.face_service_url:
+        return False
+    try:
+        RemoteFaceAnalyzer(settings).health(timeout=_AI_PROBE_TIMEOUT_SECONDS)
+        return True
+    except Exception:
+        # A probe failure never fails the endpoint: unreachable.
+        return False
 
 
 class ProcessingRequest(BaseModel):
@@ -149,6 +201,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         service.catalog.engine.dispose()
 
     app = FastAPI(title="Photo Server", version="0.6.0", lifespan=lifespan)
+    # Phase 3B: the AI-service probe cache (Q4): the monotonic timestamp of
+    # the last probe plus the two reachable results. A dict so the health
+    # handler updates it in place; on app.state as the test/ops seam (the
+    # worker gate keeps the same shape on its own instance).
+    ai_probe_cache = {"ts": 0.0, "semantic": False, "face": False}
+    app.state.ai_probe_cache = ai_probe_cache
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -175,6 +233,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health", response_model=HealthOut, operation_id="getHealth")
     def health():
         service.storage.client.head_bucket(Bucket=service.storage.bucket)
+        # Phase 3B: probe both AI services at most once every 30 s (Q4); the
+        # probes never raise — a failure makes the reachable flag false.
+        now = time.monotonic()
+        if now - ai_probe_cache["ts"] >= _AI_PROBE_CACHE_SECONDS:
+            ai_probe_cache["semantic"] = _probe_vlm(service.settings)
+            ai_probe_cache["face"] = _probe_face(service.settings)
+            ai_probe_cache["ts"] = now
         return {
             "status": "ok",
             "libraryId": str(service.library_id),
@@ -182,6 +247,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             **service.catalog.queue_counts(),
             **upload_gate.status(),
             **service.backup_status(),
+            "aiSemanticConfigured": bool(service.settings.ai_base_url),
+            "aiSemanticReachable": ai_probe_cache["semantic"],
+            "aiFaceConfigured": bool(service.settings.face_service_url),
+            "aiFaceReachable": ai_probe_cache["face"],
         }
 
     @app.post(

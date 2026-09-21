@@ -1267,6 +1267,22 @@
         "additionalProperties": false,
         "description": "GET /health: the endpoint's merged shape \u2014 fixed \"ok\", the library id,\nasset/blob counts, every queue count, the upload-gate statistics, and the\nlatest PostgreSQL backup marker in the media bucket (null until the first\nbackup).",
         "properties": {
+          "aiFaceConfigured": {
+            "title": "Aifaceconfigured",
+            "type": "boolean"
+          },
+          "aiFaceReachable": {
+            "title": "Aifacereachable",
+            "type": "boolean"
+          },
+          "aiSemanticConfigured": {
+            "title": "Aisemanticconfigured",
+            "type": "boolean"
+          },
+          "aiSemanticReachable": {
+            "title": "Aisemanticreachable",
+            "type": "boolean"
+          },
           "analysisFailed": {
             "title": "Analysisfailed",
             "type": "integer"
@@ -1394,7 +1410,11 @@
           "uploadsActive",
           "uploadsWaiting",
           "postgresBackupKey",
-          "postgresBackupAt"
+          "postgresBackupAt",
+          "aiSemanticConfigured",
+          "aiSemanticReachable",
+          "aiFaceConfigured",
+          "aiFaceReachable"
         ],
         "title": "HealthOut",
         "type": "object"

@@ -79,9 +79,11 @@ import difflib
 import hashlib
 import json
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 from uuid import NAMESPACE_DNS, UUID, uuid4, uuid5
@@ -93,6 +95,7 @@ from psycopg import sql
 from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.engine import make_url
 
+import photo_server.api as api_module
 from photo_server.api import create_app
 from photo_server.browsing import BrowseQuery
 from photo_server.catalog import (
@@ -108,6 +111,7 @@ from photo_server.catalog import (
     upload_files,
 )
 from photo_server.config import Settings
+from photo_server.face_client import ADAFACE_IDENTITY
 from photo_server.models import Blob, Manifest, Mutation
 from photo_server.service import Service
 from photo_server.storage import Storage, canonical_json
@@ -151,14 +155,18 @@ def backend(tmp_path):
     base = Settings()
     root = tmp_path / "source"
     root.mkdir()
-    # s3_bucket/import_root stay random and disposable; upload_workers is
-    # pinned because it flows into a recorded body (/health's uploadWorkers)
-    # and the golden must not depend on the surrounding environment.
+    # s3_bucket/import_root stay random and disposable; upload_workers and
+    # the two AI service URLs are pinned because they flow into a recorded
+    # body (/health's uploadWorkers and Phase 3B's four service-visibility
+    # flags) and the goldens must not depend on the surrounding environment:
+    # the recorded /health is always the AI-not-configured state.
     base = base.model_copy(
         update={
             "s3_bucket": f"photo-test-{uuid4().hex}",
             "import_root": root,
             "upload_workers": 4,
+            "ai_base_url": "",
+            "face_service_url": "",
         }
     )
     storage = Storage(base)
@@ -2075,3 +2083,280 @@ def test_phase_4(backend):
                 "for the session; no workers started"
             ),
         )
+
+# ---------------------------------------------------------------------------
+# AI service split plan Phase 3B (docs/ai-service-split-plan.md): /health
+# service visibility.
+#
+# The two AI services are dummy fixtures for this section: 127.0.0.1 stubs
+# serving only the JSON contracts the /health probes consume (the VLM's
+# /models, the face-service's identity-checked /health). No AI service is
+# started, no model is loaded, no GPU is touched — the point is the probe
+# behavior, and every configured x reachable combination for both services
+# is covered, including the ones that cannot come from a live service (a
+# drifted embedding identity, a dead port).
+# ---------------------------------------------------------------------------
+
+
+class _VlmStub:
+    """Dummy fixture for an OpenAI-compatible VLM endpoint: serves only
+    ``GET /v1/models`` (the Phase 3B /health probe target). ``status``
+    controls the response; ``bearer``, when set, is the expected
+    ``Authorization`` header (a mismatch answers 401). Records every
+    request as ``(method, path, authorization)``."""
+
+    def __init__(self, status: int = 200, bearer: str | None = None):
+        self.requests: list[tuple[str, str, str | None]] = []
+        self.status = status
+        self.bearer = bearer
+        self._stopped = False
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                stub.requests.append(("GET", self.path, self.headers.get("Authorization")))
+                if self.path != "/v1/models":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if stub.bearer and self.headers.get("Authorization") != stub.bearer:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                body = json.dumps({"object": "list", "data": [{"id": "stub-vlm"}]}).encode()
+                self.send_response(stub.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}/v1"
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+        self._server.shutdown()
+        self._server.server_close()
+
+
+class _FaceStub:
+    """Dummy fixture for the face-service's ``GET /health`` contract (the
+    Phase 3B /health probe target): reports the verified embedding identity
+    (``ADAFACE_IDENTITY``) or a caller-supplied drifted one. No model is
+    loaded; only the JSON shape the real service serves is reproduced.
+    ``status`` controls the response; ``bearer``, when set, is the expected
+    ``Authorization`` header (a mismatch answers 401)."""
+
+    def __init__(self, status: int = 200, bearer: str | None = None, identity: dict | None = None):
+        self.requests: list[tuple[str, str, str | None]] = []
+        self.status = status
+        self.bearer = bearer
+        self._stopped = False
+        identity = dict(identity or ADAFACE_IDENTITY)
+        self.payload = {
+            "status": "ok",
+            "models": {
+                "faceDetector": "yunet-2023mar",
+                "faceEmbedding": {
+                    "name": identity["name"],
+                    "revision": identity["revision"],
+                    "weightsSha256": identity["weights_sha256"],
+                    "runtime": "stub-onnxruntime",
+                },
+            },
+            "detectionThreshold": 0.8,
+            "concurrency": 1,
+            "inFlight": 0,
+            "queueDepth": 0,
+        }
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                stub.requests.append(("GET", self.path, self.headers.get("Authorization")))
+                if self.path != "/health":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                if stub.bearer and self.headers.get("Authorization") != stub.bearer:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                body = json.dumps(stub.payload).encode()
+                self.send_response(stub.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def _health_flags(client: TestClient) -> tuple[bool, bool, bool, bool]:
+    """GET /health and return the four service-visibility flags. A probe
+    failure must never fail the endpoint: 200 or the test fails."""
+    response = client.get("/health")
+    assert response.status_code == 200, (
+        f"/health must answer 200 even when a service probe fails "
+        f"(got {response.status_code}: {response.text[:200]})"
+    )
+    body = response.json()
+    return (
+        body["aiSemanticConfigured"],
+        body["aiSemanticReachable"],
+        body["aiFaceConfigured"],
+        body["aiFaceReachable"],
+    )
+
+
+def test_health_ai_service_visibility(backend):
+    """Every configured x reachable combination for both services. Fresh
+    app per case (a fresh probe cache), so the first /health always probes:
+    - not configured (empty URL): configured and reachable both false, and
+      no probe traffic reaches any stub;
+    - configured + healthy: both true; the probes hit GET /models and
+      GET /health with the bearer credentials when configured;
+    - configured but unreachable: reachable false (HTTP 503, 401, and — for
+      the face service — a drifted embedding identity, which the reused
+      identity check turns into unreachable: one embedding space, global
+      invariant);
+    - mixed: one service configured, the other not;
+    - dead ports last (connection refused), once the stubs have died."""
+    vlm = _VlmStub()
+    face = _FaceStub()
+    drifted = _FaceStub(identity={"name": "adaface-ir101", "revision": "0" * 40,
+                                  "weights_sha256": "0" * 64, "preprocessing": "x"})
+    try:
+        base = backend.service.settings  # the fixture pins both URLs empty
+
+        def with_urls(**updates):
+            return TestClient(create_app(base.model_copy(update=updates)))
+
+        # 1. Not configured: all four false, no probe traffic.
+        with with_urls() as client:
+            assert _health_flags(client) == (False, False, False, False)
+        assert vlm.requests == [] and face.requests == [] and drifted.requests == []
+
+        # 2. Both configured and healthy: all four true, probes with auth.
+        with with_urls(
+            ai_base_url=vlm.url,
+            face_service_url=face.url,
+            ai_api_key="vlm-key",
+            face_service_token="face-token",
+        ) as client:
+            assert _health_flags(client) == (True, True, True, True)
+        assert vlm.requests == [("GET", "/v1/models", "Bearer vlm-key")]
+        assert face.requests == [("GET", "/health", "Bearer face-token")]
+
+        # 3. VLM unreachable while its stub is still up: an HTTP 503 and a
+        #    rejected key (401) both classify as unreachable.
+        vlm.status = 503
+        with with_urls(ai_base_url=vlm.url, face_service_url=face.url) as client:
+            assert _health_flags(client) == (True, False, True, True)
+        vlm.status = 200
+        vlm.bearer = "expected-key"
+        with with_urls(
+            ai_base_url=vlm.url, face_service_url=face.url, ai_api_key="wrong-key"
+        ) as client:
+            assert _health_flags(client) == (True, False, True, True)
+        vlm.bearer = None
+
+        # 4. Face service unreachable, three ways while the stubs are up:
+        #    an HTTP 503, a rejected token (401), and a drifted embedding
+        #    identity (200 + "ok", but the identity check fails:
+        #    unreachable — never a silently different embedding space).
+        face.status = 503
+        with with_urls(ai_base_url=vlm.url, face_service_url=face.url) as client:
+            assert _health_flags(client) == (True, True, True, False)
+        face.status = 200
+        face.bearer = "expected-token"
+        with with_urls(
+            ai_base_url=vlm.url, face_service_url=face.url, face_service_token="wrong-token"
+        ) as client:
+            assert _health_flags(client) == (True, True, True, False)
+        face.bearer = None
+        with with_urls(ai_base_url=vlm.url, face_service_url=drifted.url) as client:
+            assert _health_flags(client) == (True, True, True, False)
+        assert any(request[1] == "/health" for request in drifted.requests)
+
+        # 5. Mixed: exactly one service configured, the other not.
+        with with_urls(face_service_url=face.url) as client:
+            assert _health_flags(client) == (False, False, True, True)
+        with with_urls(ai_base_url=vlm.url) as client:
+            assert _health_flags(client) == (True, True, False, False)
+
+        # 6. Dead ports last (the stubs die for good): a refused connection
+        #    is unreachable, and the endpoint still answers 200.
+        vlm.stop()
+        face.stop()
+        with with_urls(ai_base_url=f"http://127.0.0.1:{vlm.port}/v1") as client:
+            assert _health_flags(client) == (True, False, False, False)
+        with with_urls(face_service_url=f"http://127.0.0.1:{face.port}") as client:
+            assert _health_flags(client) == (False, False, True, False)
+    finally:
+        vlm.stop()
+        face.stop()
+        drifted.stop()
+
+
+def test_health_ai_probes_cached_for_30_seconds(backend):
+    """Probe results are cached 30 s per process (Q4): a service that
+    starts failing mid-window keeps its last (reachable) result until the
+    window expires — the stubs see exactly one probe per window — and when
+    the window does expire a fresh probe runs and the flags flip to
+    unreachable. A failed probe never fails the endpoint."""
+    vlm = _VlmStub()
+    face = _FaceStub()
+    try:
+        settings = backend.service.settings.model_copy(
+            update={"ai_base_url": vlm.url, "face_service_url": face.url}
+        )
+        app = create_app(settings)
+        with TestClient(app) as client:
+            # First window: one probe per service, both reachable.
+            assert _health_flags(client) == (True, True, True, True)
+            assert len(vlm.requests) == 1 and len(face.requests) == 1
+
+            # Both services start failing mid-window (still up, now 503):
+            # the cached result shields /health — no re-probe happens.
+            vlm.status = 503
+            face.status = 503
+            assert _health_flags(client) == (True, True, True, True)
+            assert len(vlm.requests) == 1 and len(face.requests) == 1
+
+            # Expire the window (the test/ops seam on app.state): the fresh
+            # probes hit the failing services and the flags flip.
+            app.state.ai_probe_cache["ts"] -= api_module._AI_PROBE_CACHE_SECONDS + 1
+            assert _health_flags(client) == (True, False, True, False)
+            assert len(vlm.requests) == 2 and len(face.requests) == 2
+
+            # Now the services are fully dead (connection refused): a
+            # re-probe of dead ports keeps the flags false, and /health
+            # still answers 200.
+            vlm.stop()
+            face.stop()
+            app.state.ai_probe_cache["ts"] -= api_module._AI_PROBE_CACHE_SECONDS + 1
+            assert _health_flags(client) == (True, False, True, False)
+    finally:
+        vlm.stop()
+        face.stop()

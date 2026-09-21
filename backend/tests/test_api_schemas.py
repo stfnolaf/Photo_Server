@@ -548,6 +548,30 @@ def test_queue_and_health_models_round_trip():
     assert set(HealthOut.model_validate(health).model_dump(by_alias=True).keys()) == set(health)
 
 
+def test_health_out_round_trips_every_flag_combination():
+    """Phase 3B of the AI service split plan: the four service-visibility
+    flags round-trip in every configured x reachable combination for both
+    services, and only as strict booleans (a string or an int is a contract
+    break, like every other wire primitive here)."""
+    health = phase2_find("GET", "/health")["body"]
+    for semantic_configured in (False, True):
+        for semantic_reachable in (False, True):
+            for face_configured in (False, True):
+                for face_reachable in (False, True):
+                    body = {
+                        **health,
+                        "aiSemanticConfigured": semantic_configured,
+                        "aiSemanticReachable": semantic_reachable,
+                        "aiFaceConfigured": face_configured,
+                        "aiFaceReachable": face_reachable,
+                    }
+                    assert_round_trip(HealthOut, body)
+    with pytest.raises(ValidationError):
+        HealthOut.model_validate({**health, "aiFaceReachable": "true"})
+    with pytest.raises(ValidationError):
+        HealthOut.model_validate({**health, "aiSemanticConfigured": 1})
+
+
 def test_upload_models_reject_forbidden_shapes():
     batches = phase2_batch_bodies()
     complete = next(body for body in batches if body["status"] == "complete")

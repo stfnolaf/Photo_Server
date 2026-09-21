@@ -778,6 +778,22 @@ export type HttpValidationError = {
  */
 export type HealthOut = {
     /**
+     * Aifaceconfigured
+     */
+    aiFaceConfigured: boolean;
+    /**
+     * Aifacereachable
+     */
+    aiFaceReachable: boolean;
+    /**
+     * Aisemanticconfigured
+     */
+    aiSemanticConfigured: boolean;
+    /**
+     * Aisemanticreachable
+     */
+    aiSemanticReachable: boolean;
+    /**
      * Analysisfailed
      */
     analysisFailed: number;
