@@ -721,14 +721,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # the documented media type in the spec. This projection — spec only,
     # never the wire — drops the placeholder from the four binary 200s so
     # the checked-in spec and the served /openapi.json and /docs record
-    # exactly the media types and headers that are actually served. FastAPI
-    # caches the generated schema in app.openapi_schema, so the projection
-    # deep-copies before mutating.
+    # exactly the media types and headers that are actually served.
+    #
+    # The projection also hoists the 2xx schemas FastAPI emits inline because
+    # they are not a single named model: the list[X] arrays and the
+    # discriminated unions (their members are $refs, the wrapper is not). An
+    # inline schema carries no component title, so pydantic falls back to a
+    # title derived from the response field name ("Response <operationId>"),
+    # breaking the naming precedent of the operations whose 2xx schema is a
+    # $ref to a named component. Hoisting gives every 2xx JSON response a
+    # $ref (and generated clients stable type names): the unions reuse the
+    # code alias names (AssetDocOut, AssetDetailOut) and the arrays are named
+    # <Model>OutList, matching the ...Out component convention.
+    # FastAPI caches the generated schema in app.openapi_schema, so the
+    # projection deep-copies before mutating.
     _binary_200_media = {
         "/assets/{asset_id}/original": "application/octet-stream",
         "/assets/{asset_id}/preview": "image/jpeg",
         "/assets/{asset_id}/thumbnail": "image/jpeg",
         "/faces/{face_id}/thumbnail": "image/jpeg",
+    }
+    # (path, method, status) -> component name for the array's items: the
+    # inlined AssetDocOut union also lives inside the /assets array and is
+    # hoisted there too. Must run before the whole-schema hoist below.
+    _hoist_items = {
+        ("/assets", "get", "200"): "AssetDocOut",
+    }
+    # (path, method, status) -> component name for the whole inline 2xx schema.
+    _hoist_response = {
+        ("/albums", "get", "200"): "AlbumOutList",
+        ("/assets", "get", "200"): "AssetDocOutList",
+        ("/upload-batches", "get", "200"): "UploadBatchOutList",
+        ("/assets/{asset_id}", "get", "200"): "AssetDetailOut",
     }
     _base_openapi = app.openapi
 
@@ -740,6 +764,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content.setdefault(
                 media_type, {"schema": {"type": "string", "format": "binary"}}
             )
+        components = spec["components"]["schemas"]
+        for (path, method, status), name in _hoist_items.items():
+            schema = (
+                spec["paths"][path][method]["responses"][status]
+                ["content"]["application/json"]["schema"]
+            )
+            items = schema.get("items")
+            if not isinstance(items, dict) or "oneOf" not in items:
+                raise RuntimeError(
+                    f"{method.upper()} {path}: expected inline union items, "
+                    f"got {items!r}; update _hoist_items"
+                )
+            if name in components:
+                raise RuntimeError(f"component {name} already defined")
+            items["title"] = name
+            components[name] = items
+            schema["items"] = {"$ref": f"#/components/schemas/{name}"}
+        for (path, method, status), name in _hoist_response.items():
+            content = (
+                spec["paths"][path][method]["responses"][status]
+                ["content"]["application/json"]
+            )
+            schema = content["schema"]
+            if name.endswith("OutList"):
+                if schema.get("type") != "array" or not isinstance(
+                    schema.get("items"), dict
+                ):
+                    raise RuntimeError(
+                        f"{method.upper()} {path}: expected inline array, "
+                        f"got {schema!r}; update _hoist_response"
+                    )
+            elif "oneOf" not in schema:
+                raise RuntimeError(
+                    f"{method.upper()} {path}: expected inline union, "
+                    f"got {schema!r}; update _hoist_response"
+                )
+            if name in components:
+                raise RuntimeError(f"component {name} already defined")
+            schema["title"] = name
+            components[name] = schema
+            content["schema"] = {"$ref": f"#/components/schemas/{name}"}
         return spec
 
     app.openapi = openapi

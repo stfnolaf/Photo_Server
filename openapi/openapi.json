@@ -94,6 +94,13 @@
         "title": "AlbumOut",
         "type": "object"
       },
+      "AlbumOutList": {
+        "items": {
+          "$ref": "#/components/schemas/AlbumOut"
+        },
+        "title": "AlbumOutList",
+        "type": "array"
+      },
       "AlbumPatch": {
         "additionalProperties": false,
         "properties": {
@@ -492,6 +499,24 @@
         "title": "AnalysisStatusOut",
         "type": "object"
       },
+      "AssetDetailOut": {
+        "discriminator": {
+          "mapping": {
+            "1": "#/components/schemas/AssetDetailV1Out",
+            "2": "#/components/schemas/AssetDetailV2Out"
+          },
+          "propertyName": "schemaVersion"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AssetDetailV1Out"
+          },
+          {
+            "$ref": "#/components/schemas/AssetDetailV2Out"
+          }
+        ],
+        "title": "AssetDetailOut"
+      },
       "AssetDetailV1Out": {
         "additionalProperties": false,
         "description": "GET /assets/{id} for a v1 document: the document plus derived blocks.",
@@ -724,6 +749,31 @@
         ],
         "title": "AssetDetailV2Out",
         "type": "object"
+      },
+      "AssetDocOut": {
+        "discriminator": {
+          "mapping": {
+            "1": "#/components/schemas/AssetDocV1Out",
+            "2": "#/components/schemas/AssetDocV2Out"
+          },
+          "propertyName": "schemaVersion"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AssetDocV1Out"
+          },
+          {
+            "$ref": "#/components/schemas/AssetDocV2Out"
+          }
+        ],
+        "title": "AssetDocOut"
+      },
+      "AssetDocOutList": {
+        "items": {
+          "$ref": "#/components/schemas/AssetDocOut"
+        },
+        "title": "AssetDocOutList",
+        "type": "array"
       },
       "AssetDocV1Out": {
         "additionalProperties": false,
@@ -2253,6 +2303,13 @@
         "title": "UploadBatchOut",
         "type": "object"
       },
+      "UploadBatchOutList": {
+        "items": {
+          "$ref": "#/components/schemas/UploadBatchOut"
+        },
+        "title": "UploadBatchOutList",
+        "type": "array"
+      },
       "UploadBatchRequest": {
         "properties": {
           "batchId": {
@@ -2864,11 +2921,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/AlbumOut"
-                  },
-                  "title": "Response Listalbums",
-                  "type": "array"
+                  "$ref": "#/components/schemas/AlbumOutList"
                 }
               }
             },
@@ -3182,25 +3235,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "discriminator": {
-                      "mapping": {
-                        "1": "#/components/schemas/AssetDocV1Out",
-                        "2": "#/components/schemas/AssetDocV2Out"
-                      },
-                      "propertyName": "schemaVersion"
-                    },
-                    "oneOf": [
-                      {
-                        "$ref": "#/components/schemas/AssetDocV1Out"
-                      },
-                      {
-                        "$ref": "#/components/schemas/AssetDocV2Out"
-                      }
-                    ]
-                  },
-                  "title": "Response Listassets",
-                  "type": "array"
+                  "$ref": "#/components/schemas/AssetDocOutList"
                 }
               }
             },
@@ -3288,22 +3323,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "discriminator": {
-                    "mapping": {
-                      "1": "#/components/schemas/AssetDetailV1Out",
-                      "2": "#/components/schemas/AssetDetailV2Out"
-                    },
-                    "propertyName": "schemaVersion"
-                  },
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/AssetDetailV1Out"
-                    },
-                    {
-                      "$ref": "#/components/schemas/AssetDetailV2Out"
-                    }
-                  ],
-                  "title": "Response Getassetdetail"
+                  "$ref": "#/components/schemas/AssetDetailOut"
                 }
               }
             },
@@ -4485,11 +4505,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/UploadBatchOut"
-                  },
-                  "title": "Response Listuploadbatches",
-                  "type": "array"
+                  "$ref": "#/components/schemas/UploadBatchOutList"
                 }
               }
             },
