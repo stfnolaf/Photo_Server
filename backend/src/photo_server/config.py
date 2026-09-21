@@ -57,8 +57,14 @@ class Settings(BaseSettings):
     # frames are grouped into a burst.
     burst_cluster_phash_max_distance: int = Field(default=4, ge=0, le=64)
     burst_cluster_dhash_max_distance: int = Field(default=6, ge=0, le=64)
-    face_models_dir: Path = Path("/models")
-    face_detection_threshold: float = Field(default=0.8, ge=0.1, le=1.0)
+    # Face inference runs in the standalone face-service (Phase 2B of
+    # docs/ai-service-split-plan.md); the worker is a plain HTTP client
+    # (face_client). An empty URL leaves the face stage unavailable until
+    # Phase 3A's idle gate; the service's own knobs (models dir, detection
+    # threshold, concurrency, bind) live in the face-service's config.
+    face_service_url: str = ""
+    face_service_token: str = ""
+    face_service_timeout: int = Field(default=120, ge=10, le=3600)
     face_match_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
     # Preview cache LRU limits. Previews are disposable: a missing file always
     # resolves through the 202 + regenerate path, so over budget only costs a

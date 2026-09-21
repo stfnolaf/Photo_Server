@@ -36,8 +36,13 @@ x-backend: &backend
     PHOTO_AI_EXTRA_BODY: ${PHOTO_AI_EXTRA_BODY:-}
     PHOTO_AI_FACE_MAX_IMAGE_SIDE: ${PHOTO_AI_FACE_MAX_IMAGE_SIDE:-2000}
     PHOTO_AI_VLM_MAX_IMAGE_SIDE: ${PHOTO_AI_VLM_MAX_IMAGE_SIDE:-1280}
-    PHOTO_FACE_MODELS_DIR: /models
-    PHOTO_FACE_DETECTION_THRESHOLD: ${PHOTO_FACE_DETECTION_THRESHOLD:-0.8}
+    # Face inference runs in the standalone face-service (Phase 2B of
+    # docs/ai-service-split-plan.md); the worker only talks to it over HTTP
+    # (face_client). An empty PHOTO_FACE_SERVICE_URL leaves the face stage
+    # unavailable (Phase 3A idles on it).
+    PHOTO_FACE_SERVICE_URL: http://face-service:8901
+    PHOTO_FACE_SERVICE_TOKEN: ${PHOTO_FACE_SERVICE_TOKEN:-}
+    PHOTO_FACE_SERVICE_TIMEOUT: ${PHOTO_FACE_SERVICE_TIMEOUT:-120}
     PHOTO_FACE_MATCH_THRESHOLD: ${PHOTO_FACE_MATCH_THRESHOLD:-0.4}
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -121,25 +126,26 @@ services:
   worker:
     <<: *backend
     command: ["photo-server", "worker"]
-  ai-worker:
-    <<: *backend
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.ai
-    command: ["photo-server", "ai-worker"]
+  face-service:
+    # The GPU service of the stack (Phase 2B): the only place a face model
+    # runs. Stateless — results flow back over HTTP and land in Postgres/S3
+    # via the worker. Plain HTTP on the docker network; set
+    # PHOTO_FACE_SERVICE_TOKEN for the bearer token (both sides share it).
+    build: ./face-service
+    restart: unless-stopped
+    environment:
+      PHOTO_FACE_SERVICE_BIND: 0.0.0.0:8901
+      PHOTO_FACE_SERVICE_TOKEN: ${PHOTO_FACE_SERVICE_TOKEN:-}
+      PHOTO_FACE_MODELS_DIR: /models
+      PHOTO_FACE_DETECTION_THRESHOLD: ${PHOTO_FACE_DETECTION_THRESHOLD:-0.8}
+      PHOTO_FACE_SERVICE_CONCURRENCY: ${PHOTO_FACE_SERVICE_CONCURRENCY:-1}
     volumes:
-      - app-data:/data
       - type: bind
         source: ${PHOTO_FACE_MODEL_DIR:-../face-scanner/runtime/raw-jpeg/models}
         target: /models
         read_only: true
         bind:
           create_host_path: false
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ollama-model:
-        condition: service_completed_successfully
     deploy:
       resources:
         reservations:
@@ -147,6 +153,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+  ai-worker:
+    # Base image (Phase 2B): the worker no longer carries the CUDA stack or
+    # any face model; it is a plain HTTP client for the two AI services.
+    <<: *backend
+    command: ["photo-server", "ai-worker"]
   web:
     build: ./frontend/web
     ports:

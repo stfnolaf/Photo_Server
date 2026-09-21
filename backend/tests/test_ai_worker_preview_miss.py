@@ -9,10 +9,17 @@ and a reuse candidate whose preview is no longer cached must simply be skipped
 The VLM, the Ollama digest lookup, and the face detector are stubbed (no
 Ollama or AI-worker service is started); the miss paths run real
 ``worker.generate()`` / fingerprint / candidate / publish code against a
-disposable Postgres catalog, S3 bucket, and scratch directory.
+disposable Postgres catalog, S3 bucket, and scratch directory. One further
+test (Phase 2B) drives the real ``RemoteFaceAnalyzer`` against an in-process
+stub HTTP server implementing the face-service contract — still without any
+external service.
 """
 
+import json
 import shutil
+import threading
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
 
 from PIL import Image, ImageDraw
@@ -22,7 +29,8 @@ from test_integration import pytestmark  # noqa: F401
 
 import photo_server.ai_worker as ai_worker
 from photo_server.ai_worker import AIWorker
-from photo_server.analysis import SemanticAnalysis
+from photo_server.analysis import PIPELINE_VERSION, SemanticAnalysis
+from photo_server.face_client import ADAFACE_IDENTITY, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.models import Blob, Manifest
 from photo_server.worker import cache_paths, generate
@@ -350,3 +358,131 @@ def test_reuse_candidate_with_missing_preview_is_skipped(backend, monkeypatch, c
             {"a": target_id},
         ).one()
     assert run[0] == "computed" and run[1] is None
+
+
+# --- Phase 2B: the worker driving the real RemoteFaceAnalyzer. --------------
+
+STUB_FACE = {"box": [0.1, 0.1, 0.2, 0.2], "confidence": 0.9, "embedding": [1.0, 0.0]}
+
+STUB_HEALTH = {
+    "status": "ok",
+    "models": {
+        "faceDetector": "yunet-2023mar",
+        "faceEmbedding": {
+            "name": ADAFACE_IDENTITY["name"],
+            "revision": ADAFACE_IDENTITY["revision"],
+            "weightsSha256": ADAFACE_IDENTITY["weights_sha256"],
+            "runtime": "onnxruntime-1.23.2",
+        },
+    },
+    "detectionThreshold": 0.8,
+    "concurrency": 1,
+    "inFlight": 0,
+    "queueDepth": 0,
+}
+
+
+@dataclass
+class _CapturedRequest:
+    method: str
+    path: str
+    headers: object
+    body: bytes
+
+
+class _FaceServiceStub:
+    """In-process stand-in for the face-service's HTTP contract: ``GET
+    /health`` (verified identity) and ``POST /v1/faces/analyze`` (raw JPEG
+    in, face list out) over a real 127.0.0.1 socket, so the worker's
+    ``RemoteFaceAnalyzer`` runs its real httpx path end to end. No external
+    service is started."""
+
+    def __init__(self):
+        self.requests: list[_CapturedRequest] = []
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _reply(self, payload: dict):
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                stub.requests.append(_CapturedRequest("GET", self.path, self.headers, b""))
+                self._reply(STUB_HEALTH)
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                stub.requests.append(_CapturedRequest("POST", self.path, self.headers, body))
+                self._reply({"schemaVersion": 1, "faces": [STUB_FACE]})
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def test_worker_runs_face_stage_through_remote_service(backend, monkeypatch):
+    """Phase 2B: ``_faces`` is the real ``RemoteFaceAnalyzer`` (no stub for
+    the client itself) pointed at a stub HTTP server implementing the
+    face-service contract: the worker sends its prepared JPEG over real
+    HTTP and the artifact records the verified remote identity."""
+    stub = _FaceServiceStub()
+    try:
+        backend.service.settings = backend.service.settings.model_copy(
+            update={
+                "face_service_url": f"http://127.0.0.1:{stub.port}",
+                "face_service_token": "tok-test",
+            }
+        )
+        calls = [0]
+
+        def fake_analyze_semantics(settings, jpeg):
+            calls[0] += 1
+            return FAKE_SEMANTIC, DIGEST, {}
+
+        monkeypatch.setattr(ai_worker, "analyze_semantics", fake_analyze_semantics)
+        monkeypatch.setattr(ai_worker, "resolve_model_digest", lambda settings, model: DIGEST)
+
+        worker = AIWorker(backend.service)
+        assert isinstance(worker.faces, RemoteFaceAnalyzer)
+        asset_id = add_plain_asset(backend, "remote-faces.JPG")
+        make_preview(backend, asset_id)
+
+        result = worker.run_once()
+        assert result["status"] == "ready", result
+        assert result["semanticOrigin"] == "computed"
+        assert result["counters"]["stageFailures"]["face"] == 0
+        assert calls[0] == 1
+
+        # The stub saw the identity probe and the raw JPEG, both
+        # bearer-authenticated.
+        health, analyze = stub.requests
+        assert (health.method, health.path) == ("GET", "/health")
+        assert (analyze.method, analyze.path) == ("POST", "/v1/faces/analyze")
+        for request in stub.requests:
+            assert request.headers.get("Authorization") == "Bearer tok-test"
+        assert analyze.headers.get("Content-Type") == "image/jpeg"
+        assert analyze.body[:2] == b"\xff\xd8"  # the worker's real prepare_jpeg output
+
+        # The artifact records the identity verified from the remote health.
+        artifact = backend.service.storage.get_json(
+            f"analysis/{asset_id}/{PIPELINE_VERSION}/{result['runId']}.json"
+        )
+        assert artifact["models"]["faceDetector"] == "yunet-2023mar"
+        assert artifact["models"]["faceEmbedding"] == {
+            **ADAFACE_IDENTITY,
+            "runtime": "onnxruntime-1.23.2",
+        }
+        assert artifact["faces"] == [STUB_FACE]
+    finally:
+        stub.stop()

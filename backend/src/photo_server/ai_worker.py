@@ -1,4 +1,11 @@
-"""Single-concurrency background worker for local CUDA photo analysis."""
+"""Single-concurrency background worker for photo analysis.
+
+Both AI services are remote (Phase 2B of ``docs/ai-service-split-plan.md``):
+the VLM through the OpenAI-standard client in ``analysis`` and the face
+stage through the face-service client in ``face_client``. The worker holds
+no learned models — it prepares inputs, calls the services, and stores
+results (matching against stored embeddings stays in the catalog).
+"""
 
 import json
 import sys
@@ -9,16 +16,15 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from photo_server.analysis import (
-    ADAFACE_IDENTITY,
     ANALYSIS_TYPE,
     PIPELINE_VERSION,
-    AdaFaceAnalyzer,
     analyze_semantics,
     prepare_jpeg,
     resolve_model_digest,
     searchable_text,
 )
 from photo_server.browsing import camera_time
+from photo_server.face_client import ADAFACE_IDENTITY, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION, compute_fingerprint
 from photo_server.reuse import (
     REUSE_POLICY_VERSION,
@@ -36,15 +42,15 @@ from photo_server.worker import cache_paths, generate
 class AIWorker:
     def __init__(self, service: Service):
         self.service = service
-        self._faces = None
+        # The face stage runs in the standalone face-service; this client is
+        # the only face code the server keeps (Phase 2B).
+        self._faces = RemoteFaceAnalyzer(service.settings)
         # Wall-clock duration of the most recent real VLM call on this worker.
         # Reused frames report it as the estimated VLM time avoided.
         self._last_vlm_seconds: float | None = None
 
     @property
-    def faces(self) -> AdaFaceAnalyzer:
-        if self._faces is None:
-            self._faces = AdaFaceAnalyzer(self.service.settings)
+    def faces(self) -> RemoteFaceAnalyzer:
         return self._faces
 
     def run_once(self) -> dict | None:
@@ -95,8 +101,9 @@ class AIWorker:
             decision, source, source_run_id, rejections, policy_evaluated = self._semantic_reuse(
                 manifest, fingerprint, vlm_jpeg, model_digest, force_full
             )
-            # The stages are deliberately serialized: AdaFace finishes its short
-            # CUDA batch before Ollama starts the much heavier VLM inference.
+            # The face stage is a short remote call (a fraction of a second)
+            # that completes before the VLM's much heavier request starts; it
+            # runs on every claimed job, including reused frames (Q6).
             stage = "face"
             faces = self.faces.analyze(face_jpeg)
             reuse_mode = self.service.settings.ai_semantic_reuse_mode
