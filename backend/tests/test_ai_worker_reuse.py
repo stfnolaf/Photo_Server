@@ -13,6 +13,10 @@ The VLM (``analyze_semantics``), the Ollama digest lookup
 (``resolve_model_digest``), and the face detector (``faces``) are stubbed so the
 tests never start the AI worker services or touch CUDA/Ollama. Only the reuse
 decision, fingerprint persistence, and the atomic publish path run for real.
+
+Phase 3A's service gate is in place for every test here: both service URLs
+are stub-configured and both probes stubbed healthy, so the worker claims
+exactly as before the gate existed.
 """
 
 from uuid import uuid4
@@ -114,8 +118,16 @@ class FaceStub:
 
 
 def make_worker(backend, monkeypatch, calls: list, digest: str = DIGEST, pipeline_version=None):
+    # Phase 3A gate: both service URLs stub-configured (non-empty) and both
+    # probes stubbed healthy, so the worker claims exactly as before the gate
+    # existed.
+    backend.service.settings = backend.service.settings.model_copy(
+        update={"ai_base_url": "http://vlm-stub/v1", "face_service_url": "http://face-stub/"}
+    )
     worker = AIWorker(backend.service)
     worker._faces = FaceStub()
+    monkeypatch.setattr(worker, "_probe_vlm", lambda: True)
+    monkeypatch.setattr(worker, "_probe_face", lambda: True)
 
     def fake_analyze_semantics(settings, jpeg):
         calls[0] += 1

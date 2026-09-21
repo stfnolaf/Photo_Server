@@ -83,16 +83,19 @@ def test_ai_image_sizes_have_separate_environment_overrides(monkeypatch, tmp_pat
     assert settings.ai_vlm_max_image_side == 1024
 
 
-def test_ai_settings_use_openai_endpoint_defaults(monkeypatch):
+def test_ai_settings_unconfigured_by_default(monkeypatch):
+    # Phase 3A: AI is an optional configuration — the VLM endpoint is empty
+    # by default (the worker idles; compose sets the local URL explicitly).
     clear_credentials(monkeypatch)
     settings = Settings(
         _env_file=None,
         s3_endpoint="http://localhost:9000",
         database_url="postgresql+psycopg://test@localhost/test",
     )
-    assert settings.ai_base_url == "http://ollama:11434/v1"
+    assert settings.ai_base_url == ""
     assert settings.ai_api_key == ""
     assert settings.ai_extra_body == ""
+    assert settings.ai_worker_concurrency == 1
 
 
 def test_ai_endpoint_settings_come_from_environment(monkeypatch, tmp_path):

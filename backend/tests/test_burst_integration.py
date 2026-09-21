@@ -21,6 +21,10 @@ modes:
 The AI worker services are never started: ``analyze_semantics``,
 ``resolve_model_digest``, and the face detector are stubbed, so no CUDA or
 Ollama work happens and no production data is touched.
+
+Phase 3A's service gate is in place for every test here: both service URLs
+are stub-configured and both probes stubbed healthy, so the worker claims
+exactly as before the gate existed.
 """
 
 from uuid import UUID, uuid4
@@ -107,8 +111,16 @@ class FailingFaceStub:
 
 
 def make_worker(backend, monkeypatch, calls: list, faces=None) -> AIWorker:
+    # Phase 3A gate: both service URLs stub-configured (non-empty) and both
+    # probes stubbed healthy, so the worker claims exactly as before the gate
+    # existed.
+    backend.service.settings = backend.service.settings.model_copy(
+        update={"ai_base_url": "http://vlm-stub/v1", "face_service_url": "http://face-stub/"}
+    )
     worker = AIWorker(backend.service)
     worker._faces = faces or FaceStub()
+    monkeypatch.setattr(worker, "_probe_vlm", lambda: True)
+    monkeypatch.setattr(worker, "_probe_face", lambda: True)
 
     def fake_analyze_semantics(settings, jpeg):
         calls[0] += 1

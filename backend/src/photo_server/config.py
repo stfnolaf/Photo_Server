@@ -39,15 +39,22 @@ class Settings(BaseSettings):
     )
     cors_origins: str = ""
     exiftool: str = "exiftool"
-    # OpenAI-compatible VLM endpoint: local Ollama's /v1 path by default,
-    # or any remote/hosted provider (an empty default lands in Phase 3A).
-    ai_base_url: str = "http://ollama:11434/v1"
+    # OpenAI-compatible VLM endpoint: empty = AI not configured (Phase 3A —
+    # the worker idles and analysis jobs accumulate as pending); any remote
+    # or hosted provider otherwise. Compose sets the local Ollama /v1 URL
+    # explicitly, so standard deployments are unaffected.
+    ai_base_url: str = ""
     ai_model: str = "qwen3-vl:8b-instruct-q4_K_M"
     ai_timeout_seconds: int = Field(default=600, ge=30, le=3600)
     ai_api_key: str = ""
     ai_extra_body: str = ""
     ai_face_max_image_side: int = Field(default=2000, ge=512, le=4096)
     ai_vlm_max_image_side: int = Field(default=1280, ge=512, le=4096)
+    # Phase 3A: the AI dispatcher's client-side bound — how many analyses it
+    # may run in flight at once (1 = today's single-consumer loop). It is a
+    # resource cap, not a throttle: beyond 1 the services pace the client
+    # (face-service queue / 429, Ollama's internal queue, provider limits).
+    ai_worker_concurrency: int = Field(default=1, ge=1, le=8)
     # Semantic-reuse rollout mode: "off" always invokes the VLM, "observe" records
     # the reuse decision but still invokes the VLM, "on" reuses semantics when every
     # gate passes. The first release defaults to "observe".
@@ -59,9 +66,11 @@ class Settings(BaseSettings):
     burst_cluster_dhash_max_distance: int = Field(default=6, ge=0, le=64)
     # Face inference runs in the standalone face-service (Phase 2B of
     # docs/ai-service-split-plan.md); the worker is a plain HTTP client
-    # (face_client). An empty URL leaves the face stage unavailable until
-    # Phase 3A's idle gate; the service's own knobs (models dir, detection
-    # threshold, concurrency, bind) live in the face-service's config.
+    # (face_client). An empty URL means AI is not configured: Phase 3A's
+    # gate leaves the worker idle (analysis jobs accumulate as pending)
+    # instead of failing them. The service's own knobs (models dir,
+    # detection threshold, concurrency, bind) live in the face-service's
+    # config.
     face_service_url: str = ""
     face_service_token: str = ""
     face_service_timeout: int = Field(default=120, ge=10, le=3600)

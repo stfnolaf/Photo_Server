@@ -1,30 +1,58 @@
-"""Single-concurrency background worker for photo analysis.
+"""Background dispatcher for photo analysis (Phase 3A: AI is optional).
 
-Both AI services are remote (Phase 2B of ``docs/ai-service-split-plan.md``):
+Both AI services are remote (Phases 1/2B of ``docs/ai-service-split-plan.md``):
 the VLM through the OpenAI-standard client in ``analysis`` and the face
 stage through the face-service client in ``face_client``. The worker holds
 no learned models — it prepares inputs, calls the services, and stores
 results (matching against stored embeddings stays in the catalog).
+
+Phase 3A makes AI an optional configuration:
+
+- **Not configured** (``PHOTO_AI_BASE_URL`` or ``PHOTO_FACE_SERVICE_URL``
+  empty): the dispatcher never claims; analysis jobs accumulate as
+  ``pending`` (they are created at import) and the backlog drains once the
+  URLs are set. The loop sleeps a fixed 10 s per iteration and emits a slow
+  heartbeat (at most every 60 s) with the backlog size.
+- **Configured**: the dispatcher probes both services (face-service
+  ``GET /health``, VLM ``GET /models``, 5 s timeouts) and caches the result
+  30 s per process (Q4). Jobs are claimed only when both probes are healthy.
+  While a service is unhealthy the dispatcher claims nothing and sleeps with
+  a 10 s backoff doubling to 120 s; the probes never raise out of the loop.
+- **In-flight bound**: at most ``PHOTO_AI_WORKER_CONCURRENCY`` (default 1)
+  analyses run concurrently; the dispatcher claims as slots free. At 1 this
+  is today's single-consumer loop, and the job rows' 1800 s lease already
+  makes crashed in-flight jobs reclaimable.
+- **Failure classification mid-job**: the service-unavailable classes
+  (``AIServiceUnavailableError`` from the VLM client,
+  ``FaceServiceUnavailable`` from the face client: connection errors,
+  timeouts, 429 with ``Retry-After``, 502-504) return the job to
+  ``pending`` — the backlog survives the outage and the same job is
+  claimed again when the services recover. Every other failure (4xx,
+  model/decode errors, invalid VLM JSON) fails the job with its stage,
+  exactly as before; recovery is the existing manual requeue.
 """
 
 import json
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import httpx
 from pydantic import ValidationError
 
 from photo_server.analysis import (
     ANALYSIS_TYPE,
     PIPELINE_VERSION,
+    AIServiceUnavailableError,
     analyze_semantics,
     prepare_jpeg,
     resolve_model_digest,
     searchable_text,
 )
 from photo_server.browsing import camera_time
-from photo_server.face_client import ADAFACE_IDENTITY, RemoteFaceAnalyzer
+from photo_server.face_client import ADAFACE_IDENTITY, FaceServiceUnavailable, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION, compute_fingerprint
 from photo_server.reuse import (
     REUSE_POLICY_VERSION,
@@ -38,6 +66,19 @@ from photo_server.reuse import (
 from photo_server.service import Service
 from photo_server.worker import cache_paths, generate
 
+# Gate / dispatcher tuning (Phase 3A of the split plan).
+_PROBE_TIMEOUT_SECONDS = 5.0  # per-service probe timeout
+_PROBE_CACHE_SECONDS = 30.0  # probe result cache (Q4)
+_IDLE_SLEEP_SECONDS = 10.0  # not configured: fixed cadence, no claim
+_HEARTBEAT_SECONDS = 60.0  # at most one slow heartbeat per minute
+_BACKOFF_INITIAL_SECONDS = 10.0  # unhealthy: 10 s doubling...
+_BACKOFF_MAX_SECONDS = 120.0  # ...to 120 s
+_NO_JOBS_SLEEP_SECONDS = 2.0  # ready but no backlog: today's idle cadence
+
+
+class _StopRunning(Exception):
+    """Sentinel that ends the dispatcher loop cleanly (test/ops seam)."""
+
 
 class AIWorker:
     def __init__(self, service: Service):
@@ -48,15 +89,112 @@ class AIWorker:
         # Wall-clock duration of the most recent real VLM call on this worker.
         # Reused frames report it as the estimated VLM time avoided.
         self._last_vlm_seconds: float | None = None
+        # (monotonic timestamp, state, detail) of the last probe round; one
+        # AIWorker per process, so per-instance is per-process (Q4).
+        self._probe_cache: tuple[float, str, str] | None = None
 
     @property
     def faces(self) -> RemoteFaceAnalyzer:
         return self._faces
 
+    # --- Service gate (Phase 3A) ------------------------------------------
+
+    def _probe_vlm(self) -> bool:
+        """``GET {ai_base_url}/models`` on a 5 s timeout.
+
+        Any failure — connection error, timeout, non-2xx (a bad API key
+        answers 401) — makes the VLM unavailable, so a misconfigured
+        endpoint paces (no claims) instead of burning the backlog into
+        ``failed``. The probe never raises.
+        """
+        settings = self.service.settings
+        if not settings.ai_base_url:
+            return False
+        try:
+            headers = {}
+            if settings.ai_api_key:
+                headers["Authorization"] = f"Bearer {settings.ai_api_key}"
+            with httpx.Client(timeout=_PROBE_TIMEOUT_SECONDS) as client:
+                response = client.get(f"{settings.ai_base_url.rstrip('/')}/models", headers=headers)
+            return 200 <= response.status_code < 300
+        except Exception:
+            return False
+
+    def _probe_face(self) -> bool:
+        """The face-service ``GET /health`` (5 s, identity-checked by the
+        client). Any failure — including an embedding-identity mismatch,
+        which the client reports as unavailable — makes the face stage
+        unavailable. The probe never raises."""
+        if not self.service.settings.face_service_url:
+            return False
+        try:
+            self._faces.health()
+            return True
+        except Exception:
+            return False
+
+    def _gate(self) -> tuple[str, str]:
+        """Classify the AI service state and return ``(state, detail)``.
+
+        States: ``not-configured`` (a URL is empty), ``ready`` (both probes
+        pass), or ``face-service-unavailable`` / ``vlm-unavailable`` /
+        ``ai-services-unavailable`` (one or both probes failed). Probe
+        results are cached for 30 s per process (Q4); a job always runs both
+        stages, so both services must be healthy for any claim.
+        """
+        settings = self.service.settings
+        if not settings.ai_base_url or not settings.face_service_url:
+            return "not-configured", "PHOTO_AI_BASE_URL or PHOTO_FACE_SERVICE_URL is empty"
+        now = time.monotonic()
+        if self._probe_cache is not None and now - self._probe_cache[0] < _PROBE_CACHE_SECONDS:
+            return self._probe_cache[1], self._probe_cache[2]
+        face_ok = self._probe_face()
+        vlm_ok = self._probe_vlm()
+        if face_ok and vlm_ok:
+            state, detail = "ready", "both services healthy"
+        elif not face_ok and not vlm_ok:
+            state, detail = "ai-services-unavailable", "both service probes failed"
+        elif not face_ok:
+            state, detail = "face-service-unavailable", "face-service /health probe failed"
+        else:
+            state, detail = "vlm-unavailable", "VLM /models probe failed"
+        self._probe_cache = (now, state, detail)
+        return state, detail
+
+    def _pending_analysis_count(self) -> int | None:
+        """The backlog size for the heartbeat; ``None`` if it cannot be read
+        (the heartbeat must never take the loop down with it)."""
+        try:
+            return int(self.service.catalog.queue_counts()["analysisPending"] or 0)
+        except Exception:
+            return None
+
+    # --- One pass -----------------------------------------------------------
+
+    def _claim(self) -> dict | None:
+        return self.service.catalog.claim_ai_job()
+
     def run_once(self) -> dict | None:
-        job = self.service.catalog.claim_ai_job()
+        """One dispatcher pass: gate, then claim and execute when ready.
+
+        Returns ``None`` when the services are healthy but nothing is
+        claimable, an ``idle`` result (never claiming) when the gate blocks,
+        and the analysis result otherwise. ``--once`` maps ``None`` to
+        ``{"status": "idle"}``; an unconfigured worker reports
+        ``{"status": "idle", "reason": "ai-not-configured"}``.
+        """
+        state, _ = self._gate()
+        if state != "ready":
+            return {
+                "status": "idle",
+                "reason": "ai-not-configured" if state == "not-configured" else state,
+            }
+        job = self._claim()
         if job is None:
             return None
+        return self._execute(job)
+
+    def _execute(self, job: dict) -> dict:
         asset_id = job["asset_id"]
         force_full = bool(job.get("force_full", False))
         stage = "setup"
@@ -204,6 +342,32 @@ class AIWorker:
                 }
             result["counters"] = self._counters(
                 semantic_origin, force_full, rejections, policy_evaluated
+            )
+            return result
+        except (AIServiceUnavailableError, FaceServiceUnavailable) as error:
+            # A service that is unreachable mid-job paces, it does not
+            # punish: the job goes back to ``pending`` (the attempt was
+            # already counted at the claim, the lease is cleared) and is
+            # claimed again when the service recovers — this is what
+            # "the backlog is pushed through the services" means
+            # operationally. ``stageFailures`` still count the attempt.
+            try:
+                self.service.catalog.finish_ai_job(asset_id, "pending", str(error))
+                status = "requeued"
+            except Exception:
+                # The requeue write itself failed (the database is down):
+                # report it and let the claim lease expire for reclamation.
+                status = "failed"
+            result = {
+                "jobType": "analysis",
+                "assetId": asset_id,
+                "status": status,
+                "reason": "service-unavailable",
+                "error": str(error),
+                "stage": stage,
+            }
+            result["counters"] = self._counters(
+                None, force_full, rejections, policy_evaluated, failed_stage=stage
             )
             return result
         except Exception as error:
@@ -415,13 +579,120 @@ def _camera_identity(metadata: dict) -> str | None:
     return " ".join(parts) if parts else None
 
 
-def run(service: Service, once: bool = False):
+def _log_state_transition(previous: str | None, state: str, detail: str) -> None:
+    """One JSON line per gate-state change (it never repeats while the state
+    holds; the heartbeat keeps a long outage visible)."""
+    if state == "not-configured":
+        message = "AI services not configured; the worker idles until both service URLs are set"
+    elif state == "ready":
+        message = "AI services healthy; claiming analysis jobs again"
+    else:
+        message = f"AI service unavailable ({detail}); not claiming, backing off"
+    print(
+        json.dumps(
+            {
+                "status": "state-transition",
+                "previous": previous,
+                "state": state,
+                "detail": detail,
+                "message": message,
+            }
+        ),
+        flush=True,
+    )
+
+
+def run(service: Service, once: bool = False) -> dict | None:
+    """Run the AI dispatcher.
+
+    ``once`` executes a single pass (gate, then claim and execute when
+    ready) and returns its result; ``None`` becomes ``{"status": "idle"}``
+    and an unconfigured worker reports
+    ``{"status": "idle", "reason": "ai-not-configured"}``.
+
+    The loop keeps at most ``PHOTO_AI_WORKER_CONCURRENCY`` analyses in
+    flight: it claims jobs as slots free (the job rows' 1800 s lease makes
+    crashed in-flight jobs reclaimable) and runs them on a worker pool.
+    Not configured: fixed 10 s cadence, no claim, slow heartbeat.
+    Configured but a service unhealthy: 10 s backoff doubling to 120 s, no
+    claim, transition-logged. The probes never raise out of the loop.
+    """
     worker = AIWorker(service)
     if once:
-        return worker.run_once() or {"status": "idle"}
-    while True:
         result = worker.run_once()
-        if result:
-            print(json.dumps(result), flush=True)
-        else:
-            time.sleep(2)
+        return result if result is not None else {"status": "idle"}
+
+    bound = service.settings.ai_worker_concurrency
+    pool = ThreadPoolExecutor(max_workers=bound, thread_name_prefix="ai-worker")
+    in_flight: set[Future] = set()
+    last_state: str | None = None
+    backoff = _BACKOFF_INITIAL_SECONDS
+    last_heartbeat = 0.0
+    try:
+        while True:
+            for future in list(in_flight):
+                if future.done():
+                    in_flight.discard(future)
+                    try:
+                        result = future.result()
+                    except Exception as error:
+                        # An execution must never be able to kill the
+                        # dispatcher; the job's lease expires for reclamation.
+                        result = {
+                            "jobType": "analysis",
+                            "status": "failed",
+                            "stage": "setup",
+                            "error": f"analysis execution crashed: {error}",
+                        }
+                    print(json.dumps(result), flush=True)
+
+            state, detail = worker._gate()
+            if state != "ready":
+                if state != last_state:
+                    _log_state_transition(last_state, state, detail)
+                    backoff = _BACKOFF_INITIAL_SECONDS
+                    last_heartbeat = 0.0
+                now = time.monotonic()
+                if now - last_heartbeat >= _HEARTBEAT_SECONDS:
+                    pending = worker._pending_analysis_count()
+                    if state == "not-configured":
+                        message = "AI services not configured"
+                    else:
+                        message = f"AI services unavailable ({detail})"
+                    if pending is not None:
+                        message = f"{message}; {pending} analysis jobs waiting"
+                    print(
+                        json.dumps(
+                            {
+                                "status": "heartbeat",
+                                "state": state,
+                                "pendingAnalysis": pending,
+                                "message": message,
+                            }
+                        ),
+                        flush=True,
+                    )
+                    last_heartbeat = now
+                time.sleep(_IDLE_SLEEP_SECONDS if state == "not-configured" else backoff)
+                if state != "not-configured":
+                    backoff = min(backoff * 2, _BACKOFF_MAX_SECONDS)
+                last_state = state
+                continue
+
+            if last_state is not None and last_state != "ready":
+                _log_state_transition(last_state, "ready", detail)
+            last_state = "ready"
+
+            while len(in_flight) < bound:
+                job = worker._claim()
+                if job is None:
+                    break
+                in_flight.add(pool.submit(worker._execute, job))
+
+            if not in_flight:
+                time.sleep(_NO_JOBS_SLEEP_SECONDS)
+    except _StopRunning:
+        pass
+    finally:
+        pool.shutdown(wait=True)
+    return None

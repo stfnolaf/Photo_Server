@@ -13,11 +13,20 @@ disposable Postgres catalog, S3 bucket, and scratch directory. One further
 test (Phase 2B) drives the real ``RemoteFaceAnalyzer`` against an in-process
 stub HTTP server implementing the face-service contract — still without any
 external service.
+
+Phase 3A adds the service gate to every test here: both service URLs are
+stub-configured and both probes stubbed healthy, so the worker claims
+exactly as before. The gate's own behavior (unconfigured idle, probe-blocked
+claims, requeue on a mid-job outage, the bounded dispatcher) is covered by
+the ``test_unconfigured_*`` / ``test_gate_*`` / ``test_face_outage_*`` /
+``test_vlm_request_error_*`` / ``test_dispatcher_*`` tests at the end of the
+file, using the stub HTTP server and no external service.
 """
 
 import json
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
@@ -29,7 +38,7 @@ from test_integration import pytestmark  # noqa: F401
 
 import photo_server.ai_worker as ai_worker
 from photo_server.ai_worker import AIWorker
-from photo_server.analysis import PIPELINE_VERSION, SemanticAnalysis
+from photo_server.analysis import PIPELINE_VERSION, AIRequestError, SemanticAnalysis
 from photo_server.face_client import ADAFACE_IDENTITY, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.models import Blob, Manifest
@@ -55,8 +64,16 @@ class FaceStub:
 
 
 def make_worker(backend, monkeypatch, calls: list):
+    # Phase 3A gate: both service URLs stub-configured (non-empty) and both
+    # probes stubbed healthy, so the worker claims exactly as before the gate
+    # existed.
+    backend.service.settings = backend.service.settings.model_copy(
+        update={"ai_base_url": "http://vlm-stub/v1", "face_service_url": "http://face-stub/"}
+    )
     worker = AIWorker(backend.service)
     worker._faces = FaceStub()
+    monkeypatch.setattr(worker, "_probe_vlm", lambda: True)
+    monkeypatch.setattr(worker, "_probe_face", lambda: True)
 
     def fake_analyze_semantics(settings, jpeg):
         calls[0] += 1
@@ -395,19 +412,22 @@ class _FaceServiceStub:
     /health`` (verified identity) and ``POST /v1/faces/analyze`` (raw JPEG
     in, face list out) over a real 127.0.0.1 socket, so the worker's
     ``RemoteFaceAnalyzer`` runs its real httpx path end to end. No external
-    service is started."""
+    service is started. Both endpoints answer a configurable status so
+    Phase 3A tests can take the service down (503) at the gate or mid-job."""
 
-    def __init__(self):
+    def __init__(self, health_status: int = 200, analyze_status: int = 200):
         self.requests: list[_CapturedRequest] = []
+        self.health_status = health_status
+        self.analyze_status = analyze_status
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
 
-            def _reply(self, payload: dict):
+            def _send(self, status: int, payload: dict):
                 body = json.dumps(payload).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -415,12 +435,12 @@ class _FaceServiceStub:
 
             def do_GET(self):
                 stub.requests.append(_CapturedRequest("GET", self.path, self.headers, b""))
-                self._reply(STUB_HEALTH)
+                self._send(stub.health_status, STUB_HEALTH)
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 stub.requests.append(_CapturedRequest("POST", self.path, self.headers, body))
-                self._reply({"schemaVersion": 1, "faces": [STUB_FACE]})
+                self._send(stub.analyze_status, {"schemaVersion": 1, "faces": [STUB_FACE]})
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.port = self._server.server_address[1]
@@ -440,6 +460,9 @@ def test_worker_runs_face_stage_through_remote_service(backend, monkeypatch):
     try:
         backend.service.settings = backend.service.settings.model_copy(
             update={
+                # The VLM URL just needs to be non-empty (configured); its
+                # probe is stubbed, so the gate passes on the real face probe.
+                "ai_base_url": "http://vlm-stub/v1",
                 "face_service_url": f"http://127.0.0.1:{stub.port}",
                 "face_service_token": "tok-test",
             }
@@ -455,6 +478,7 @@ def test_worker_runs_face_stage_through_remote_service(backend, monkeypatch):
 
         worker = AIWorker(backend.service)
         assert isinstance(worker.faces, RemoteFaceAnalyzer)
+        monkeypatch.setattr(worker, "_probe_vlm", lambda: True)
         asset_id = add_plain_asset(backend, "remote-faces.JPG")
         make_preview(backend, asset_id)
 
@@ -464,15 +488,17 @@ def test_worker_runs_face_stage_through_remote_service(backend, monkeypatch):
         assert result["counters"]["stageFailures"]["face"] == 0
         assert calls[0] == 1
 
-        # The stub saw the identity probe and the raw JPEG, both
-        # bearer-authenticated.
-        health, analyze = stub.requests
-        assert (health.method, health.path) == ("GET", "/health")
-        assert (analyze.method, analyze.path) == ("POST", "/v1/faces/analyze")
+        # The stub saw the gate's identity probe (Phase 3A), the analyze
+        # preflight probe, and the raw JPEG, all bearer-authenticated.
+        healths = [r for r in stub.requests if r.path == "/health"]
+        analyzes = [r for r in stub.requests if r.path == "/v1/faces/analyze"]
+        assert len(healths) == 2 and len(analyzes) == 1
+        assert all(r.method == "GET" for r in healths)
+        assert (analyzes[0].method, analyzes[0].path) == ("POST", "/v1/faces/analyze")
         for request in stub.requests:
             assert request.headers.get("Authorization") == "Bearer tok-test"
-        assert analyze.headers.get("Content-Type") == "image/jpeg"
-        assert analyze.body[:2] == b"\xff\xd8"  # the worker's real prepare_jpeg output
+        assert analyzes[0].headers.get("Content-Type") == "image/jpeg"
+        assert analyzes[0].body[:2] == b"\xff\xd8"  # the worker's real prepare_jpeg output
 
         # The artifact records the identity verified from the remote health.
         artifact = backend.service.storage.get_json(
@@ -486,3 +512,383 @@ def test_worker_runs_face_stage_through_remote_service(backend, monkeypatch):
         assert artifact["faces"] == [STUB_FACE]
     finally:
         stub.stop()
+
+
+# --- Phase 3A: the service gate, requeue, and the bounded dispatcher. ------
+
+
+def ai_job_row(backend, asset_id: str) -> dict:
+    """The raw ai-v1 job row (status / attempts / error) as stored."""
+    with backend.service.catalog.engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT status, attempts, error FROM jobs "
+                "WHERE asset_id = :a AND job_type = 'ai-v1'"
+            ),
+            {"a": asset_id},
+        ).tuples().one()
+    return {"status": row[0], "attempts": row[1], "error": row[2]}
+
+
+def test_unconfigured_never_claims(backend):
+    """AI not configured (a service URL empty): ``run_once`` never claims —
+    the job row stays ``pending`` with attempts 0 and the result reports the
+    idle reason, so the backlog accumulates instead of failing."""
+    asset_id = add_plain_asset(backend, "unconfigured.JPG")
+    make_preview(backend, asset_id)
+
+    backend.service.settings = backend.service.settings.model_copy(
+        update={"ai_base_url": "", "face_service_url": ""}
+    )
+    worker = AIWorker(backend.service)
+    assert worker.run_once() == {"status": "idle", "reason": "ai-not-configured"}
+    assert ai_job_row(backend, asset_id) == {"status": "pending", "attempts": 0, "error": None}
+
+    # One empty URL is enough (a job always runs both stages).
+    asset_id = add_plain_asset(backend, "unconfigured-face.JPG")
+    make_preview(backend, asset_id)
+    backend.service.settings = backend.service.settings.model_copy(
+        update={"ai_base_url": "http://vlm-stub/v1", "face_service_url": ""}
+    )
+    assert worker.run_once() == {"status": "idle", "reason": "ai-not-configured"}
+    assert ai_job_row(backend, asset_id) == {"status": "pending", "attempts": 0, "error": None}
+
+
+def test_gate_blocks_claim_then_claims_after_recovery(backend, monkeypatch):
+    """Configured, but the face-service answers 503 to ``/health`` at the
+    gate: no claim, the job row is untouched; the service recovers, the 30 s
+    probe cache is reset, and the same pending job is claimed and completes."""
+    stub = _FaceServiceStub(health_status=503)
+    try:
+        backend.service.settings = backend.service.settings.model_copy(
+            update={
+                "ai_base_url": "http://vlm-stub/v1",
+                "face_service_url": f"http://127.0.0.1:{stub.port}",
+                "face_service_token": "tok-test",
+            }
+        )
+        worker = AIWorker(backend.service)
+        monkeypatch.setattr(worker, "_probe_vlm", lambda: True)
+        calls = [0]
+
+        def fake_analyze_semantics(settings, jpeg):
+            calls[0] += 1
+            return FAKE_SEMANTIC, DIGEST, {}
+
+        monkeypatch.setattr(ai_worker, "analyze_semantics", fake_analyze_semantics)
+        monkeypatch.setattr(ai_worker, "resolve_model_digest", lambda settings, model: DIGEST)
+
+        asset_id = add_plain_asset(backend, "gate-down.JPG")
+        make_preview(backend, asset_id)
+
+        # Down at the gate: no claim, the job row is untouched.
+        assert worker.run_once() == {"status": "idle", "reason": "face-service-unavailable"}
+        assert ai_job_row(backend, asset_id) == {
+            "status": "pending",
+            "attempts": 0,
+            "error": None,
+        }
+        assert calls[0] == 0
+
+        # The service recovers; reset the 30 s probe cache and run again.
+        stub.health_status = 200
+        worker._probe_cache = None
+        result = worker.run_once()
+        assert result["status"] == "ready", result
+        assert result["assetId"] == asset_id
+        assert result["counters"]["stageFailures"]["face"] == 0
+        assert calls[0] == 1
+    finally:
+        stub.stop()
+
+
+def test_face_outage_mid_job_requeues_then_completes(backend, monkeypatch):
+    """The face-service is healthy at the gate (the job is claimed) but its
+    analyze call answers 503 mid-job — after the fingerprint stage: the job
+    goes back to ``pending`` (attempts 1, error recorded, lease cleared) and
+    is claimed again, completing, once the service is restored."""
+    stub = _FaceServiceStub(analyze_status=503)
+    try:
+        backend.service.settings = backend.service.settings.model_copy(
+            update={
+                "ai_base_url": "http://vlm-stub/v1",
+                "face_service_url": f"http://127.0.0.1:{stub.port}",
+                "face_service_token": "tok-test",
+            }
+        )
+        worker = AIWorker(backend.service)  # the real RemoteFaceAnalyzer
+        monkeypatch.setattr(worker, "_probe_vlm", lambda: True)
+        calls = [0]
+
+        def fake_analyze_semantics(settings, jpeg):
+            calls[0] += 1
+            return FAKE_SEMANTIC, DIGEST, {}
+
+        monkeypatch.setattr(ai_worker, "analyze_semantics", fake_analyze_semantics)
+        monkeypatch.setattr(ai_worker, "resolve_model_digest", lambda settings, model: DIGEST)
+
+        asset_id = add_plain_asset(backend, "mid-job-outage.JPG")
+        make_preview(backend, asset_id)
+
+        # Healthy at the gate (200), claimed, then the face stage's analyze
+        # call dies: service-unavailable class -> requeued, not failed.
+        result = worker.run_once()
+        assert result["status"] == "requeued", result
+        assert result["reason"] == "service-unavailable"
+        assert result["stage"] == "face"
+        assert "503" in result["error"]
+        assert result["counters"]["stageFailures"]["face"] == 1
+        assert calls[0] == 0  # the VLM was never invoked
+        assert ai_job_row(backend, asset_id) == {
+            "status": "pending",
+            "attempts": 1,
+            "error": result["error"],
+        }
+
+        # The service is restored: the same pending job is claimed again and
+        # completes — the backlog survives the outage.
+        stub.analyze_status = 200
+        worker._probe_cache = None
+        result = worker.run_once()
+        assert result["status"] == "ready", result
+        assert result["assetId"] == asset_id
+        assert result["semanticOrigin"] == "computed"
+        assert calls[0] == 1
+        assert ai_job_row(backend, asset_id)["status"] == "ready"
+    finally:
+        stub.stop()
+
+
+def test_vlm_request_error_fails_job_not_requeued(backend, monkeypatch):
+    """A 4xx from the VLM (e.g. a bad API key) is a request error, not a
+    service outage: the job fails with its stage, exactly as before Phase
+    3A — it is not requeued (recovery stays the manual requeue)."""
+    calls = [0]
+    worker = make_worker(backend, monkeypatch, calls)
+
+    def failing_analyze_semantics(settings, jpeg):
+        raise AIRequestError("401 Unauthorized: invalid api key")
+
+    monkeypatch.setattr(ai_worker, "analyze_semantics", failing_analyze_semantics)
+
+    asset_id = add_plain_asset(backend, "vlm-4xx.JPG")
+    make_preview(backend, asset_id)
+
+    result = worker.run_once()
+    assert result["status"] == "failed", result
+    assert result["stage"] == "semantic"
+    assert "401" in result["error"]
+    assert result["counters"]["stageFailures"]["semantic"] == 1
+    row = ai_job_row(backend, asset_id)
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+    assert "401" in (row["error"] or "")
+
+
+def test_dispatcher_idles_when_unconfigured(backend, monkeypatch, capsys):
+    """The long-running dispatcher with no AI configured: a fixed 10 s
+    cadence (no doubling), never a claim, the transition logged once, and
+    the slow heartbeat carrying the backlog size."""
+    backend.service.settings = backend.service.settings.model_copy(
+        update={"ai_base_url": "", "face_service_url": ""}
+    )
+    asset_id = add_plain_asset(backend, "dispatcher-idle.JPG")
+    make_preview(backend, asset_id)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(ai_worker.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    gate_calls = {"n": 0}
+    real_gate = AIWorker._gate
+
+    def gated(self):
+        state, detail = real_gate(self)
+        gate_calls["n"] += 1
+        if gate_calls["n"] >= 4:
+            raise ai_worker._StopRunning
+        return state, detail
+
+    monkeypatch.setattr(AIWorker, "_gate", gated)
+
+    thread = threading.Thread(target=ai_worker.run, args=(backend.service,), daemon=True)
+    thread.start()
+    thread.join(timeout=30)
+    assert not thread.is_alive()
+
+    assert sleeps == [10, 10, 10]  # fixed cadence, no backoff doubling
+    assert ai_job_row(backend, asset_id) == {
+        "status": "pending",
+        "attempts": 0,
+        "error": None,
+    }
+    out = capsys.readouterr().out
+    assert out.count('"state-transition"') == 1
+    assert '"previous": null' in out
+    assert '"state": "not-configured"' in out
+    assert '"status": "heartbeat"' in out
+    assert "AI services not configured; 1 analysis jobs waiting" in out
+
+
+def test_dispatcher_backoff_doubles_when_unhealthy(backend, monkeypatch, capsys):
+    """Configured, but the face-service stays 503 at the gate: the
+    dispatcher claims nothing and sleeps a 10 s backoff that doubles (10,
+    20, 40, ... capped at 120 s), transition-logged once."""
+    stub = _FaceServiceStub(health_status=503)
+    try:
+        backend.service.settings = backend.service.settings.model_copy(
+            update={
+                "ai_base_url": "http://vlm-stub/v1",
+                "face_service_url": f"http://127.0.0.1:{stub.port}",
+                "face_service_token": "tok-test",
+            }
+        )
+        asset_id = add_plain_asset(backend, "dispatcher-backoff.JPG")
+        make_preview(backend, asset_id)
+
+        sleeps: list[float] = []
+        monkeypatch.setattr(ai_worker.time, "sleep", lambda seconds: sleeps.append(seconds))
+        monkeypatch.setattr(AIWorker, "_probe_vlm", lambda self: True)
+
+        gate_calls = {"n": 0}
+        real_gate = AIWorker._gate
+
+        def gated(self):
+            state, detail = real_gate(self)
+            gate_calls["n"] += 1
+            if gate_calls["n"] >= 4:
+                raise ai_worker._StopRunning
+            return state, detail
+
+        monkeypatch.setattr(AIWorker, "_gate", gated)
+
+        thread = threading.Thread(target=ai_worker.run, args=(backend.service,), daemon=True)
+        thread.start()
+        thread.join(timeout=30)
+        assert not thread.is_alive()
+
+        assert sleeps == [10, 20, 40]
+        assert ai_job_row(backend, asset_id) == {
+            "status": "pending",
+            "attempts": 0,
+            "error": None,
+        }
+        out = capsys.readouterr().out
+        assert out.count('"state-transition"') == 1
+        assert '"state": "face-service-unavailable"' in out
+    finally:
+        stub.stop()
+
+
+def test_dispatcher_bound_two_in_flight(backend, monkeypatch):
+    """``PHOTO_AI_WORKER_CONCURRENCY=2``: two analyses run concurrently and
+    the third is only claimed after one of them completes (the dispatcher
+    keeps its in-flight bound; the services pace beyond it)."""
+    backend.service.settings = backend.service.settings.model_copy(
+        update={
+            "ai_base_url": "http://vlm-stub/v1",
+            "face_service_url": "http://face-stub/",
+            "ai_worker_concurrency": 2,
+        }
+    )
+
+    intervals: list[tuple[float, float]] = []
+    interval_lock = threading.Lock()
+
+    class SlowFaceStub(FaceStub):
+        """Records each face stage's [start, end] and slows it so two
+        executions genuinely overlap."""
+
+        def analyze(self, jpeg) -> list[dict]:
+            start = time.monotonic()
+            time.sleep(0.4)
+            end = time.monotonic()
+            with interval_lock:
+                intervals.append((start, end))
+            return super().analyze(jpeg)
+
+    # The dispatcher constructs its own AIWorker; stand in the slow face
+    # stub for its real client.
+    monkeypatch.setattr(ai_worker, "RemoteFaceAnalyzer", lambda settings: SlowFaceStub())
+    monkeypatch.setattr(AIWorker, "_probe_vlm", lambda self: True)
+    monkeypatch.setattr(AIWorker, "_probe_face", lambda self: True)
+
+    calls = [0]
+
+    def fake_analyze_semantics(settings, jpeg):
+        calls[0] += 1
+        return FAKE_SEMANTIC, DIGEST, {}
+
+    monkeypatch.setattr(ai_worker, "analyze_semantics", fake_analyze_semantics)
+    monkeypatch.setattr(ai_worker, "resolve_model_digest", lambda settings, model: DIGEST)
+
+    asset_ids = [add_plain_asset(backend, f"bound-{i}.JPG") for i in range(3)]
+    for asset_id in asset_ids:
+        make_preview(backend, asset_id)
+
+    stop = {"flag": False}
+    real_gate = AIWorker._gate
+
+    def gated(self):
+        state, detail = real_gate(self)
+        if stop["flag"]:
+            raise ai_worker._StopRunning
+        return state, detail
+
+    monkeypatch.setattr(AIWorker, "_gate", gated)
+
+    thread = threading.Thread(target=ai_worker.run, args=(backend.service,), daemon=True)
+    thread.start()
+
+    # Watch the jobs table: at most two rows run concurrently, and stop the
+    # dispatcher once every job has completed.
+    max_running = 0
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        with backend.service.catalog.engine.connect() as connection:
+            running = int(
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM jobs "
+                        "WHERE job_type = 'ai-v1' AND status = 'running'"
+                    )
+                )
+                or 0
+            )
+            outstanding = int(
+                connection.scalar(
+                    text(
+                        "SELECT count(*) FROM jobs "
+                        "WHERE job_type = 'ai-v1' AND status != 'ready'"
+                    )
+                )
+                or 0
+            )
+        max_running = max(max_running, running)
+        if outstanding == 0:
+            stop["flag"] = True
+            break
+        time.sleep(0.02)
+
+    thread.join(timeout=30)
+    assert not thread.is_alive()
+
+    # The face stages' real intervals: two overlapped, the third began only
+    # after one of the first two had finished.
+    ordered = sorted(intervals)
+    assert len(ordered) == 3
+    events = []
+    for start, end in ordered:
+        events.append((start, 1))
+        events.append((end, -1))
+    events.sort(key=lambda event: (event[0], event[1]))  # starts before ends
+    peak = current = 0
+    for _, delta in events:
+        current += delta
+        peak = max(peak, current)
+    assert peak == 2  # never three in flight
+    assert ordered[2][0] >= min(ordered[0][1], ordered[1][1])
+    assert max_running <= 2  # as observed in the jobs table
+
+    assert calls[0] == 3
+    for asset_id in asset_ids:
+        assert ai_job_row(backend, asset_id)["status"] == "ready"
