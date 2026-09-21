@@ -2009,15 +2009,8 @@
             "$ref": "#/components/schemas/PreviewStatusOut"
           },
           "previewUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Previewurl"
+            "title": "Previewurl",
+            "type": "string"
           },
           "rating": {
             "title": "Rating",
@@ -2037,15 +2030,8 @@
             "type": "object"
           },
           "thumbnailUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Thumbnailurl"
+            "title": "Thumbnailurl",
+            "type": "string"
           },
           "timelineTime": {
             "title": "Timelinetime",

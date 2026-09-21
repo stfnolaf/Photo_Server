@@ -267,6 +267,11 @@ def test_models_reject_forbidden_shapes():
         PhotoSummaryOut.model_validate({**summary, "width": "4000"})
     with pytest.raises(ValidationError):
         PhotoSummaryOut.model_validate({**summary, "favorite": "true"})
+    # The producer always emits both summary URLs; null is a caught bug.
+    with pytest.raises(ValidationError):
+        PhotoSummaryOut.model_validate({**summary, "thumbnailUrl": None})
+    with pytest.raises(ValidationError):
+        PhotoSummaryOut.model_validate({**summary, "previewUrl": None})
     with pytest.raises(ValidationError):
         PreviewStatusOut.model_validate({"status": "weird", "error": None})
     with pytest.raises(ValidationError):

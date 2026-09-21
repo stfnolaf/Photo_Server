@@ -43,9 +43,6 @@ import {
 import type {
   BatchAbandonedOut,
   BrowseAssetsData,
-  BrowsePageOut,
-  BurstDetailOut,
-  PhotoSummaryOut,
   PreviewStatusOut,
   QueueResultOut,
   UploadBatchOut,
@@ -59,7 +56,6 @@ import type {
   PeoplePage,
   PersonDetail,
   PhotoDetail,
-  PhotoSummary,
   PendingMutation,
   UploadBatch,
   UploadQueueStatus,
@@ -135,30 +131,6 @@ async function call<T>(run: () => Promise<GeneratedResult>): Promise<T> {
   return data as T;
 }
 
-/**
- * Enforce the `PhotoSummary` producer-guaranteed URL invariants (see the
- * `types.ts` header) at the boundary: if a summary ever arrives with null
- * thumbnail/preview URLs, reconstruct the deterministic backend-relative
- * URLs instead of letting nulls reach an image source.
- */
-function mapSummary(item: PhotoSummaryOut): PhotoSummary {
-  return {
-    ...item,
-    thumbnailUrl: item.thumbnailUrl ?? `/assets/${item.assetId}/thumbnail`,
-    previewUrl: item.previewUrl ?? `/assets/${item.assetId}/preview`,
-  };
-}
-
-const browsePage = (page: BrowsePageOut): BrowsePage => ({
-  ...page,
-  items: page.items.map(mapSummary),
-});
-
-const burstDetail = (burst: BurstDetailOut): BurstDetail => ({
-  ...burst,
-  frames: burst.frames.map(mapSummary),
-});
-
 function uploadError(status: number, responseText: string): ApiError {
   let message = status ? `Upload failed (${status}).` : "The upload connection was interrupted.";
   try {
@@ -186,9 +158,7 @@ export const api = {
     call<PhotoDetail>(() => getAssetDetail({ client, signal, path: { asset_id: assetId } })),
 
   burst: (assetId: string, signal?: AbortSignal) =>
-    call<BurstDetailOut>(() => getBurst({ client, signal, path: { asset_id: assetId } })).then(
-      burstDetail,
-    ),
+    call<BurstDetail>(() => getBurst({ client, signal, path: { asset_id: assetId } })),
 
   people: (q = "", signal?: AbortSignal) =>
     call<PeoplePage>(() =>
@@ -212,7 +182,7 @@ export const api = {
     if (filters.view === "hidden") query.deleted = true;
     if (filters.albumId) query.album_id = filters.albumId;
     if (cursor) query.cursor = cursor;
-    return call<BrowsePageOut>(() => browseAssets({ client, signal, query })).then(browsePage);
+    return call<BrowsePage>(() => browseAssets({ client, signal, query }));
   },
 
   createUploadBatch: (

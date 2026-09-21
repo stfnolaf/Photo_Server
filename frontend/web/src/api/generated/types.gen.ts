@@ -1255,7 +1255,7 @@ export type PhotoSummaryOut = {
     /**
      * Previewurl
      */
-    previewUrl: string | null;
+    previewUrl: string;
     /**
      * Rating
      */
@@ -1277,7 +1277,7 @@ export type PhotoSummaryOut = {
     /**
      * Thumbnailurl
      */
-    thumbnailUrl: string | null;
+    thumbnailUrl: string;
     /**
      * Timelinetime
      */

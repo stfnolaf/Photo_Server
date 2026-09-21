@@ -8,15 +8,15 @@
  * the client-internal ones (`LibraryFilters`, `MutationMethod`,
  * `PendingMutation`), which name no wire field of their own.
  *
- * Two shims are deliberately not plain aliases; each encodes a documented
- * producer invariant rather than the conservative nullability the spec models:
+ * `PhotoSummary`, `BrowsePage`, and `BurstDetail` are pure aliases now: the
+ * backend models the summary URLs as non-nullable (`PhotoSummaryOut` in
+ * `backend/src/photo_server/api_schemas.py` — `asset_summary()` always emits
+ * both as f-strings), so the spec says `string` and the generated types
+ * carry the invariant. A producer regression failing validation is a 500
+ * (a caught bug, per the plan's decision 3), not a null the client must
+ * defend against.
  *
- * - `PhotoSummary` tightens `thumbnailUrl`/`previewUrl` from `string | null`
- *   to `string`. The producer always emits both as f-strings
- *   (`browsing.asset_summary()`), and `<img src>` / `PreviewImage` demand
- *   non-null values. If a response ever regresses to null, the facade's
- *   `mapSummary` reconstructs the deterministic backend-relative URLs
- *   instead of letting a null reach an image source.
+ * One shim is deliberately not a plain alias:
  *
  * - `PhotoDetail` aliases the schema-v2 member of the `AssetDetailOut`
  *   union (`AssetDetailV2Out`). The photo feature page is a v2-shaped
@@ -38,17 +38,9 @@ export type Health = Generated.HealthOut;
 export type LocationValue = Generated.LocationOut;
 export type UserState = Generated.UserStateOut;
 
-/** See the module header: `thumbnailUrl`/`previewUrl` are producer-guaranteed. */
-export type PhotoSummary = Generated.PhotoSummaryOut & {
-  thumbnailUrl: string;
-  previewUrl: string;
-};
-
-// `Omit` (not plain intersection) so the `frames`/`items` property is a
-// single declaration of the tightened type — consumers union these with
-// `?? []`, which a property-level intersection would defeat.
-export type BurstDetail = Omit<Generated.BurstDetailOut, "frames"> & { frames: PhotoSummary[] };
-export type BrowsePage = Omit<Generated.BrowsePageOut, "items"> & { items: PhotoSummary[] };
+export type PhotoSummary = Generated.PhotoSummaryOut;
+export type BurstDetail = Generated.BurstDetailOut;
+export type BrowsePage = Generated.BrowsePageOut;
 
 export type BlobInfo = Generated.BlobOut;
 

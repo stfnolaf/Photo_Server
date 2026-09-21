@@ -272,8 +272,10 @@ class PhotoSummaryOut(ResponseModel):
     burst_size: StrictInt | None
     burst_representative_asset_id: UUID | None
     preview: PreviewStatusOut
-    thumbnail_url: StrictStr | None
-    preview_url: StrictStr | None
+    # asset_summary() always emits both as f-strings, so both are non-null
+    # by construction (a null here is a caught bug, not a tolerated value).
+    thumbnail_url: StrictStr
+    preview_url: StrictStr
 
 
 class BrowsePageOut(ResponseModel):

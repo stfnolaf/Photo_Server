@@ -911,15 +911,20 @@ manual smoke passes.
   if the UI ever branches on `schemaVersion`, the shim becomes the full
   `AssetDetailOut` union (with care around TanStack `setQueryData` and the
   `revision: 1` literal).
-- **List documents: non-null `thumbnailUrl`/`previewUrl`.** The spec models
-  `PhotoSummaryOut.thumbnailUrl`/`previewUrl` as `string | null` (the
-  Pydantic models are conservative), but the producer
-  (`browsing.asset_summary()`) always emits both as f-strings. The
-  frontend asserts non-null in the `PhotoSummary` shim and re-derives the
-  deterministic `/assets/{assetId}/thumbnail|preview` URLs in the facade
-  should a null ever arrive. Follow-up: make the invariant explicit in the
-  backend models (e.g. non-`Optional` `StrictStr`) so the spec reflects
-  reality, then drop the shim tightening.
+- **RESOLVED — List documents: non-null `thumbnailUrl`/`previewUrl`.**
+  `PhotoSummaryOut.thumbnail_url`/`preview_url` are now non-`Optional`
+  `StrictStr` in `api_schemas.py`: `asset_summary()` always emits both as
+  f-strings, so the spec now says `string` and a producer regression
+  failing validation is a 500 (a caught bug, per decision 3) instead of a
+  null the client had to defend against — the schema unit suite asserts
+  the rejection. The regenerated spec (diff limited to exactly those two
+  properties) and the regenerated frontend client landed in the same
+  commit; `PhotoSummary`/`BrowsePage`/`BurstDetail` collapsed back to pure
+  aliases of the generated types, the `Omit`-based derivations vanished
+  with them, and the facade's URL-reconstruction maps were removed as
+  no-ops. Wire bytes are unchanged: every golden fixture already carried
+  non-null URLs, and the full golden suite plus the durable-state and
+  integration suites pass with the models tightened.
 - **`mutate()`'s `changes` stays loose.** The journal protocol is
   endpoint-dynamic (`path`/`method` arrive at runtime), so no single
   generated request-body type can statically cover every call site.
