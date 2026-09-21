@@ -945,3 +945,34 @@ manual smoke passes.
   an empty query string. The request *line* differs by that one byte; the
   query string is empty in both cases, so no key, value, or decoded
   parameter changes — noted for the "no wire change" audit only.
+- **Phase 6: the Python client's drift check needs a second config file.**
+  The generator's `-o <path>` CLI flag replaces the whole `output` config
+  object (its `getOutput()` then keeps only `{path}`, dropping
+  `pythonVersion` and falling back to the 3.9 defaults, which changes the
+  emitted style — `Optional`/`Union`/`(str, Enum)` vs `| None`/`StrEnum`)
+  and would fail every byte-diff. `check:api` therefore runs
+  `openapi-python -f openapi-python.check.ts` (identical to
+  `openapi-python.config.ts` except the output path points at a throwaway
+  `node_modules/` dir) instead of using `-o`. Related pitfall found while
+  testing this: `--dry-run` performs the output-dir *clean* before skipping
+  the writes, so a bare `openapi-python --dry-run` deletes the committed
+  `src/photo_server/generated` tree (it happened once in this phase; the
+  warning now lives in the config file's comments).
+- **Phase 6: `run_all_tests.sh` gained Section 5 instead of pure
+  verification.** The phase text expected only the existing spec-drift and
+  frontend `check:api` sections to be re-verified; in reality no backend
+  codegen drift check existed, so Section 5 adds
+  `openapi-python check:api` (self-contained: `npm ci` from the committed
+  lockfile, then regenerate-into-temp + `diff -r`), mirroring Section 4.
+  `upload_client.py` validates its outgoing declaration and every
+  describe/receipt/seal/poll response through `generated/pydantic_gen`
+  (a contract violation is a `RuntimeError`, not a `KeyError`), while the
+  transport stays hand-written httpx because the 0.0.24 `Sdk` stubs take
+  no parameters. The generated *request* models ship without
+  `populate_by_name` (generator config is inconsistent between request and
+  response models), so the CLI validates the hand-built wire dict with
+  `model_validate` and sends that same dict — request bytes unchanged.
+  The optional polish items were already resolved: face-thumbnail's 202
+  branch shares `derivative_responses()` (`Pending202Out`) since Phase 4,
+  and no `GET /assets` consumer exists yet, so `AssetListOut` stays
+  deferred until one appears.
