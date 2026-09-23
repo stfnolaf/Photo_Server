@@ -102,6 +102,10 @@ jobs = Table(
     Column("lease_until", BigInteger),
     Column("force_full", Boolean, nullable=False, server_default="false"),
 )
+
+AI_STAGE_LEASE_SECONDS = 600
+AI_PUBLISH_LEASE_SECONDS = 300
+
 ai_stage_jobs = Table(
     "ai_stage_jobs",
     schema,
@@ -942,6 +946,12 @@ class Catalog:
                                 .where(jobs.c.asset_id == asset_id, jobs.c.job_type == job_type)
                                 .values(force_full=True)
                             )
+                            if job_type == "ai-v1":
+                                connection.execute(
+                                    ai_stage_jobs.update()
+                                    .where(ai_stage_jobs.c.asset_id == asset_id)
+                                    .values(status="pending", error=None, lease_until=None)
+                                )
                         already_queued += 1
                         continue
                     if current_status == "running":
@@ -967,6 +977,12 @@ class Catalog:
                             where=jobs.c.status != "running",
                         )
                     )
+                    if job_type == "ai-v1":
+                        connection.execute(
+                            ai_stage_jobs.update()
+                            .where(ai_stage_jobs.c.asset_id == asset_id)
+                            .values(status="pending", error=None, lease_until=None)
+                        )
                     queued += 1
         return {
             "assets": len(selected),
@@ -1332,6 +1348,7 @@ class Catalog:
     def claim_ai_stage(self, stage: str) -> dict | None:
         """Claim one AI stage independently of the other service."""
         preview_jobs = jobs.alias("preview_jobs")
+        parent_jobs = jobs.alias("parent_jobs")
         now = int(time())
         with self.engine.begin() as connection:
             row = (
@@ -1339,12 +1356,17 @@ class Catalog:
                     select(
                         ai_stage_jobs.c.asset_id,
                         preview_jobs.c.status.label("preview_status"),
+                        parent_jobs.c.force_full,
                     )
                     .select_from(
                         ai_stage_jobs.join(
                             preview_jobs,
                             (preview_jobs.c.asset_id == ai_stage_jobs.c.asset_id)
                             & (preview_jobs.c.job_type == "preview-v1"),
+                        ).join(
+                            parent_jobs,
+                            (parent_jobs.c.asset_id == ai_stage_jobs.c.asset_id)
+                            & (parent_jobs.c.job_type == "ai-v1"),
                         )
                     )
                     .where(
@@ -1374,7 +1396,63 @@ class Catalog:
                 .values(
                     status="running",
                     attempts=ai_stage_jobs.c.attempts + 1,
-                    lease_until=now + 1800,
+                    lease_until=now + AI_STAGE_LEASE_SECONDS,
+                    error=None,
+                )
+            )
+            return dict(row)
+
+    def claim_ai_publish_job(self) -> dict | None:
+        """Claim the parent AI job once both durable stages are ready.
+
+        Stage workers do the remote inference and persist their results first.
+        A separate short parent claim serializes the final catalog/artifact
+        publication, so a blocked stage cannot leave the parent falsely
+        representing active inference work.
+        """
+        face_stages = ai_stage_jobs.alias("face_stages")
+        semantic_stages = ai_stage_jobs.alias("semantic_stages")
+        now = int(time())
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(
+                    select(jobs.c.asset_id, jobs.c.force_full)
+                    .select_from(
+                        jobs.join(
+                            face_stages,
+                            (face_stages.c.asset_id == jobs.c.asset_id)
+                            & (face_stages.c.stage == "face"),
+                        ).join(
+                            semantic_stages,
+                            (semantic_stages.c.asset_id == jobs.c.asset_id)
+                            & (semantic_stages.c.stage == "semantic"),
+                        )
+                    )
+                    .where(
+                        jobs.c.job_type == "ai-v1",
+                        (
+                            (jobs.c.status == "pending")
+                            | ((jobs.c.status == "running") & (jobs.c.lease_until < now))
+                        ),
+                        face_stages.c.status == "ready",
+                        semantic_stages.c.status == "ready",
+                    )
+                    .order_by(jobs.c.asset_id)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            connection.execute(
+                jobs.update()
+                .where(jobs.c.asset_id == row["asset_id"], jobs.c.job_type == "ai-v1")
+                .values(
+                    status="running",
+                    attempts=jobs.c.attempts + 1,
+                    lease_until=now + AI_PUBLISH_LEASE_SECONDS,
                     error=None,
                 )
             )
@@ -1399,6 +1477,12 @@ class Catalog:
                 )
                 .values(status=status, error=error, lease_until=None)
             )
+            if status == "failed":
+                connection.execute(
+                    jobs.update()
+                    .where(jobs.c.asset_id == asset_id, jobs.c.job_type == "ai-v1")
+                    .values(status="failed", error=f"{stage} stage: {error}", lease_until=None)
+                )
 
     def finish_ai_job(self, asset_id: str, status: str, error: str | None = None):
         with self.engine.begin() as connection:
@@ -1445,6 +1529,11 @@ class Catalog:
             return [value / length for value in vector]
 
         with self.engine.begin() as connection:
+            # Publication takes an advisory lock while face clustering and
+            # current-run replacement are serialized. Never let a blocked
+            # database lock hold the parent job indefinitely.
+            connection.execute(text("SET LOCAL lock_timeout = '10s'"))
+            connection.execute(text("SET LOCAL statement_timeout = '120s'"))
             # Face centroids and current-run replacement must be serialized even
             # if an operator deliberately starts more than one AI worker.
             connection.execute(text("SELECT pg_advisory_xact_lock(7046868303)"))
@@ -2733,7 +2822,11 @@ class Catalog:
                 "analysisRunning": connection.scalar(
                     select(func.count())
                     .select_from(jobs)
-                    .where(jobs.c.job_type == "ai-v1", jobs.c.status == "running")
+                    .where(
+                        jobs.c.job_type == "ai-v1",
+                        jobs.c.status == "running",
+                        jobs.c.lease_until >= int(time()),
+                    )
                 ),
                 "analysisFailed": connection.scalar(
                     select(func.count())

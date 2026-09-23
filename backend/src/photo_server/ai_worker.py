@@ -264,6 +264,12 @@ class AIWorker:
         return f"analysis-stages/{asset_id}/{PIPELINE_VERSION}/semantic.json"
 
     def _load_semantic_stage(self, asset_id: str, input_sha256: str) -> tuple[SemanticAnalysis, str, dict] | None:
+        details = self._load_semantic_stage_details(asset_id, input_sha256)
+        if details is None:
+            return None
+        return details["semantic"], details["model_digest"], details["metrics"]
+
+    def _load_semantic_stage_details(self, asset_id: str, input_sha256: str) -> dict | None:
         key = self._semantic_stage_key(asset_id)
         if self.service.storage.head(key) is None:
             return None
@@ -275,17 +281,23 @@ class AIWorker:
                 or artifact.get("pipelineVersion") != PIPELINE_VERSION
             ):
                 return None
-            return (
-                SemanticAnalysis.model_validate(artifact["semantic"]),
-                str(artifact["modelDigest"]),
-                artifact.get("metrics") or {},
-            )
+            return {
+                "semantic": SemanticAnalysis.model_validate(artifact["semantic"]),
+                "model_digest": str(artifact["modelDigest"]),
+                "metrics": artifact.get("metrics") or {},
+                "semantic_origin": artifact.get("semanticOrigin", "computed"),
+                "source_run_id": artifact.get("sourceRunId"),
+                "reuse_policy_version": artifact.get("reusePolicyVersion"),
+                "similarity": artifact.get("similarity"),
+            }
         except Exception:
             return None
 
     def _persist_semantic_stage(
         self, asset_id: str, input_sha256: str, semantic: SemanticAnalysis,
-        model_digest: str, metrics: dict,
+        model_digest: str, metrics: dict, *, semantic_origin: str = "computed",
+        source_run_id: str | None = None, reuse_policy_version: str | None = None,
+        similarity: dict | None = None,
     ) -> None:
         self.service.storage.put_json(
             self._semantic_stage_key(asset_id),
@@ -298,6 +310,10 @@ class AIWorker:
                 "semantic": semantic.document(),
                 "modelDigest": model_digest,
                 "metrics": metrics,
+                "semanticOrigin": semantic_origin,
+                "sourceRunId": source_run_id,
+                "reusePolicyVersion": reuse_policy_version,
+                "similarity": similarity,
             },
         )
 
@@ -311,18 +327,61 @@ class AIWorker:
                 raise RuntimeError(
                     f"Semantic analysis requires a usable preview; preview is {job['preview_status']}"
                 )
-            cached = self._load_semantic_stage(asset_id, manifest.primary.sha256)
+            force_full = bool(job.get("force_full", False))
+            cached = (
+                None
+                if force_full
+                else self._load_semantic_stage(asset_id, manifest.primary.sha256)
+            )
             if cached is None:
                 preview = cache_paths(self.service, manifest)["preview"]
                 if not preview.is_file() and not generate(self.service, manifest):
                     raise RuntimeError("Preview could not be regenerated for semantic analysis")
                 jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
-                semantic, model_digest, metrics = analyze_semantics(self.service.settings, jpeg)
+                fingerprint = compute_fingerprint(jpeg)
+                if self.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is None:
+                    self.service.catalog.upsert_fingerprint(asset_id, fingerprint)
+                model_digest = resolve_model_digest(self.service.settings, self.service.settings.ai_model)
+                decision, source, source_run_id, rejections, policy_evaluated = self._semantic_reuse(
+                    manifest, fingerprint, jpeg, model_digest, force_full
+                )
+                reuse_semantic = (
+                    self.service.settings.ai_semantic_reuse_mode == "on"
+                    and not force_full
+                    and decision.accepted
+                    and source is not None
+                )
+                if reuse_semantic:
+                    semantic = source.semantic
+                    metrics = {}
+                    semantic_origin = "reused"
+                    reuse_policy_version = REUSE_POLICY_VERSION
+                    similarity = decision.similarity
+                else:
+                    semantic, model_digest, metrics = analyze_semantics(self.service.settings, jpeg)
+                    semantic_origin = "computed"
+                    source_run_id = None
+                    reuse_policy_version = None
+                    similarity = None
                 self._persist_semantic_stage(
-                    asset_id, manifest.primary.sha256, semantic, model_digest, metrics
+                    asset_id,
+                    manifest.primary.sha256,
+                    semantic,
+                    model_digest,
+                    metrics,
+                    semantic_origin=semantic_origin,
+                    source_run_id=source_run_id,
+                    reuse_policy_version=reuse_policy_version,
+                    similarity=similarity,
                 )
             self.service.catalog.finish_ai_stage(asset_id, "semantic", "ready")
-            return {"jobType": "analysis-stage", "stage": "semantic", "assetId": asset_id, "status": "ready"}
+            return {
+                "jobType": "analysis-stage",
+                "stage": "semantic",
+                "assetId": asset_id,
+                "status": "ready",
+                "semanticOrigin": semantic_origin if cached is None else "cached",
+            }
         except AIServiceUnavailableError as error:
             self.service.catalog.finish_ai_stage(asset_id, "semantic", "pending", str(error))
             return {"jobType": "analysis-stage", "stage": "semantic", "assetId": asset_id, "status": "requeued", "error": str(error)}
@@ -330,6 +389,111 @@ class AIWorker:
             self.service.catalog.finish_ai_stage(asset_id, "semantic", "failed", str(error))
             return {"jobType": "analysis-stage", "stage": "semantic", "assetId": asset_id, "status": "failed", "error": str(error)}
 
+    def _publish_staged_analysis(self, job: dict) -> dict:
+        """Publish an analysis whose face and semantic stages are durable.
+
+        This is deliberately a separate claimed operation. Remote inference
+        and S3 stage writes happen before the parent job is claimed, so a
+        stalled stage cannot occupy the parent analysis-running slot.
+        """
+        asset_id = job["asset_id"]
+        try:
+            manifest = self.service.catalog.get(asset_id)
+            if manifest is None:
+                raise FileNotFoundError("AI publish references a missing asset")
+            faces = self._load_face_stage(asset_id, manifest.primary.sha256)
+            semantic_details = self._load_semantic_stage_details(
+                asset_id, manifest.primary.sha256
+            )
+            if faces is None or semantic_details is None:
+                raise RuntimeError("AI publish requires durable face and semantic stages")
+
+            semantic = semantic_details["semantic"]
+            run_id = str(uuid4())
+            created_at = datetime.now(UTC).isoformat()
+            public_result = {
+                **semantic.document(),
+                "faceCount": len(faces),
+            }
+            artifact = {
+                "schemaVersion": 1,
+                "runId": run_id,
+                "libraryId": str(manifest.library_id),
+                "assetId": asset_id,
+                "analysisType": ANALYSIS_TYPE,
+                "inputSha256": manifest.primary.sha256,
+                "pipelineVersion": PIPELINE_VERSION,
+                "createdAt": created_at,
+                "models": {
+                    "semantic": {
+                        "name": self.service.settings.ai_model,
+                        "digest": semantic_details["model_digest"],
+                    },
+                    "faceDetector": "yunet-2023mar",
+                    "faceEmbedding": {
+                        **ADAFACE_IDENTITY,
+                        "runtime": self.faces.model_version,
+                    },
+                },
+                "semantic": semantic.document(),
+                "faces": faces,
+                "metrics": semantic_details["metrics"],
+                "semanticOrigin": semantic_details["semantic_origin"],
+            }
+            source_run_id = semantic_details["source_run_id"]
+            if source_run_id:
+                artifact["semanticSourceRunId"] = source_run_id
+            if semantic_details["similarity"] is not None:
+                artifact["similarity"] = semantic_details["similarity"]
+            object_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
+            self.service.storage.put_json(object_key, artifact)
+            completed = self.service.catalog.complete_ai_analysis(
+                asset_id=asset_id,
+                run_id=run_id,
+                model_name=self.service.settings.ai_model,
+                model_version=semantic_details["model_digest"],
+                pipeline_version=PIPELINE_VERSION,
+                input_hash=manifest.primary.sha256,
+                object_key=object_key,
+                result=public_result,
+                searchable=searchable_text(semantic),
+                detected_faces=faces,
+                match_threshold=self.service.settings.face_match_threshold,
+                created_at=created_at,
+                semantic_origin=semantic_details["semantic_origin"],
+                source_run_id=source_run_id,
+                reuse_policy_version=semantic_details["reuse_policy_version"],
+                similarity=semantic_details["similarity"],
+            )
+            return {
+                "jobType": "analysis",
+                "assetId": asset_id,
+                "status": "ready",
+                "runId": run_id,
+                "semanticOrigin": semantic_details["semantic_origin"],
+                **completed,
+            }
+        except (AIServiceUnavailableError, FaceServiceUnavailable) as error:
+            self.service.catalog.finish_ai_job(asset_id, "pending", str(error))
+            return {
+                "jobType": "analysis",
+                "assetId": asset_id,
+                "status": "requeued",
+                "reason": "service-unavailable",
+                "error": str(error),
+            }
+        except Exception as error:
+            try:
+                self.service.catalog.finish_ai_job(asset_id, "failed", str(error))
+            except Exception:
+                pass
+            return {
+                "jobType": "analysis",
+                "assetId": asset_id,
+                "status": "failed",
+                "error": str(error),
+                "stage": "publish",
+            }
     def run_once(self) -> dict | None:
         """One dispatcher pass: gate, then claim and execute when ready.
 
@@ -355,6 +519,40 @@ class AIWorker:
         if job is None:
             return None
         return self._execute(job)
+
+    def run_staged_once(self, prefer_face: bool = True) -> dict | None:
+        """Run one pass through the durable stage/publish scheduler.
+
+        The legacy ``run_once`` contract remains available to the integration
+        tests and older callers; the CLI one-shot mode uses this method so it
+        cannot re-enter the old combined parent-job path.
+        """
+        state, _ = self._gate()
+        if state == "face-only":
+            job = self._claim_face_stage()
+            return self._execute_face_stage(job) if job is not None else None
+        if state == "vlm-only":
+            job = self.service.catalog.claim_ai_semantic_stage()
+            return self._execute_semantic_stage(job) if job is not None else None
+        if state != "ready":
+            return {
+                "status": "idle",
+                "reason": "ai-not-configured" if state == "not-configured" else state,
+            }
+        publish_job = self.service.catalog.claim_ai_publish_job()
+        if publish_job is not None:
+            return self._publish_staged_analysis(publish_job)
+        claimers = [
+            (self._claim_face_stage, self._execute_face_stage),
+            (self.service.catalog.claim_ai_semantic_stage, self._execute_semantic_stage),
+        ]
+        if not prefer_face:
+            claimers.reverse()
+        for claim, execute in claimers:
+            job = claim()
+            if job is not None:
+                return execute(job)
+        return None
 
     def _execute(self, job: dict) -> dict:
         asset_id = job["asset_id"]
@@ -889,7 +1087,7 @@ def _log_state_transition(previous: str | None, state: str, detail: str) -> None
     )
 
 
-def _run_dispatcher(service: Service) -> None:
+def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
     """Run the AI dispatcher.
 
     ``once`` executes a single pass (gate, then claim and execute when
@@ -897,8 +1095,9 @@ def _run_dispatcher(service: Service) -> None:
     and an unconfigured worker reports
     ``{"status": "idle", "reason": "ai-not-configured"}``.
 
-    The loop claims and executes one analysis at a time. The job row's 1800 s
-    lease makes a crashed in-flight job reclaimable.
+    The loop claims and executes one durable stage at a time. Face and
+    semantic stages are independently reclaimable; a short parent claim is
+    used only for final publication after both stages are ready.
     Not configured: fixed 10 s cadence, no claim, slow heartbeat.
     Configured but a service unhealthy: 10 s backoff doubling to 120 s, no
     claim, transition-logged. The probes never raise out of the loop.
@@ -973,22 +1172,28 @@ def _run_dispatcher(service: Service) -> None:
                 _log_state_transition(last_state, "ready", detail)
             last_state = "ready"
 
-            job = worker._claim()
-            if job is None:
+            publish_job = worker.service.catalog.claim_ai_publish_job()
+            if publish_job is not None:
+                result = worker._publish_staged_analysis(publish_job)
+                print(json.dumps(result), flush=True)
+                continue
+
+            stage_claimers = (
+                (worker._claim_face_stage, worker._execute_face_stage),
+                (worker.service.catalog.claim_ai_semantic_stage, worker._execute_semantic_stage),
+            )
+            if not prefer_face:
+                stage_claimers = tuple(reversed(stage_claimers))
+            claimed = None
+            for claim, execute in stage_claimers:
+                job = claim()
+                if job is not None:
+                    claimed = execute(job)
+                    break
+            if claimed is None:
                 time.sleep(_NO_JOBS_SLEEP_SECONDS)
                 continue
-            try:
-                result = worker._execute(job)
-            except Exception as error:
-                # An execution must never be able to kill the dispatcher; the
-                # job's lease expires for reclamation.
-                result = {
-                    "jobType": "analysis",
-                    "status": "failed",
-                    "stage": "setup",
-                    "error": f"analysis execution crashed: {error}",
-                }
-            print(json.dumps(result), flush=True)
+            print(json.dumps(claimed), flush=True)
     except _StopRunning:
         pass
 
@@ -1003,10 +1208,10 @@ def run(service: Service, once: bool = False) -> dict | None:
     """
     if once:
         worker = AIWorker(service)
-        result = worker.run_once()
+        result = worker.run_staged_once()
         return result if result is not None else {"status": "idle"}
     if service.settings.ai_workers == 1:
-        _run_dispatcher(service)
+        _run_dispatcher(service, prefer_face=True)
         return None
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1014,8 +1219,8 @@ def run(service: Service, once: bool = False) -> dict | None:
         max_workers=service.settings.ai_workers, thread_name_prefix="photo-ai"
     ) as executor:
         futures = [
-            executor.submit(_run_dispatcher, service)
-            for _ in range(service.settings.ai_workers)
+            executor.submit(_run_dispatcher, service, index % 2 == 0)
+            for index in range(service.settings.ai_workers)
         ]
         for future in futures:
             future.result()
