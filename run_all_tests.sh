@@ -23,10 +23,11 @@
 #
 # Sections run, in order:
 #   0. Preflight / environment + service status   (informational)
-#   1. Lint (ruff, backend)
-#   2. OpenAPI spec drift (scripts/check_openapi.py)       (no services needed)
-#   3. Backend tests: unit + integration + AI-worker e2e   (PHOTO_RUN_INTEGRATION=1)
-#   4. Frontend typecheck (tsc) + unit tests (vitest) + API codegen check:api
+#   1. Lint (ruff, backend + face-service)
+#   2. Face-service tests (in-process; no GPU needed)
+#   3. OpenAPI spec drift (scripts/check_openapi.py)       (no services needed)
+#   4. Backend tests: unit + integration + AI-worker e2e   (PHOTO_RUN_INTEGRATION=1)
+#   5. Frontend typecheck (tsc) + unit tests (vitest) + API codegen check:api
 #      (skipped if node/npm missing)
 #
 # Exit code: 0 if every recorded section passed (or was skipped), 1 if any failed,
@@ -163,12 +164,12 @@ else
 fi
 log
 
-# --- Section 1: Lint (ruff, backend) ----------------------------------------
+# --- Section 1: Lint (ruff, backend + face-service) -------------------------
 log "==================================================================="
-log " SECTION 1: Lint (ruff, backend)"
+log " SECTION 1: Lint (ruff, backend + face-service)"
 log "==================================================================="
 if [ -x "$RUFF" ]; then
-  run_capture bash -c "cd '$ROOT/backend' && '$RUFF' check ."
+  run_capture bash -c "cd '$ROOT' && '$RUFF' check backend face-service"
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log "RESULT: Lint (ruff) -> PASS"
@@ -183,13 +184,28 @@ else
 fi
 log
 
-# --- Section 2: OpenAPI spec drift ------------------------------------------
+# --- Section 2: Face-service tests (in-process, no GPU) ---------------------
+log "==================================================================="
+log " SECTION 2: Face-service tests (in-process; analyzer is stubbed)"
+log "==================================================================="
+run_capture bash -c "cd '$ROOT' && PYTHONPATH='$ROOT/face-service/src' '$PY' -m pytest face-service/tests/ -v"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  log "RESULT: Face-service tests -> PASS"
+  record "face-service-tests" "PASS"
+else
+  log "RESULT: Face-service tests -> FAIL (exit $rc)"
+  record "face-service-tests" "FAIL"
+fi
+log
+
+# --- Section 3: OpenAPI spec drift ------------------------------------------
 # openapi/openapi.json is a checked-in artifact (docs/openapi-codegen-plan.md
 # Phase 0): regenerate it from create_app() into a temp path and diff. No
 # services are contacted. Phase 4 turns on --strict-coverage here, from which
 # point on every JSON operation must carry a response schema.
 log "==================================================================="
-log " SECTION 2: OpenAPI spec drift (scripts/check_openapi.py)"
+log " SECTION 3: OpenAPI spec drift (scripts/check_openapi.py)"
 log "==================================================================="
 run_capture bash -c "cd '$ROOT' && '$PY' scripts/check_openapi.py --strict-coverage"
 rc=$?
@@ -202,13 +218,13 @@ else
 fi
 log
 
-# --- Section 3: Backend tests (unit + integration + AI-worker e2e) ----------
+# --- Section 4: Backend tests (unit + integration + AI-worker e2e) ----------
 # This is the key section: with PHOTO_RUN_INTEGRATION=1 the live-backend
 # integration tests (including the AI-worker end-to-end tests) are enabled.
 # They use disposable Postgres databases and S3 buckets, and stub the GPU /
 # Ollama model calls, so no GPU is required to run them.
 log "==================================================================="
-log " SECTION 3: Backend tests (unit + integration + AI-worker e2e)"
+log " SECTION 4: Backend tests (unit + integration + AI-worker e2e)"
 log "           PHOTO_RUN_INTEGRATION=1"
 log "==================================================================="
 run_capture bash -c "cd '$ROOT' && PHOTO_RUN_INTEGRATION=1 '$PY' -m pytest backend/tests/ -v"
@@ -222,9 +238,9 @@ else
 fi
 log
 
-# --- Section 4: Frontend (typecheck + unit tests + API codegen) -------------
+# --- Section 5: Frontend (typecheck + unit tests + API codegen) -------------
 log "==================================================================="
-log " SECTION 4: Frontend (tsc typecheck + vitest + openapi-ts check:api)"
+log " SECTION 5: Frontend (tsc typecheck + vitest + openapi-ts check:api)"
 log "==================================================================="
 if command -v npm >/dev/null 2>&1 && [ -d "$FE_DIR" ]; then
   run_capture bash -c "cd '$FE_DIR' && npm run check"

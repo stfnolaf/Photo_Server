@@ -1,6 +1,6 @@
 # Photo Server
 
-This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, jobs, and the current analysis index. S3 holds immutable originals, imported XMP sidecars, versioned AI artifacts, upload staging objects, and scheduled PostgreSQL backups. A threaded media worker keeps uploads and previews responsive; a separate AI worker calls the OpenAI-compatible VLM and the standalone face-service without entering the ingestion critical path.
+This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, jobs, and the current analysis index. S3 holds immutable originals, imported XMP sidecars, versioned AI artifacts, upload staging objects, and scheduled PostgreSQL backups. A threaded media worker keeps uploads and previews responsive; a separate AI worker optionally dispatches to an OpenAI-compatible VLM and a standalone face-service without entering the ingestion critical path. The library is fully functional without either intelligence service, and their provider and compute location are configuration choices.
 
 See the historical [Phase 1](docs/verification.md), [Phase 2](docs/phase-2-verification.md), and [Phase 3](docs/phase-3-verification.md) reports, plus the current [PostgreSQL-authority verification](docs/postgres-authority-verification.md).
 
@@ -18,14 +18,14 @@ The backend has no dependency on a frontend build. Each frontend owns its source
 
 ## Start
 
-Docker and Docker Compose are sufficient for the core service. Local face analysis also requires an NVIDIA driver, NVIDIA Container Toolkit, and the verified AdaFace model directory from the sibling face-scanner. Confirm `docker run --rm --gpus all ubuntu nvidia-smi` works before starting.
+Docker and Docker Compose are sufficient for the core service. Local face analysis requires an NVIDIA driver, NVIDIA Container Toolkit, and the verified AdaFace model directory from the sibling face-scanner. Confirm `docker run --rm --gpus all ubuntu nvidia-smi` works before enabling local AI.
 
 ```bash
 cp -n .env.example .env
 chmod 600 .env
 ```
 
-Set the S3 endpoint and database password in `.env`. `PHOTO_FACE_MODEL_DIR` defaults to `../face-scanner/runtime/raw-jpeg/models`; Compose mounts this host directory read-only into `face-service`, which verifies the provenance and checksums and refuses CPU fallback. It must contain `face_detection_yunet_2023mar.onnx`, `face_recognition_sface_2021dec.onnx`, `adaface-ir101.onnx`, and `adaface-ir101.json`. Then start:
+Set the S3 endpoint and database password in `.env`. AI is off until both service URLs are set. For local AI, set `PHOTO_AI_BASE_URL` and `PHOTO_FACE_SERVICE_URL` as shown in `.env.example`. `PHOTO_FACE_MODEL_DIR` defaults to `../face-scanner/runtime/raw-jpeg/models`; Compose mounts this host directory read-only into `face-service`, which verifies the provenance and checksums and refuses CPU fallback. It must contain `face_detection_yunet_2023mar.onnx`, `face_recognition_sface_2021dec.onnx`, `adaface-ir101.onnx`, and `adaface-ir101.json`. Then start:
 
 ```bash
 docker compose up --build -d
@@ -93,13 +93,17 @@ The relevant queue settings are:
 | `PHOTO_UPLOAD_ABANDON_SECONDS` | 86400 | Idle time before an unsealed upload and its staging objects are discarded |
 | `PHOTO_WORKER_THREADS` | 4 | Concurrent onboarding/preview jobs in the worker process |
 | `PHOTO_UPLOAD_PART_BYTES` | 8 MiB | Memory and S3 multipart chunk size per active upload |
-| `PHOTO_AI_BASE_URL` | `http://ollama:11434/v1` | OpenAI-compatible VLM endpoint: local Ollama (default), a remote Ollama, or any hosted provider |
+| `PHOTO_AI_BASE_URL` | empty | OpenAI-compatible VLM endpoint; local Ollama uses `http://ollama:11434/v1` |
 | `PHOTO_AI_MODEL` | `qwen3-vl:8b-instruct-q4_K_M` | Vision model id supplied to the VLM endpoint |
 | `PHOTO_AI_API_KEY` | empty | Bearer token sent to the VLM endpoint (Ollama accepts any non-empty value) |
 | `PHOTO_AI_EXTRA_BODY` | empty | JSON object merged into the VLM request for provider extensions (e.g. Ollama `options.num_ctx`); contract fields win |
+| `PHOTO_AI_WORKER_CONCURRENCY` | 1 | Maximum AI analyses in flight in the photo server; a client resource bound, not a rate limiter |
 | `PHOTO_AI_FACE_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to YuNet/AdaFace |
 | `PHOTO_AI_VLM_MAX_IMAGE_SIDE` | 1280 | Longest image edge supplied to Qwen |
 | `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into `face-service` |
+| `PHOTO_FACE_SERVICE_URL` | empty | Face-service URL; local Compose uses `http://face-service:8901` |
+| `PHOTO_FACE_SERVICE_TOKEN` | empty | Shared bearer token for the photo server and face-service |
+| `PHOTO_FACE_SERVICE_CONCURRENCY` | 1 | Face-service GPU pipeline concurrency, bounded to 1–4 |
 | `PHOTO_FACE_DETECTION_THRESHOLD` | 0.8 | YuNet face detection threshold |
 | `PHOTO_FACE_MATCH_THRESHOLD` | 0.4 | AdaFace centroid similarity starting point |
 | `PHOTO_CORS_ORIGINS` | empty | Comma-separated browser origins allowed to call the API |
@@ -329,7 +333,27 @@ The media worker prioritizes onboarding jobs, versioned processing stages such a
 
 Previews live in a local, disposable LRU cache. Each cached set tracks its byte sizes and last access in the `preview_cache` table. When the accounted total exceeds `PHOTO_CACHE_MAX_BYTES`, the worker evicts least-recently-accessed sets until it is back at or below `PHOTO_CACHE_EVICT_TARGET_RATIO` of the budget, skipping assets with queued or running preview or AI jobs. Eviction is two-phase (row, then files) and an orphan sweep removes cache directories whose row is gone, so a crash mid-evection cannot wedge the cache. A request for an evicted preview returns `202` and regenerates it from the immutable S3 original; the originals themselves are never touched.
 
-The AI worker has one queue consumer. YuNet detection and alignment complete first, AdaFace IR101 embeds faces on CUDA in batches of at most 32, and only then is the image submitted to Qwen through local Ollama. Qwen is restricted to one loaded model and one parallel request; requests use a 4096-token context by default (Ollama may reserve a larger internal KV allocation). The configured Q4 model plus AdaFace used about 13.1 GB together in the RTX 3090 deployment check, leaving about 11 GB free. Similarity scores are clustering heuristics rather than probabilities; `0.4` carries over the sibling scanner's reviewed starting point.
+The AI worker is an optional bounded client. It fingerprints locally, sends every claimed image to the face-service, and sends semantic analysis to the configured OpenAI-compatible VLM. Semantic burst reuse remains semantic-only; face inference runs for every claimed image so boxes and embeddings remain frame-specific. The face-service owns YuNet, SFace, and AdaFace on CUDA and processes requests through its FIFO queue; the VLM owns its own provider-side pacing. Both client and face-service concurrency default to one. The configured Q4 model plus AdaFace used about 13.1 GB together in the RTX 3090 deployment check, so raising either knob requires measuring VRAM first; even after scanner consolidation the box runs 1× AdaFace plus 1× Qwen3-VL with no practical headroom for a second of either. Similarity scores are clustering heuristics rather than probabilities; `0.4` carries over the sibling scanner's reviewed starting point.
+
+#### AI deployment matrix
+
+| Topology | Settings | Result |
+|---|---|---|
+| No AI | `PHOTO_AI_BASE_URL=` and `PHOTO_FACE_SERVICE_URL=` | Import, previews, search, and people UI work; analysis jobs remain pending and this project uses no AI GPU. |
+| Local AI | `PHOTO_AI_BASE_URL=http://ollama:11434/v1`, `PHOTO_FACE_SERVICE_URL=http://face-service:8901`, and a shared `PHOTO_FACE_SERVICE_TOKEN` | Ollama and the face-service run in this Compose project; the worker drains the analysis backlog. |
+| Remote or hosted AI | Point the URLs at trusted-LAN/TLS services or a hosted OpenAI-compatible VLM, set the shared face token, and omit local AI services as appropriate | The photo server remains a bookkeeping client. With a hosted VLM, image pixels leave the local network; the VLM prompt still forbids identifying people. |
+
+For the no-AI row, start only the core services:
+
+```bash
+docker compose up --build -d postgres api worker web backup
+```
+
+For the local-AI row, set both URLs and the shared token, then start the full
+Compose project so `ollama`, `ollama-model`, `face-service`, and `ai-worker`
+are included.
+
+Existing `.env` migration: rename `PHOTO_AI_OLLAMA_URL` to `PHOTO_AI_BASE_URL` and add `/v1`; remove `PHOTO_AI_CONTEXT_TOKENS` (Ollama's default is 4096, or use `PHOTO_AI_EXTRA_BODY` for provider-specific options); move `PHOTO_FACE_MODELS_DIR` and `PHOTO_FACE_DETECTION_THRESHOLD` to the face-service environment (Compose still maps the host model directory with `PHOTO_FACE_MODEL_DIR`); and set both service URLs explicitly. AI is disabled until the URLs are configured.
 
 Process one queued job manually:
 
@@ -344,8 +368,11 @@ docker compose run --rm ai-worker photo-server ai-worker --once
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.lock
 .venv/bin/pip install --no-deps -e backend
+.venv/bin/pip install --no-deps -e face-service
 .venv/bin/ruff check backend/src backend/tests
+.venv/bin/ruff check face-service/src face-service/tests
 .venv/bin/pytest -q backend/tests
+PYTHONPATH=face-service/src .venv/bin/pytest -q face-service/tests
 cd frontend/web
 npm ci
 npm run check

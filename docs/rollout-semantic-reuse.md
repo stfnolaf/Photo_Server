@@ -8,6 +8,11 @@ controlled by `PHOTO_AI_SEMANTIC_REUSE_MODE` with three values:
 - `observe`: evaluate the reuse policy and record the decision, but still invoke the VLM.
 - `on`: reuse the source frame's semantics when every gate passes.
 
+The Q6 decision is deliberate: this policy governs the semantic stage only.
+The face stage runs on every claimed AI job, even when semantic reuse is
+accepted, because face boxes and embeddings remain specific to each frame and
+the face-service is the sole inference owner.
+
 ## Rollout plan
 
 1. **Default the first release to `observe`.** The worker records, for every

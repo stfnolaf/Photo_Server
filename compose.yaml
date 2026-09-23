@@ -27,20 +27,22 @@ x-backend: &backend
     PHOTO_POSTGRES_BACKUP_PREFIX: ${PHOTO_POSTGRES_BACKUP_PREFIX:-backups/postgres}
     PHOTO_UPLOAD_PART_BYTES: ${PHOTO_UPLOAD_PART_BYTES:-8388608}
     PHOTO_CORS_ORIGINS: ${PHOTO_CORS_ORIGINS:-}
-    # OpenAI-compatible VLM endpoint; local Ollama's /v1 path by default.
-    # Point it at a hosted provider (with PHOTO_AI_API_KEY) instead.
-    PHOTO_AI_BASE_URL: http://ollama:11434/v1
+    # OpenAI-compatible VLM endpoint; empty disables the AI worker gate.
+    # Local Compose uses http://ollama:11434/v1; hosted providers are also
+    # supported when PHOTO_AI_API_KEY is set.
+    PHOTO_AI_BASE_URL: ${PHOTO_AI_BASE_URL:-}
     PHOTO_AI_MODEL: ${PHOTO_AI_MODEL:-qwen3-vl:8b-instruct-q4_K_M}
     PHOTO_AI_TIMEOUT_SECONDS: ${PHOTO_AI_TIMEOUT_SECONDS:-600}
     PHOTO_AI_API_KEY: ${PHOTO_AI_API_KEY:-}
     PHOTO_AI_EXTRA_BODY: ${PHOTO_AI_EXTRA_BODY:-}
+    PHOTO_AI_WORKER_CONCURRENCY: ${PHOTO_AI_WORKER_CONCURRENCY:-1}
     PHOTO_AI_FACE_MAX_IMAGE_SIDE: ${PHOTO_AI_FACE_MAX_IMAGE_SIDE:-2000}
     PHOTO_AI_VLM_MAX_IMAGE_SIDE: ${PHOTO_AI_VLM_MAX_IMAGE_SIDE:-1280}
     # Face inference runs in the standalone face-service (Phase 2B of
     # docs/ai-service-split-plan.md); the worker only talks to it over HTTP
     # (face_client). An empty PHOTO_FACE_SERVICE_URL leaves the face stage
     # unavailable (Phase 3A idles on it).
-    PHOTO_FACE_SERVICE_URL: http://face-service:8901
+    PHOTO_FACE_SERVICE_URL: ${PHOTO_FACE_SERVICE_URL:-}
     PHOTO_FACE_SERVICE_TOKEN: ${PHOTO_FACE_SERVICE_TOKEN:-}
     PHOTO_FACE_SERVICE_TIMEOUT: ${PHOTO_FACE_SERVICE_TIMEOUT:-120}
     PHOTO_FACE_MATCH_THRESHOLD: ${PHOTO_FACE_MATCH_THRESHOLD:-0.4}

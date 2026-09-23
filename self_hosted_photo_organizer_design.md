@@ -1194,36 +1194,38 @@ This is a deliberate design requirement.
 
 ## 27. Distributed Compute
 
-S3 becomes especially useful if compute later moves beyond one machine.
-
-Example:
+S3 and PostgreSQL provide the durable boundary while inference can move
+beyond the photo-server machine. The photo server is bookkeeping: it owns
+originals, previews, job leases, analysis artifacts, stored embeddings, and
+person matching. Intelligence is optional and split into two interchangeable
+network services:
 
 ```text
-                       +----------------+
-                       | Photo API      |
-                       +----------------+
-                              |
-                              |
-          +-------------------+-------------------+
-          |                   |                   |
-          v                   v                   v
-   RAW worker          AI worker           Face worker
-          |                   |                   |
-          +-------------------+-------------------+
-                              |
-                              v
-                         SeaweedFS/S3
+                         +----------------------+
+                         | Photo API + workers  |
+                         | PostgreSQL + S3      |
+                         +----------+-----------+
+                                    |
+                         bounded HTTP clients
+                         +----------+-----------+
+                         |                      |
+                         v                      v
+                 OpenAI-compatible VLM    face-service (GPU)
+                 local / remote / hosted  YuNet + SFace + AdaFace
 ```
 
-Each worker needs only:
+The AI worker keeps at most `PHOTO_AI_WORKER_CONCURRENCY` requests in flight;
+this is a client resource bound, not a rate limiter. The services pace work:
+the VLM provider owns its queue/rate limits, while face-service owns a FIFO
+queue and returns `429` with `Retry-After` when saturated. Defaults are one
+in-flight request and one face-service GPU slot. Semantic burst reuse applies
+only to the VLM stage; face inference runs for every claimed image.
 
-- network access
-- S3 credentials
-- access to the job queue/database as appropriate
-
-The workers do not need identical `/mnt/photos` filesystem mounts.
-
-This allows a future GPU machine to handle embeddings or recognition while the primary application server remains lightweight.
+Each service needs network access and its own credentials. The photo server
+does not need model files or a GPU. Plain HTTP is acceptable on the private
+Compose network; cross-machine face-service traffic uses the service's
+generated CA/TLS and the shared bearer token. The workers do not need
+identical photo filesystem mounts.
 
 ---
 
@@ -1671,22 +1673,18 @@ Implement:
 
 ### Phase 5: AI
 
-Implement:
-
-- job workers
-- face detection
-- embeddings
-- semantic analysis
-- model/version tracking
-- durable AI outputs in S3
-- PostgreSQL/pgvector indexing
+The optional AI split is now implemented as two services: the photo server
+dispatches through an OpenAI-compatible VLM and the standalone face-service
+owns face detection and embeddings. Remaining work is scanner consolidation,
+model/version tracking refinements, durable AI outputs in S3, and any future
+PostgreSQL/pgvector indexing.
 
 ### Phase 6: Scale-out
 
 Only when needed:
 
 - additional worker machines
-- GPU worker
+- GPU inference services (optional and independently placed)
 - additional SeaweedFS volume capacity
 - more sophisticated queues
 - independent/off-site replication
