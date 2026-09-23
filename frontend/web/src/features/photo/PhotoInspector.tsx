@@ -33,6 +33,9 @@ export function PhotoInspector({
   const aiNotConfigured = !health.aiSemanticConfigured || !health.aiFaceConfigured;
   const analysisActive = detail.analysis.status === "pending" || detail.analysis.status === "running";
   const metadataRows = technicalRows(detail).filter((row): row is [string, string] => Boolean(row[1]));
+  const namedPeople = [...new Set(detail.analysis.faces.map((face) => face.personName?.trim()).filter((name): name is string => Boolean(name)))];
+  const unnamedCount = detail.analysis.faces.filter((face) => !face.personName?.trim()).length;
+  const peopleLabel = [...namedPeople, unnamedCount > 0 ? `${unnamedCount} unnamed` : ""].filter(Boolean).join(", ") || "None detected";
   return (
     <aside className="photo-inspector" aria-label="Photo information and organization">
       <PanelSection title="Quick actions">
@@ -72,7 +75,7 @@ export function PhotoInspector({
               </div>
               <dl className="properties analysis-properties">
                 <div><dt>Objects</dt><dd>{detail.analysis.result.objects.map((item) => `${item.name}${item.count > 1 ? ` ×${item.count}` : ""}`).join(", ") || "None detected"}</dd></div>
-                <div><dt>People</dt><dd><Users size={12} /> {detail.analysis.result.faceCount} face{detail.analysis.result.faceCount === 1 ? "" : "s"} in {detail.analysis.result.personCount} group{detail.analysis.result.personCount === 1 ? "" : "s"}</dd></div>
+                <div><dt>People</dt><dd><Users size={12} /> {peopleLabel}</dd></div>
                 {detail.analysis.result.activities.length > 0 && <div><dt>Activities</dt><dd>{detail.analysis.result.activities.join(", ")}</dd></div>}
                 {detail.analysis.result.visibleText.length > 0 && <div><dt>Visible text</dt><dd>{detail.analysis.result.visibleText.join(" · ")}</dd></div>}
                 {detail.analysis.analyzedAt && <div><dt>Analyzed</dt><dd>{formatDate(detail.analysis.analyzedAt, true)}</dd></div>}

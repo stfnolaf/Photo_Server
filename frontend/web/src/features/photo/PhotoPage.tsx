@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, LoaderCircle, Minus, PanelRightClose, PanelRightOpen, Plus, Scan, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../../api/client";
 import { useDurableMutation } from "../../api/mutations";
@@ -11,6 +11,59 @@ import { primaryBlob, writeFilters } from "../../domain/library";
 import { usePhotoLibrary } from "../../hooks/usePhotoLibrary";
 import { useLayoutStore } from "../../state/layout";
 import { PhotoInspector } from "./PhotoInspector";
+
+function NamedFaceOverlays({ faces, imageAspectRatio }: { faces: PhotoDetail["analysis"]["faces"]; imageAspectRatio: number | null }) {
+  const root = useRef<HTMLDivElement>(null);
+  const [imageRect, setImageRect] = useState({ left: 0, top: 0, width: 100, height: 100 });
+  useLayoutEffect(() => {
+    const parent = root.current?.parentElement;
+    if (!parent || !imageAspectRatio) return;
+    const update = () => {
+      const { width, height } = parent.getBoundingClientRect();
+      if (!width || !height) return;
+      const containerRatio = width / height;
+      if (containerRatio > imageAspectRatio) {
+        const displayedWidth = height * imageAspectRatio;
+        setImageRect({ left: ((width - displayedWidth) / width) * 50, top: 0, width: (displayedWidth / width) * 100, height: 100 });
+      } else {
+        const displayedHeight = width / imageAspectRatio;
+        setImageRect({ left: 0, top: ((height - displayedHeight) / height) * 50, width: 100, height: (displayedHeight / height) * 100 });
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [imageAspectRatio]);
+
+  return (
+    <div ref={root} className="photo-face-overlays" aria-label="Named people in this photograph">
+      <div className="photo-face-overlays__image" style={{ left: `${imageRect.left}%`, top: `${imageRect.top}%`, width: `${imageRect.width}%`, height: `${imageRect.height}%` }}>
+      {faces.map((face) => {
+        const name = face.personName?.trim();
+        if (!name || face.box.length < 4) return null;
+        // Face-service boxes are normalized [x, y, width, height].
+        const [left, top, width, height] = face.box;
+        return (
+          <span
+            key={`${face.personId}-${face.faceIndex}`}
+            className="photo-face-overlay"
+            style={{
+              left: `${left * 100}%`,
+              top: `${top * 100}%`,
+              width: `${width * 100}%`,
+              height: `${height * 100}%`,
+            }}
+            aria-label={name}
+            data-name={name}
+            tabIndex={0}
+          />
+        );
+      })}
+      </div>
+    </div>
+  );
+}
 
 export function PhotoPage({
   filters,
@@ -30,6 +83,7 @@ export function PhotoPage({
   const { mutate } = useDurableMutation();
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [previewAspectRatio, setPreviewAspectRatio] = useState<number | null>(null);
   const inspectorOpen = useLayoutStore((state) => state.inspectorOpen);
   const toggleInspector = useLayoutStore((state) => state.toggleInspector);
   const detailQuery = useQuery({
@@ -46,7 +100,10 @@ export function PhotoPage({
   const previous = index > 0 ? photos[index - 1] : null;
   const next = index >= 0 && index < photos.length - 1 ? photos[index + 1] : null;
 
-  useEffect(() => setZoom(1), [assetId]);
+  useEffect(() => {
+    setZoom(1);
+    setPreviewAspectRatio(null);
+  }, [assetId]);
 
   const open = useCallback(
     (id: string) => navigate({ pathname: `/photo/${id}`, search: writeFilters(filters).toString() }),
@@ -196,7 +253,8 @@ export function PhotoPage({
       <div className="photo-stage">
         <div className="photo-stage__canvas">
           <div className="photo-stage__scaled" style={{ transform: `scale(${zoom})` }}>
-            <PreviewImage src={`/assets/${assetId}/preview`} status={detail.preview.status} alt={primary.originalFilename} eager contain onRetry={() => api.retryPreview(assetId)} />
+            <PreviewImage src={`/assets/${assetId}/preview`} status={detail.preview.status} alt={primary.originalFilename} eager contain onRetry={() => api.retryPreview(assetId)} onImageLoad={(width, height) => setPreviewAspectRatio(width / height)} />
+            {detail.analysis.status === "ready" && <NamedFaceOverlays faces={detail.analysis.faces} imageAspectRatio={previewAspectRatio} />}
           </div>
         </div>
         {(detail.analysis.status === "pending" || detail.analysis.status === "running") && (

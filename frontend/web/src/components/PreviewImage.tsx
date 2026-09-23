@@ -75,6 +75,7 @@ export function PreviewImage({
   eager = false,
   contain = false,
   onRetry,
+  onImageLoad,
 }: {
   src: string;
   status: PreviewStatus;
@@ -82,6 +83,7 @@ export function PreviewImage({
   eager?: boolean;
   contain?: boolean;
   onRetry?: () => Promise<unknown>;
+  onImageLoad?: (width: number, height: number) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(eager);
@@ -125,7 +127,7 @@ export function PreviewImage({
 
   return (
     <div ref={root} className={`preview-image ${contain ? "preview-image--contain" : ""}`}>
-      {objectUrl && <img src={objectUrl} alt={alt} draggable={false} />}
+      {objectUrl && <img src={objectUrl} alt={alt} draggable={false} onLoad={(event) => onImageLoad?.(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} />}
       {loadState !== "ready" && (
         <div className="preview-image__state">
           {loadState === "loading" || loadState === "idle" ? (
