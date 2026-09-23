@@ -31,7 +31,7 @@ Set the S3 endpoint and database password in `.env`. AI is off until both servic
 docker compose up --build -d
 ```
 
-The first start pulls the approximately 6.1 GB `qwen3-vl:8b-instruct-q4_K_M` model into the persistent `ollama-data` volume. API, upload, and preview services can run while that one-time download completes. Ollama has no published host port; photographs are sent only over the private Compose network.
+The first start downloads the Qwen3-VL 8B 4-bit model into the persistent `vllm-cache` volume. API, upload, and preview services can run while that one-time download completes. vLLM has no published host port; photographs are sent only over the private Compose network.
 
 - Photo library: **http://SERVER_IP:3000/**
 - Interactive API documentation: **http://SERVER_IP:8000/docs**
@@ -91,17 +91,24 @@ The relevant queue settings are:
 | `PHOTO_MAX_FILE_BYTES` | 512 MiB | Maximum size of one uploaded file |
 | `PHOTO_UPLOAD_WORKERS` | 4 | Simultaneous API-to-S3 transfers; extra requests wait asynchronously |
 | `PHOTO_UPLOAD_ABANDON_SECONDS` | 86400 | Idle time before an unsealed upload and its staging objects are discarded |
-| `PHOTO_WORKER_THREADS` | 4 | Concurrent onboarding/preview jobs in the worker process |
+| `PHOTO_WORKER_THREADS` | 4 | Concurrent jobs for a manual all-in-one `photo-server worker` run |
+| `PHOTO_ONBOARDING_WORKERS` | 4 | Dedicated onboarding/import workers in Compose |
+| `PHOTO_PROCESSING_WORKERS` | 2 | Metadata and fingerprint processing workers in Compose |
+| `PHOTO_PREVIEW_WORKERS` | 2 | Preview/thumbnail generation workers in Compose |
+| `PHOTO_AI_WORKERS` | 1 | Independent AI dispatcher loops; pair with the vLLM sequence limit |
+| `PHOTO_VLLM_MAX_NUM_SEQS` | 1 | Maximum semantic requests vLLM may process per iteration |
 | `PHOTO_UPLOAD_PART_BYTES` | 8 MiB | Memory and S3 multipart chunk size per active upload |
-| `PHOTO_AI_BASE_URL` | empty | OpenAI-compatible VLM endpoint; local Ollama uses `http://ollama:11434/v1` |
-| `PHOTO_AI_MODEL` | `qwen3-vl:8b-instruct-q4_K_M` | Vision model id supplied to the VLM endpoint |
-| `PHOTO_AI_API_KEY` | empty | Bearer token sent to the VLM endpoint (Ollama accepts any non-empty value) |
-| `PHOTO_AI_EXTRA_BODY` | empty | JSON object merged into the VLM request for provider extensions (e.g. Ollama `options.num_ctx`); contract fields win |
-| `PHOTO_AI_WORKER_CONCURRENCY` | 1 | Maximum AI analyses in flight in the photo server; a client resource bound, not a rate limiter |
+| `PHOTO_AI_BASE_URL` | `http://vllm:8000/v1` | OpenAI-compatible VLM endpoint |
+| `PHOTO_AI_MODEL` | `unsloth/Qwen3-VL-8B-Instruct-bnb-4bit` | Vision model id supplied to the VLM endpoint |
+| `PHOTO_AI_API_KEY` | empty | Optional bearer token sent to the VLM endpoint |
+| `PHOTO_AI_EXTRA_BODY` | empty | JSON object merged into the VLM request for provider extensions; contract fields win |
+| `PHOTO_VLLM_IMAGE` | `vllm/vllm-openai:v0.11.2` | vLLM container image |
+| `PHOTO_VLLM_MAX_MODEL_LEN` | `4096` | vLLM context limit |
+| `PHOTO_VLLM_GPU_MEMORY_UTILIZATION` | `0.70` | vLLM GPU allocation target, leaving room for AdaFace |
 | `PHOTO_AI_FACE_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to YuNet/AdaFace |
 | `PHOTO_AI_VLM_MAX_IMAGE_SIDE` | 1280 | Longest image edge supplied to Qwen |
 | `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into `face-service` |
-| `PHOTO_FACE_SERVICE_URL` | empty | Face-service URL; local Compose uses `http://face-service:8901` |
+| `PHOTO_FACE_SERVICE_URL` | `http://face-service:8901` | Face-service URL |
 | `PHOTO_FACE_SERVICE_TOKEN` | empty | Shared bearer token for the photo server and face-service |
 | `PHOTO_FACE_SERVICE_CONCURRENCY` | 1 | Face-service GPU pipeline concurrency, bounded to 1–4 |
 | `PHOTO_FACE_DETECTION_THRESHOLD` | 0.8 | YuNet face detection threshold |
@@ -340,7 +347,7 @@ The AI worker is an optional bounded client. It fingerprints locally, sends ever
 | Topology | Settings | Result |
 |---|---|---|
 | No AI | `PHOTO_AI_BASE_URL=` and `PHOTO_FACE_SERVICE_URL=` | Import, previews, search, and people UI work; analysis jobs remain pending and this project uses no AI GPU. |
-| Local AI | `PHOTO_AI_BASE_URL=http://ollama:11434/v1`, `PHOTO_FACE_SERVICE_URL=http://face-service:8901`, and a shared `PHOTO_FACE_SERVICE_TOKEN` | Ollama and the face-service run in this Compose project; the worker drains the analysis backlog. |
+| Local AI | `PHOTO_AI_BASE_URL=http://vllm:8000/v1`, `PHOTO_FACE_SERVICE_URL=http://face-service:8901`, and a shared `PHOTO_FACE_SERVICE_TOKEN` | vLLM and the face-service run in this Compose project; the worker drains the analysis backlog. |
 | Remote or hosted AI | Point the URLs at trusted-LAN/TLS services or a hosted OpenAI-compatible VLM, set the shared face token, and omit local AI services as appropriate | The photo server remains a bookkeeping client. With a hosted VLM, image pixels leave the local network; the VLM prompt still forbids identifying people. |
 
 For the no-AI row, start only the core services:
@@ -350,10 +357,10 @@ docker compose up --build -d postgres api worker web backup
 ```
 
 For the local-AI row, set both URLs and the shared token, then start the full
-Compose project so `ollama`, `ollama-model`, `face-service`, and `ai-worker`
+Compose project so `vllm`, `face-service`, and `ai-worker`
 are included.
 
-Existing `.env` migration: rename `PHOTO_AI_OLLAMA_URL` to `PHOTO_AI_BASE_URL` and add `/v1`; remove `PHOTO_AI_CONTEXT_TOKENS` (Ollama's default is 4096, or use `PHOTO_AI_EXTRA_BODY` for provider-specific options); move `PHOTO_FACE_MODELS_DIR` and `PHOTO_FACE_DETECTION_THRESHOLD` to the face-service environment (Compose still maps the host model directory with `PHOTO_FACE_MODEL_DIR`); and set both service URLs explicitly. AI is disabled until the URLs are configured.
+Existing `.env` migration: replace the Ollama URL/model with `PHOTO_AI_BASE_URL=http://vllm:8000/v1` and `PHOTO_AI_MODEL=unsloth/Qwen3-VL-8B-Instruct-bnb-4bit`; remove `PHOTO_AI_CONTEXT_TOKENS` and `PHOTO_AI_WORKER_CONCURRENCY`; move `PHOTO_FACE_MODELS_DIR` and `PHOTO_FACE_DETECTION_THRESHOLD` to the face-service environment (Compose still maps the host model directory with `PHOTO_FACE_MODEL_DIR`).
 
 Process one queued job manually:
 

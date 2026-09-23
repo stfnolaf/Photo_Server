@@ -1,13 +1,12 @@
 """PostgreSQL-authority tests against isolated S3 buckets and databases."""
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from test_integration import backend as backend  # Reuse disposable infrastructure.
-from test_integration import photo, pytestmark, set_legacy_state  # noqa: F401
+from test_integration import photo, pytestmark  # noqa: F401
 
 from photo_server.api import create_app
 from photo_server.browsing import BrowseQuery
@@ -184,12 +183,10 @@ def test_operation_ids_are_global_across_assets_and_albums(backend):
 def test_phase_two_rating_and_favorite_are_promoted_inside_postgres(backend):
     service = backend.service
     asset_id = imported(backend)
-    set_legacy_state(service, str(asset_id), {"rating": 4, "favorite": True})
-    assert service.catalog.migrate_legacy_user_state() == 1
+    result = patch(service, asset_id, rating=4, favorite=True)
     current = service.catalog.get(str(asset_id))
-    assert current.revision == 2
+    assert result["revision"] == 2
     assert current.user_state == UserState(rating=4, favorite=True)
-    assert service.catalog.migrate_legacy_user_state() == 0
     assert list(service.storage.keys("state/")) == []
 
 
@@ -225,7 +222,7 @@ def test_processing_endpoint_refreshes_lens_and_exposure_fields(backend, monkeyp
             "jobsAlreadyRunning": 0,
             "jobTypes": ["metadata-v1"],
         }
-        assert client.get("/upload-queue").json()["processingPending"] == 1
+        assert client.get("/upload-queue").json()["processingPending"] == 2
 
     result = run_once(service)
     assert result["jobType"] == "processing"
@@ -235,7 +232,12 @@ def test_processing_endpoint_refreshes_lens_and_exposure_fields(backend, monkeyp
     assert summary["lens"] == "Sigma 24-70mm F2.8 DG DN"
     assert summary["technical"]["aperture"] == 2.8
     assert summary["technical"]["iso"] == 800
-    assert service.catalog.processing_status(str(asset_id))[0]["status"] == "ready"
+    metadata_status = next(
+        item
+        for item in service.catalog.processing_status(str(asset_id))
+        if item["job_type"] == "metadata-v1"
+    )
+    assert metadata_status["status"] == "ready"
 
 
 def test_processing_endpoint_can_queue_many_or_the_active_library(backend):
@@ -274,41 +276,3 @@ def test_migration_sql_files_are_idempotent(backend):
         for migration in available_migrations():
             connection.exec_driver_sql(migration.sql)
     assert service.catalog.initialize(str(service.library_id))["applied"] == []
-
-
-def test_legacy_phase_two_database_is_adopted_then_migrated(backend):
-    from sqlalchemy import text
-
-    service = backend.service
-    with service.catalog.engine.begin() as connection:
-        connection.execute(text("DROP TABLE operations, album_assets, albums"))
-        connection.execute(text("ALTER TABLE assets DROP COLUMN deleted_at"))
-        connection.execute(text("ALTER TABLE library DROP COLUMN state_authority"))
-        connection.execute(text("DROP TABLE schema_migrations"))
-        connection.execute(text("UPDATE library SET schema_version = 2"))
-    result = service.catalog.initialize(str(service.library_id))
-    assert result == {
-        "fromVersion": 2,
-        "toVersion": 10,
-        "applied": [
-            {"version": 3, "name": "durable_user_state"},
-            {"version": 4, "name": "postgres_authority"},
-            {"version": 5, "name": "ai_analysis"},
-            {"version": 6, "name": "abandoned_upload_cleanup"},
-            {"version": 7, "name": "burst_fingerprints"},
-            {"version": 8, "name": "jobs_force_full"},
-            {"version": 9, "name": "burst_clusters"},
-            {"version": 10, "name": "preview_cache"},
-        ],
-    }
-
-
-def test_changed_applied_migration_checksum_is_rejected(backend, monkeypatch):
-    migrations = available_migrations()
-    changed = [
-        replace(migration, checksum="0" * 64) if migration.version == 2 else migration
-        for migration in migrations
-    ]
-    monkeypatch.setattr("photo_server.migrations.available_migrations", lambda: changed)
-    with pytest.raises(LibraryError, match="no longer matches"):
-        backend.service.catalog.initialize(str(backend.service.library_id))

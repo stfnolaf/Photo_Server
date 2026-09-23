@@ -499,466 +499,12 @@
         "title": "AnalysisStatusOut",
         "type": "object"
       },
-      "AssetDetailOut": {
-        "discriminator": {
-          "mapping": {
-            "1": "#/components/schemas/AssetDetailV1Out",
-            "2": "#/components/schemas/AssetDetailV2Out"
-          },
-          "propertyName": "schemaVersion"
-        },
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/AssetDetailV1Out"
-          },
-          {
-            "$ref": "#/components/schemas/AssetDetailV2Out"
-          }
-        ],
-        "title": "AssetDetailOut"
-      },
-      "AssetDetailV1Out": {
-        "additionalProperties": false,
-        "description": "GET /assets/{id} for a v1 document: the document plus derived blocks.",
-        "properties": {
-          "analysis": {
-            "$ref": "#/components/schemas/AnalysisStatusOut"
-          },
-          "assetId": {
-            "format": "uuid",
-            "title": "Assetid",
-            "type": "string"
-          },
-          "blobs": {
-            "items": {
-              "$ref": "#/components/schemas/BlobOut"
-            },
-            "minItems": 1,
-            "title": "Blobs",
-            "type": "array"
-          },
-          "captureTime": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Capturetime"
-          },
-          "importedAt": {
-            "title": "Importedat",
-            "type": "string"
-          },
-          "libraryId": {
-            "format": "uuid",
-            "title": "Libraryid",
-            "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
-          "operationId": {
-            "format": "uuid",
-            "title": "Operationid",
-            "type": "string"
-          },
-          "preview": {
-            "$ref": "#/components/schemas/PreviewStatusOut"
-          },
-          "previousRevision": {
-            "title": "Previousrevision",
-            "type": "null"
-          },
-          "primaryBlobId": {
-            "format": "uuid",
-            "title": "Primaryblobid",
-            "type": "string"
-          },
-          "processing": {
-            "items": {
-              "$ref": "#/components/schemas/ProcessingStatusOut"
-            },
-            "title": "Processing",
-            "type": "array"
-          },
-          "revision": {
-            "const": 1,
-            "title": "Revision",
-            "type": "integer"
-          },
-          "schemaVersion": {
-            "const": 1,
-            "title": "Schemaversion",
-            "type": "integer"
-          },
-          "technical": {
-            "additionalProperties": true,
-            "title": "Technical",
-            "type": "object"
-          },
-          "userState": {
-            "$ref": "#/components/schemas/UserStateOut"
-          }
-        },
-        "required": [
-          "schemaVersion",
-          "libraryId",
-          "assetId",
-          "revision",
-          "previousRevision",
-          "operationId",
-          "primaryBlobId",
-          "blobs",
-          "importedAt",
-          "captureTime",
-          "metadata",
-          "technical",
-          "processing",
-          "analysis",
-          "preview",
-          "userState"
-        ],
-        "title": "AssetDetailV1Out",
-        "type": "object"
-      },
-      "AssetDetailV2Out": {
-        "additionalProperties": false,
-        "description": "GET /assets/{id} for a v2 document: the document plus derived blocks.\n\n``userState`` is inherited from the document variant; the endpoint\noverwrites it with the same (column-synced) values.",
-        "properties": {
-          "analysis": {
-            "$ref": "#/components/schemas/AnalysisStatusOut"
-          },
-          "assetId": {
-            "format": "uuid",
-            "title": "Assetid",
-            "type": "string"
-          },
-          "blobs": {
-            "items": {
-              "$ref": "#/components/schemas/BlobOut"
-            },
-            "minItems": 1,
-            "title": "Blobs",
-            "type": "array"
-          },
-          "captureTime": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Capturetime"
-          },
-          "deletedAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Deletedat"
-          },
-          "importedAt": {
-            "title": "Importedat",
-            "type": "string"
-          },
-          "libraryId": {
-            "format": "uuid",
-            "title": "Libraryid",
-            "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
-          "mutation": {
-            "$ref": "#/components/schemas/MutationOut"
-          },
-          "operationId": {
-            "format": "uuid",
-            "title": "Operationid",
-            "type": "string"
-          },
-          "preview": {
-            "$ref": "#/components/schemas/PreviewStatusOut"
-          },
-          "previousRevision": {
-            "title": "Previousrevision",
-            "type": "integer"
-          },
-          "primaryBlobId": {
-            "format": "uuid",
-            "title": "Primaryblobid",
-            "type": "string"
-          },
-          "processing": {
-            "items": {
-              "$ref": "#/components/schemas/ProcessingStatusOut"
-            },
-            "title": "Processing",
-            "type": "array"
-          },
-          "revision": {
-            "title": "Revision",
-            "type": "integer"
-          },
-          "schemaVersion": {
-            "const": 2,
-            "title": "Schemaversion",
-            "type": "integer"
-          },
-          "technical": {
-            "additionalProperties": true,
-            "title": "Technical",
-            "type": "object"
-          },
-          "userState": {
-            "$ref": "#/components/schemas/UserStateOut"
-          }
-        },
-        "required": [
-          "schemaVersion",
-          "libraryId",
-          "assetId",
-          "revision",
-          "previousRevision",
-          "operationId",
-          "primaryBlobId",
-          "blobs",
-          "importedAt",
-          "captureTime",
-          "metadata",
-          "userState",
-          "deletedAt",
-          "mutation",
-          "technical",
-          "processing",
-          "analysis",
-          "preview"
-        ],
-        "title": "AssetDetailV2Out",
-        "type": "object"
-      },
-      "AssetDocOut": {
-        "discriminator": {
-          "mapping": {
-            "1": "#/components/schemas/AssetDocV1Out",
-            "2": "#/components/schemas/AssetDocV2Out"
-          },
-          "propertyName": "schemaVersion"
-        },
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/AssetDocV1Out"
-          },
-          {
-            "$ref": "#/components/schemas/AssetDocV2Out"
-          }
-        ],
-        "title": "AssetDocOut"
-      },
       "AssetDocOutList": {
         "items": {
-          "$ref": "#/components/schemas/AssetDocOut"
+          "$ref": "#/components/schemas/CurrentAssetDocOut"
         },
         "title": "AssetDocOutList",
         "type": "array"
-      },
-      "AssetDocV1Out": {
-        "additionalProperties": false,
-        "description": "A v1 manifest document: exactly the 11 keys the v1 writer emits.\n\nv1 documents have ``revision`` fixed at 1, ``previousRevision`` null, and\nno ``userState``/``deletedAt``/``mutation`` keys at all.",
-        "properties": {
-          "assetId": {
-            "format": "uuid",
-            "title": "Assetid",
-            "type": "string"
-          },
-          "blobs": {
-            "items": {
-              "$ref": "#/components/schemas/BlobOut"
-            },
-            "minItems": 1,
-            "title": "Blobs",
-            "type": "array"
-          },
-          "captureTime": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Capturetime"
-          },
-          "importedAt": {
-            "title": "Importedat",
-            "type": "string"
-          },
-          "libraryId": {
-            "format": "uuid",
-            "title": "Libraryid",
-            "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
-          "operationId": {
-            "format": "uuid",
-            "title": "Operationid",
-            "type": "string"
-          },
-          "previousRevision": {
-            "title": "Previousrevision",
-            "type": "null"
-          },
-          "primaryBlobId": {
-            "format": "uuid",
-            "title": "Primaryblobid",
-            "type": "string"
-          },
-          "revision": {
-            "const": 1,
-            "title": "Revision",
-            "type": "integer"
-          },
-          "schemaVersion": {
-            "const": 1,
-            "title": "Schemaversion",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "schemaVersion",
-          "libraryId",
-          "assetId",
-          "revision",
-          "previousRevision",
-          "operationId",
-          "primaryBlobId",
-          "blobs",
-          "importedAt",
-          "captureTime",
-          "metadata"
-        ],
-        "title": "AssetDocV1Out",
-        "type": "object"
-      },
-      "AssetDocV2Out": {
-        "additionalProperties": false,
-        "description": "A v2 manifest document: v1 fields plus user state and mutation ancestry.",
-        "properties": {
-          "assetId": {
-            "format": "uuid",
-            "title": "Assetid",
-            "type": "string"
-          },
-          "blobs": {
-            "items": {
-              "$ref": "#/components/schemas/BlobOut"
-            },
-            "minItems": 1,
-            "title": "Blobs",
-            "type": "array"
-          },
-          "captureTime": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Capturetime"
-          },
-          "deletedAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Deletedat"
-          },
-          "importedAt": {
-            "title": "Importedat",
-            "type": "string"
-          },
-          "libraryId": {
-            "format": "uuid",
-            "title": "Libraryid",
-            "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
-          "mutation": {
-            "$ref": "#/components/schemas/MutationOut"
-          },
-          "operationId": {
-            "format": "uuid",
-            "title": "Operationid",
-            "type": "string"
-          },
-          "previousRevision": {
-            "title": "Previousrevision",
-            "type": "integer"
-          },
-          "primaryBlobId": {
-            "format": "uuid",
-            "title": "Primaryblobid",
-            "type": "string"
-          },
-          "revision": {
-            "title": "Revision",
-            "type": "integer"
-          },
-          "schemaVersion": {
-            "const": 2,
-            "title": "Schemaversion",
-            "type": "integer"
-          },
-          "userState": {
-            "$ref": "#/components/schemas/UserStateOut"
-          }
-        },
-        "required": [
-          "schemaVersion",
-          "libraryId",
-          "assetId",
-          "revision",
-          "previousRevision",
-          "operationId",
-          "primaryBlobId",
-          "blobs",
-          "importedAt",
-          "captureTime",
-          "metadata",
-          "userState",
-          "deletedAt",
-          "mutation"
-        ],
-        "title": "AssetDocV2Out",
-        "type": "object"
       },
       "BatchAbandonedOut": {
         "additionalProperties": false,
@@ -1113,6 +659,36 @@
         "title": "BurstDetailOut",
         "type": "object"
       },
+      "BurstReclusterOut": {
+        "additionalProperties": false,
+        "description": "Result of rebuilding display-only burst memberships.",
+        "properties": {
+          "clusters": {
+            "title": "Clusters",
+            "type": "integer"
+          },
+          "fingerprintedAssets": {
+            "title": "Fingerprintedassets",
+            "type": "integer"
+          },
+          "members": {
+            "title": "Members",
+            "type": "integer"
+          },
+          "semanticJobsCleared": {
+            "title": "Semanticjobscleared",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fingerprintedAssets",
+          "clusters",
+          "members",
+          "semanticJobsCleared"
+        ],
+        "title": "BurstReclusterOut",
+        "type": "object"
+      },
       "BurstRepresentativeOut": {
         "additionalProperties": false,
         "description": "POST /assets/{id}/burst/representative: the burst cluster and its\nnewly designated representative frame (bursts.set_representative).",
@@ -1133,6 +709,260 @@
           "representativeAssetId"
         ],
         "title": "BurstRepresentativeOut",
+        "type": "object"
+      },
+      "CurrentAssetDetailOut": {
+        "additionalProperties": false,
+        "description": "GET /assets/{id}: the current document plus derived blocks.",
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/AnalysisStatusOut"
+          },
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/BlobOut"
+            },
+            "minItems": 1,
+            "title": "Blobs",
+            "type": "array"
+          },
+          "captureTime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capturetime"
+          },
+          "deletedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletedat"
+          },
+          "importedAt": {
+            "title": "Importedat",
+            "type": "string"
+          },
+          "libraryId": {
+            "format": "uuid",
+            "title": "Libraryid",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "mutation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MutationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operationId": {
+            "format": "uuid",
+            "title": "Operationid",
+            "type": "string"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/PreviewStatusOut"
+          },
+          "previousRevision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previousrevision"
+          },
+          "primaryBlobId": {
+            "format": "uuid",
+            "title": "Primaryblobid",
+            "type": "string"
+          },
+          "processing": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingStatusOut"
+            },
+            "title": "Processing",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "technical": {
+            "additionalProperties": true,
+            "title": "Technical",
+            "type": "object"
+          },
+          "userState": {
+            "$ref": "#/components/schemas/UserStateOut"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "libraryId",
+          "assetId",
+          "revision",
+          "previousRevision",
+          "operationId",
+          "primaryBlobId",
+          "blobs",
+          "importedAt",
+          "captureTime",
+          "metadata",
+          "userState",
+          "deletedAt",
+          "mutation",
+          "technical",
+          "processing",
+          "analysis",
+          "preview"
+        ],
+        "title": "CurrentAssetDetailOut",
+        "type": "object"
+      },
+      "CurrentAssetDocOut": {
+        "additionalProperties": false,
+        "description": "The single current manifest document shape.",
+        "properties": {
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/BlobOut"
+            },
+            "minItems": 1,
+            "title": "Blobs",
+            "type": "array"
+          },
+          "captureTime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capturetime"
+          },
+          "deletedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletedat"
+          },
+          "importedAt": {
+            "title": "Importedat",
+            "type": "string"
+          },
+          "libraryId": {
+            "format": "uuid",
+            "title": "Libraryid",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "mutation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MutationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operationId": {
+            "format": "uuid",
+            "title": "Operationid",
+            "type": "string"
+          },
+          "previousRevision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previousrevision"
+          },
+          "primaryBlobId": {
+            "format": "uuid",
+            "title": "Primaryblobid",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "userState": {
+            "$ref": "#/components/schemas/UserStateOut"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "libraryId",
+          "assetId",
+          "revision",
+          "previousRevision",
+          "operationId",
+          "primaryBlobId",
+          "blobs",
+          "importedAt",
+          "captureTime",
+          "metadata",
+          "userState",
+          "deletedAt",
+          "mutation"
+        ],
+        "title": "CurrentAssetDocOut",
         "type": "object"
       },
       "FaceMoveOut": {
@@ -1510,7 +1340,6 @@
               "asset.patch",
               "asset.delete",
               "asset.restore",
-              "asset.migrate",
               "asset.metadata",
               "album.create",
               "album.patch",
@@ -2318,6 +2147,31 @@
       },
       "UploadBatchRequest": {
         "properties": {
+          "albumId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Albumid"
+          },
+          "albumName": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Albumname"
+          },
           "batchId": {
             "anyOf": [
               {
@@ -2365,6 +2219,18 @@
             "minLength": 1,
             "title": "Path",
             "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
           },
           "sizeBytes": {
             "exclusiveMinimum": 0.0,
@@ -3329,7 +3195,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AssetDetailOut"
+                  "$ref": "#/components/schemas/CurrentAssetDetailOut"
                 }
               }
             },
@@ -4184,6 +4050,24 @@
           }
         },
         "summary": "Browse Assets"
+      }
+    },
+    "/maintenance/recluster-bursts": {
+      "post": {
+        "operationId": "reclusterBursts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurstReclusterOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Recluster Bursts"
       }
     },
     "/maintenance/verify": {

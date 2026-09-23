@@ -19,7 +19,8 @@ ExifTool ingestion now requests descriptive maker-specific lens fields and norma
 - Phase 2 rating/favorite promotion wholly inside PostgreSQL;
 - lens/exposure metadata normalization, refresh, search, API output, and viewer data;
 - albums, ordered membership, trash/restore, previews, storage verification, and database-backed portable export;
-- migration continuity, checksums, adoption, and idempotence through schema version 4.
+- baseline-schema creation, idempotent initialization, and fresh-database
+  verification after the deployment reset.
 
 The backup image built successfully. A real dump was uploaded and checksum-verified, then restored into a disposable PostgreSQL database and queried successfully before that test database was removed. The active development database was not replaced.
 

@@ -261,286 +261,9 @@ export type AnalysisStatusOut = {
 };
 
 /**
- * AssetDetailOut
- */
-export type AssetDetailOut = ({
-    schemaVersion: 1;
-} & AssetDetailV1Out) | ({
-    schemaVersion: 2;
-} & AssetDetailV2Out);
-
-/**
- * AssetDetailV1Out
- *
- * GET /assets/{id} for a v1 document: the document plus derived blocks.
- */
-export type AssetDetailV1Out = {
-    analysis: AnalysisStatusOut;
-    /**
-     * Assetid
-     */
-    assetId: string;
-    /**
-     * Blobs
-     */
-    blobs: Array<BlobOut>;
-    /**
-     * Capturetime
-     */
-    captureTime: string | null;
-    /**
-     * Importedat
-     */
-    importedAt: string;
-    /**
-     * Libraryid
-     */
-    libraryId: string;
-    /**
-     * Metadata
-     */
-    metadata: {
-        [key: string]: unknown;
-    };
-    /**
-     * Operationid
-     */
-    operationId: string;
-    preview: PreviewStatusOut;
-    /**
-     * Previousrevision
-     */
-    previousRevision: null;
-    /**
-     * Primaryblobid
-     */
-    primaryBlobId: string;
-    /**
-     * Processing
-     */
-    processing: Array<ProcessingStatusOut>;
-    /**
-     * Revision
-     */
-    revision: 1;
-    /**
-     * Schemaversion
-     */
-    schemaVersion: 1;
-    /**
-     * Technical
-     */
-    technical: {
-        [key: string]: unknown;
-    };
-    userState: UserStateOut;
-};
-
-/**
- * AssetDetailV2Out
- *
- * GET /assets/{id} for a v2 document: the document plus derived blocks.
- *
- * ``userState`` is inherited from the document variant; the endpoint
- * overwrites it with the same (column-synced) values.
- */
-export type AssetDetailV2Out = {
-    analysis: AnalysisStatusOut;
-    /**
-     * Assetid
-     */
-    assetId: string;
-    /**
-     * Blobs
-     */
-    blobs: Array<BlobOut>;
-    /**
-     * Capturetime
-     */
-    captureTime: string | null;
-    /**
-     * Deletedat
-     */
-    deletedAt: string | null;
-    /**
-     * Importedat
-     */
-    importedAt: string;
-    /**
-     * Libraryid
-     */
-    libraryId: string;
-    /**
-     * Metadata
-     */
-    metadata: {
-        [key: string]: unknown;
-    };
-    mutation: MutationOut;
-    /**
-     * Operationid
-     */
-    operationId: string;
-    preview: PreviewStatusOut;
-    /**
-     * Previousrevision
-     */
-    previousRevision: number;
-    /**
-     * Primaryblobid
-     */
-    primaryBlobId: string;
-    /**
-     * Processing
-     */
-    processing: Array<ProcessingStatusOut>;
-    /**
-     * Revision
-     */
-    revision: number;
-    /**
-     * Schemaversion
-     */
-    schemaVersion: 2;
-    /**
-     * Technical
-     */
-    technical: {
-        [key: string]: unknown;
-    };
-    userState: UserStateOut;
-};
-
-/**
- * AssetDocOut
- */
-export type AssetDocOut = ({
-    schemaVersion: 1;
-} & AssetDocV1Out) | ({
-    schemaVersion: 2;
-} & AssetDocV2Out);
-
-/**
  * AssetDocOutList
  */
-export type AssetDocOutList = Array<AssetDocOut>;
-
-/**
- * AssetDocV1Out
- *
- * A v1 manifest document: exactly the 11 keys the v1 writer emits.
- *
- * v1 documents have ``revision`` fixed at 1, ``previousRevision`` null, and
- * no ``userState``/``deletedAt``/``mutation`` keys at all.
- */
-export type AssetDocV1Out = {
-    /**
-     * Assetid
-     */
-    assetId: string;
-    /**
-     * Blobs
-     */
-    blobs: Array<BlobOut>;
-    /**
-     * Capturetime
-     */
-    captureTime: string | null;
-    /**
-     * Importedat
-     */
-    importedAt: string;
-    /**
-     * Libraryid
-     */
-    libraryId: string;
-    /**
-     * Metadata
-     */
-    metadata: {
-        [key: string]: unknown;
-    };
-    /**
-     * Operationid
-     */
-    operationId: string;
-    /**
-     * Previousrevision
-     */
-    previousRevision: null;
-    /**
-     * Primaryblobid
-     */
-    primaryBlobId: string;
-    /**
-     * Revision
-     */
-    revision: 1;
-    /**
-     * Schemaversion
-     */
-    schemaVersion: 1;
-};
-
-/**
- * AssetDocV2Out
- *
- * A v2 manifest document: v1 fields plus user state and mutation ancestry.
- */
-export type AssetDocV2Out = {
-    /**
-     * Assetid
-     */
-    assetId: string;
-    /**
-     * Blobs
-     */
-    blobs: Array<BlobOut>;
-    /**
-     * Capturetime
-     */
-    captureTime: string | null;
-    /**
-     * Deletedat
-     */
-    deletedAt: string | null;
-    /**
-     * Importedat
-     */
-    importedAt: string;
-    /**
-     * Libraryid
-     */
-    libraryId: string;
-    /**
-     * Metadata
-     */
-    metadata: {
-        [key: string]: unknown;
-    };
-    mutation: MutationOut;
-    /**
-     * Operationid
-     */
-    operationId: string;
-    /**
-     * Previousrevision
-     */
-    previousRevision: number;
-    /**
-     * Primaryblobid
-     */
-    primaryBlobId: string;
-    /**
-     * Revision
-     */
-    revision: number;
-    /**
-     * Schemaversion
-     */
-    schemaVersion: 2;
-    userState: UserStateOut;
-};
+export type AssetDocOutList = Array<CurrentAssetDocOut>;
 
 /**
  * BatchAbandonedOut
@@ -648,6 +371,30 @@ export type BurstDetailOut = {
 };
 
 /**
+ * BurstReclusterOut
+ *
+ * Result of rebuilding display-only burst memberships.
+ */
+export type BurstReclusterOut = {
+    /**
+     * Clusters
+     */
+    clusters: number;
+    /**
+     * Fingerprintedassets
+     */
+    fingerprintedAssets: number;
+    /**
+     * Members
+     */
+    members: number;
+    /**
+     * Semanticjobscleared
+     */
+    semanticJobsCleared: number;
+};
+
+/**
  * BurstRepresentativeOut
  *
  * POST /assets/{id}/burst/representative: the burst cluster and its
@@ -662,6 +409,138 @@ export type BurstRepresentativeOut = {
      * Representativeassetid
      */
     representativeAssetId: string;
+};
+
+/**
+ * CurrentAssetDetailOut
+ *
+ * GET /assets/{id}: the current document plus derived blocks.
+ */
+export type CurrentAssetDetailOut = {
+    analysis: AnalysisStatusOut;
+    /**
+     * Assetid
+     */
+    assetId: string;
+    /**
+     * Blobs
+     */
+    blobs: Array<BlobOut>;
+    /**
+     * Capturetime
+     */
+    captureTime: string | null;
+    /**
+     * Deletedat
+     */
+    deletedAt: string | null;
+    /**
+     * Importedat
+     */
+    importedAt: string;
+    /**
+     * Libraryid
+     */
+    libraryId: string;
+    /**
+     * Metadata
+     */
+    metadata: {
+        [key: string]: unknown;
+    };
+    mutation: MutationOut | null;
+    /**
+     * Operationid
+     */
+    operationId: string;
+    preview: PreviewStatusOut;
+    /**
+     * Previousrevision
+     */
+    previousRevision: number | null;
+    /**
+     * Primaryblobid
+     */
+    primaryBlobId: string;
+    /**
+     * Processing
+     */
+    processing: Array<ProcessingStatusOut>;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Schemaversion
+     */
+    schemaVersion: 2;
+    /**
+     * Technical
+     */
+    technical: {
+        [key: string]: unknown;
+    };
+    userState: UserStateOut;
+};
+
+/**
+ * CurrentAssetDocOut
+ *
+ * The single current manifest document shape.
+ */
+export type CurrentAssetDocOut = {
+    /**
+     * Assetid
+     */
+    assetId: string;
+    /**
+     * Blobs
+     */
+    blobs: Array<BlobOut>;
+    /**
+     * Capturetime
+     */
+    captureTime: string | null;
+    /**
+     * Deletedat
+     */
+    deletedAt: string | null;
+    /**
+     * Importedat
+     */
+    importedAt: string;
+    /**
+     * Libraryid
+     */
+    libraryId: string;
+    /**
+     * Metadata
+     */
+    metadata: {
+        [key: string]: unknown;
+    };
+    mutation: MutationOut | null;
+    /**
+     * Operationid
+     */
+    operationId: string;
+    /**
+     * Previousrevision
+     */
+    previousRevision: number | null;
+    /**
+     * Primaryblobid
+     */
+    primaryBlobId: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Schemaversion
+     */
+    schemaVersion: 2;
+    userState: UserStateOut;
 };
 
 /**
@@ -939,7 +818,7 @@ export type MutationOut = {
     /**
      * Action
      */
-    action: 'asset.patch' | 'asset.delete' | 'asset.restore' | 'asset.migrate' | 'asset.metadata' | 'album.create' | 'album.patch' | 'album.delete' | 'album.restore' | 'burst.setRepresentative';
+    action: 'asset.patch' | 'asset.delete' | 'asset.restore' | 'asset.metadata' | 'album.create' | 'album.patch' | 'album.delete' | 'album.restore' | 'burst.setRepresentative';
     /**
      * Changes
      */
@@ -1446,6 +1325,14 @@ export type UploadBatchOutList = Array<UploadBatchOut>;
  */
 export type UploadBatchRequest = {
     /**
+     * Albumid
+     */
+    albumId?: string | null;
+    /**
+     * Albumname
+     */
+    albumName?: string | null;
+    /**
      * Batchid
      */
     batchId?: string | null;
@@ -1467,6 +1354,10 @@ export type UploadFileDeclaration = {
      * Path
      */
     path: string;
+    /**
+     * Sha256
+     */
+    sha256?: string | null;
     /**
      * Sizebytes
      */
@@ -2075,7 +1966,7 @@ export type GetAssetDetailResponses = {
     /**
      * Successful Response
      */
-    200: AssetDetailOut;
+    200: CurrentAssetDetailOut;
 };
 
 export type GetAssetDetailResponse = GetAssetDetailResponses[keyof GetAssetDetailResponses];
@@ -2537,6 +2428,22 @@ export type BrowseAssetsResponses = {
 };
 
 export type BrowseAssetsResponse = BrowseAssetsResponses[keyof BrowseAssetsResponses];
+
+export type ReclusterBurstsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/maintenance/recluster-bursts';
+};
+
+export type ReclusterBurstsResponses = {
+    /**
+     * Successful Response
+     */
+    200: BurstReclusterOut;
+};
+
+export type ReclusterBurstsResponse = ReclusterBurstsResponses[keyof ReclusterBurstsResponses];
 
 export type VerifyStorageData = {
     body?: never;

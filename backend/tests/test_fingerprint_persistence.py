@@ -4,10 +4,11 @@ from uuid import uuid4
 
 from sqlalchemy import text
 from test_integration import backend as backend  # noqa: F401
-from test_integration import pytestmark  # noqa: F401
+from test_integration import photo, pytestmark  # noqa: F401
 
 from photo_server.fingerprints import BURST_HASH_VERSION, Fingerprint
 from photo_server.models import Blob, Manifest
+from photo_server.worker import run_once
 
 WIDTH, HEIGHT = 640, 480
 PHASH = "0123456789abcdef"
@@ -46,7 +47,7 @@ def add_asset(backend, capture_time=None, metadata=None):
     return str(asset_id)
 
 
-def test_migration_zero_seven_creates_fingerprint_schema(backend):
+def test_baseline_creates_fingerprint_schema(backend):
     catalog = backend.service.catalog
     with catalog.engine.connect() as connection:
         assert (
@@ -59,6 +60,16 @@ def test_migration_zero_seven_creates_fingerprint_schema(backend):
             ).mappings()
         }
     assert {"semantic_origin", "source_run_id", "reuse_policy_version", "similarity"} <= columns
+
+
+def test_fingerprint_stage_runs_without_ai_services(backend):
+    result = backend.service.import_batch([photo(backend.root).name], uuid4())
+    asset_id = result["results"][0]["assetId"]
+    for _ in range(6):
+        run_once(backend.service)
+        if backend.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is not None:
+            break
+    assert backend.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is not None
 
 
 def test_fingerprint_upsert_is_idempotent(backend):

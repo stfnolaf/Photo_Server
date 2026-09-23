@@ -55,7 +55,6 @@ class Mutation(DurableModel):
         "asset.patch",
         "asset.delete",
         "asset.restore",
-        "asset.migrate",
         "asset.metadata",
         "album.create",
         "album.patch",
@@ -69,7 +68,7 @@ class Mutation(DurableModel):
 
 
 class Manifest(DurableModel):
-    schema_version: Literal[1, 2] = 1
+    schema_version: Literal[2] = 2
     library_id: UUID
     asset_id: UUID
     revision: int = Field(default=1, ge=1, le=99999999)
@@ -85,32 +84,21 @@ class Manifest(DurableModel):
     mutation: Mutation | None = None
 
     def document(self) -> dict:
-        document = super().document()
-        if self.schema_version == 1:
-            for name in ("userState", "deletedAt", "mutation"):
-                document.pop(name)
-        return document
+        return super().document()
 
     @model_validator(mode="after")
     def validate_blobs(self):
-        if self.schema_version == 1:
-            if (
-                self.revision != 1
-                or self.previous_revision is not None
-                or self.mutation is not None
-                or self.deleted_at is not None
-                or self.user_state != UserState()
-            ):
-                raise ValueError("Legacy manifests must be unchanged revision 1 imports")
+        if self.revision == 1:
+            if self.previous_revision is not None or self.mutation is not None:
+                raise ValueError("Initial manifests cannot have mutation ancestry")
         elif (
-            self.revision < 2
-            or self.previous_revision != self.revision - 1
+            self.previous_revision != self.revision - 1
             or self.mutation is None
             or self.mutation.entity_id != self.asset_id
             or not self.mutation.action.startswith("asset.")
             or "user_state" not in self.model_fields_set
         ):
-            raise ValueError("Invalid asset revision ancestry or mutation")
+            raise ValueError("Invalid manifest revision ancestry")
         ids = [blob.blob_id for blob in self.blobs]
         keys = [blob.object_key for blob in self.blobs]
         if len(set(ids)) != len(ids) or len(set(keys)) != len(keys):

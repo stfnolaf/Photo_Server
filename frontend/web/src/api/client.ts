@@ -187,10 +187,11 @@ export const api = {
 
   createUploadBatch: (
     batchId: string,
-    files: Array<{ path: string; sizeBytes: number; mimeType: string }>,
+    files: Array<{ path: string; sizeBytes: number; mimeType: string; sha256?: string }>,
+    album?: { albumId?: string; albumName?: string },
   ) =>
     call<UploadBatch>(() =>
-      createUploadBatch({ client, body: { batchId, files } }),
+      createUploadBatch({ client, body: { batchId, files, ...album } }),
     ),
 
   uploadFile: (

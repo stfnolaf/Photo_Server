@@ -48,13 +48,11 @@ class Service:
                     canonical_json({"schemaVersion": 1, "libraryId": str(self.library_id)}),
                     "application/json",
                 )
-        migrated = self.catalog.migrate_legacy_user_state()
         interrupted = self.catalog.resume_interrupted_uploads() if recover_uploads else 0
         return {
             "libraryId": str(self.library_id),
             "bucket": self.storage.bucket,
             "databaseMigrations": database_migrations,
-            "legacyUserStateMigrated": migrated,
             "interruptedUploadsReset": interrupted,
         }
 

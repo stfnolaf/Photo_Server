@@ -697,39 +697,6 @@ def test_ratings_favorites_survive_restart_and_storage_verify(backend):
     assert list(service.storage.keys("state/")) == []
 
 
-def test_phase_one_catalog_upgrade_backfills_without_changing_manifests(backend):
-    from sqlalchemy import text
-
-    from photo_server.browsing import BrowseQuery
-
-    service = backend.service
-    a = catalog_fixture(service, 1, "2024-01-01T00:30:00+13:00", media="RAW")
-    b = catalog_fixture(service, 2, None)
-    with service.catalog.engine.begin() as connection:
-        connection.execute(text("DROP TABLE operations, album_assets, albums"))
-        connection.execute(
-            text("""
-            ALTER TABLE assets DROP COLUMN timeline_at, DROP COLUMN media_type,
-              DROP COLUMN search_text, DROP COLUMN rating, DROP COLUMN favorite,
-              DROP COLUMN deleted_at
-        """)
-        )
-        connection.execute(text("DELETE FROM schema_migrations WHERE version > 1"))
-        connection.execute(text("UPDATE library SET schema_version = 1"))
-    service.catalog.initialize(str(service.library_id))
-    page = service.catalog.browse(BrowseQuery())
-    assert page["total"] == 2
-    assert page["items"][0]["assetId"] == str(b.asset_id)
-    assert page["items"][1]["timelineTime"] == "2024-01-01T00:30:00"
-    assert service.catalog.get(str(a.asset_id)).document() == a.document()
-    set_legacy_state(service, str(a.asset_id), {"rating": 4, "favorite": True})
-    service.catalog.initialize(str(service.library_id))
-    service.catalog.apply(a)
-    assert service.catalog.user_state(str(a.asset_id))["rating"] == 4
-    assert service.catalog.user_state(str(a.asset_id))["favorite"] is True
-    assert service.catalog.counts() == {"assets": 2, "blobs": 2}
-
-
 def test_derivative_api_states(backend):
     from sqlalchemy import text
 

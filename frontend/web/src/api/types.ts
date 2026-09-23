@@ -18,16 +18,7 @@
  *
  * One shim is deliberately not a plain alias:
  *
- * - `PhotoDetail` aliases the schema-v2 member of the `AssetDetailOut`
- *   union (`AssetDetailV2Out`). The photo feature page is a v2-shaped
- *   consumer: it reads `deletedAt` (absent on v1 documents, where the runtime
- *   value is `undefined` — identical to `null` under its only uses,
- *   `Boolean(...)` / `!detail.deletedAt`) and it writes v2 documents back
- *   after every mutation (any asset mutation upgrades the document to v2).
- *   Typing the query-cache slot as the v2 member also keeps the TanStack
- *   `setQueryData` updater assignable, because the v1 member pins
- *   `revision: 1` as a literal while post-mutation revisions are numbers.
- *   Every field the client reads exists on both variants.
+ * - `PhotoDetail` aliases the single current `AssetDetailOut` contract.
  */
 import type * as Generated from "./generated/types.gen";
 
@@ -44,8 +35,8 @@ export type BrowsePage = Generated.BrowsePageOut;
 
 export type BlobInfo = Generated.BlobOut;
 
-/** See the module header: the schema-v2 member of the `AssetDetailOut` union. */
-export type PhotoDetail = Generated.AssetDetailV2Out;
+/** The single current asset-detail wire contract. */
+export type PhotoDetail = Generated.CurrentAssetDetailOut;
 
 export type AnalysisObject = Generated.AnalysisObjectOut;
 export type AnalysisResult = Generated.AnalysisResultOut;

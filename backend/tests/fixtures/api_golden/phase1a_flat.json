@@ -1,0 +1,1941 @@
+{
+  "cases": [
+    {
+      "body": [
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000a",
+          "blobs": [
+            {
+              "blobId": "0f295c62-1e2b-564f-b120-5831d9595434",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000a/photo-10.JPEG",
+              "originalFilename": "photo-10.JPEG",
+              "role": "ORIGINAL_JPEG",
+              "sha256": "ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-01T00:10:00+08:00",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Canon",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "ce2651df-aadb-51e2-8f7f-bd043f49821b",
+          "previousRevision": null,
+          "primaryBlobId": "0f295c62-1e2b-564f-b120-5831d9595434",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000b",
+          "blobs": [
+            {
+              "blobId": "f9e2979a-2fbd-5eaf-a740-049ee9bb5d7b",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000b/photo-11.JPEG",
+              "originalFilename": "photo-11.JPEG",
+              "role": "ORIGINAL_JPEG",
+              "sha256": "3ae47dc0fcc15a76d1bc803bd412853591e2bf8274fbee316e4b4034442d080a",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-01T00:10:00+08:00",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Canon",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "f110886e-c0d4-55e6-a8a2-96dcfd2119c3",
+          "previousRevision": null,
+          "primaryBlobId": "f9e2979a-2fbd-5eaf-a740-049ee9bb5d7b",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000c",
+          "blobs": [
+            {
+              "blobId": "3012e312-3052-5578-a09d-df9360d54cc6",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000c/photo-12.JPEG",
+              "originalFilename": "photo-12.JPEG",
+              "role": "ORIGINAL_JPEG",
+              "sha256": "01f26ecea123f8377e1b44ba10e25e9ff154835431c8b60a0fc1bf9dc327c899",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-01T00:10:01+08:00",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Canon",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "fa34d182-eec1-5b8d-8500-d335d37da1be",
+          "previousRevision": null,
+          "primaryBlobId": "3012e312-3052-5578-a09d-df9360d54cc6",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000d",
+          "blobs": [
+            {
+              "blobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000d/photo-13.JPEG",
+              "originalFilename": "photo-13.JPEG",
+              "role": "ORIGINAL_JPEG",
+              "sha256": "fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-02T09:30:00-08:00",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "ExposureCompensation": 0,
+            "ExposureProgram": "Manual",
+            "ExposureTime": "1/250",
+            "FNumber": 2.8,
+            "Flash": "auto",
+            "FocalLength": 50.0,
+            "FocalLengthIn35mmFormat": 50.0,
+            "ISO": 100,
+            "ImageHeight": 3000,
+            "ImageWidth": 4000,
+            "LensModel": "35mm Prime",
+            "Make": "Sony",
+            "MeteringMode": "Spot",
+            "Model": "Camera",
+            "ShutterSpeed": "1/250",
+            "WhiteBalance": "Auto"
+          },
+          "mutation": {
+            "action": "asset.patch",
+            "changes": {
+              "caption": "Golden hour by the river",
+              "favorite": true,
+              "keywords": [
+                "golden",
+                "river"
+              ],
+              "location": {
+                "latitude": 47.6062,
+                "longitude": -122.3321,
+                "name": "Riverside Park"
+              },
+              "rating": 4
+            },
+            "entityId": "00000000-0000-0000-0000-00000000000d",
+            "expectedRevision": null
+          },
+          "operationId": "b55a28ce-af38-51ff-9f02-480668ecce13",
+          "previousRevision": 1,
+          "primaryBlobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
+          "revision": 2,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "Golden hour by the river",
+            "favorite": true,
+            "keywords": [
+              "golden",
+              "river"
+            ],
+            "location": {
+              "latitude": 47.6062,
+              "longitude": -122.3321,
+              "name": "Riverside Park"
+            },
+            "rating": 4
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000e",
+          "blobs": [
+            {
+              "blobId": "848679a8-5889-5b52-9c00-93d1ee893153",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000e/photo-14.HEIF",
+              "originalFilename": "photo-14.HEIF",
+              "role": "ORIGINAL_HEIF",
+              "sha256": "d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": null,
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Apple",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "3cbad67b-1469-5379-b48d-cbf7253bafd9",
+          "previousRevision": null,
+          "primaryBlobId": "848679a8-5889-5b52-9c00-93d1ee893153",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000f",
+          "blobs": [
+            {
+              "blobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000f/photo-15.RAW",
+              "originalFilename": "photo-15.RAW",
+              "role": "ORIGINAL_RAW",
+              "sha256": "f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-03T18:00:00Z",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Nikon",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "befa2d44-b76a-561c-9cbd-b9ebd5bace23",
+          "previousRevision": null,
+          "primaryBlobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        }
+      ],
+      "method": "GET",
+      "path": "/assets",
+      "status": 200
+    },
+    {
+      "body": [
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000d",
+          "blobs": [
+            {
+              "blobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000d/photo-13.JPEG",
+              "originalFilename": "photo-13.JPEG",
+              "role": "ORIGINAL_JPEG",
+              "sha256": "fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-02T09:30:00-08:00",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "ExposureCompensation": 0,
+            "ExposureProgram": "Manual",
+            "ExposureTime": "1/250",
+            "FNumber": 2.8,
+            "Flash": "auto",
+            "FocalLength": 50.0,
+            "FocalLengthIn35mmFormat": 50.0,
+            "ISO": 100,
+            "ImageHeight": 3000,
+            "ImageWidth": 4000,
+            "LensModel": "35mm Prime",
+            "Make": "Sony",
+            "MeteringMode": "Spot",
+            "Model": "Camera",
+            "ShutterSpeed": "1/250",
+            "WhiteBalance": "Auto"
+          },
+          "mutation": {
+            "action": "asset.patch",
+            "changes": {
+              "caption": "Golden hour by the river",
+              "favorite": true,
+              "keywords": [
+                "golden",
+                "river"
+              ],
+              "location": {
+                "latitude": 47.6062,
+                "longitude": -122.3321,
+                "name": "Riverside Park"
+              },
+              "rating": 4
+            },
+            "entityId": "00000000-0000-0000-0000-00000000000d",
+            "expectedRevision": null
+          },
+          "operationId": "b55a28ce-af38-51ff-9f02-480668ecce13",
+          "previousRevision": 1,
+          "primaryBlobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
+          "revision": 2,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "Golden hour by the river",
+            "favorite": true,
+            "keywords": [
+              "golden",
+              "river"
+            ],
+            "location": {
+              "latitude": 47.6062,
+              "longitude": -122.3321,
+              "name": "Riverside Park"
+            },
+            "rating": 4
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000e",
+          "blobs": [
+            {
+              "blobId": "848679a8-5889-5b52-9c00-93d1ee893153",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000e/photo-14.HEIF",
+              "originalFilename": "photo-14.HEIF",
+              "role": "ORIGINAL_HEIF",
+              "sha256": "d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": null,
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Apple",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "3cbad67b-1469-5379-b48d-cbf7253bafd9",
+          "previousRevision": null,
+          "primaryBlobId": "848679a8-5889-5b52-9c00-93d1ee893153",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        },
+        {
+          "assetId": "00000000-0000-0000-0000-00000000000f",
+          "blobs": [
+            {
+              "blobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
+              "mimeType": "image/jpeg",
+              "objectKey": "originals/00000000-0000-0000-0000-00000000000f/photo-15.RAW",
+              "originalFilename": "photo-15.RAW",
+              "role": "ORIGINAL_RAW",
+              "sha256": "f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
+              "sizeBytes": 100
+            }
+          ],
+          "captureTime": "2024-05-03T18:00:00Z",
+          "deletedAt": null,
+          "importedAt": "2025-01-02T12:00:00Z",
+          "libraryId": "11111111-1111-4111-8111-111111111111",
+          "metadata": {
+            "LensModel": "35mm Prime",
+            "Make": "Nikon",
+            "Model": "Camera"
+          },
+          "mutation": null,
+          "operationId": "befa2d44-b76a-561c-9cbd-b9ebd5bace23",
+          "previousRevision": null,
+          "primaryBlobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
+          "revision": 1,
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
+        }
+      ],
+      "method": "GET",
+      "path": "/assets?limit=3&offset=3",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysis": {
+          "analyzedAt": null,
+          "artifactKey": null,
+          "attempts": 0,
+          "error": null,
+          "faces": [],
+          "model": null,
+          "modelVersion": null,
+          "pipelineVersion": null,
+          "result": null,
+          "runId": null,
+          "status": "pending"
+        },
+        "assetId": "00000000-0000-0000-0000-00000000000a",
+        "blobs": [
+          {
+            "blobId": "0f295c62-1e2b-564f-b120-5831d9595434",
+            "mimeType": "image/jpeg",
+            "objectKey": "originals/00000000-0000-0000-0000-00000000000a/photo-10.JPEG",
+            "originalFilename": "photo-10.JPEG",
+            "role": "ORIGINAL_JPEG",
+            "sha256": "ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
+            "sizeBytes": 100
+          }
+        ],
+        "captureTime": "2024-05-01T00:10:00+08:00",
+        "deletedAt": null,
+        "importedAt": "2025-01-02T12:00:00Z",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+          "LensModel": "35mm Prime",
+          "Make": "Canon",
+          "Model": "Camera"
+        },
+        "mutation": null,
+        "operationId": "ce2651df-aadb-51e2-8f7f-bd043f49821b",
+        "preview": {
+          "error": null,
+          "status": "pending"
+        },
+        "previousRevision": null,
+        "primaryBlobId": "0f295c62-1e2b-564f-b120-5831d9595434",
+        "processing": [
+          {
+            "attempts": 0,
+            "error": null,
+            "job_type": "fingerprint-v1",
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "job_type": "metadata-v1",
+            "status": "ready"
+          }
+        ],
+        "revision": 1,
+        "schemaVersion": 2,
+        "technical": {
+          "aperture": null,
+          "exposureCompensation": null,
+          "exposureProgram": null,
+          "exposureTime": null,
+          "flash": null,
+          "focalLength": null,
+          "focalLength35mm": null,
+          "iso": null,
+          "lens": "35mm Prime",
+          "meteringMode": null,
+          "shutterSpeed": null,
+          "whiteBalance": null
+        },
+        "userState": {
+          "caption": "",
+          "favorite": false,
+          "keywords": [],
+          "location": null,
+          "rating": 0
+        }
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-00000000000a",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysis": {
+          "analyzedAt": "2025-01-05T08:30:00+00:00",
+          "artifactKey": "analysis/00000000-0000-0000-0000-00000000000d/photo-ai-v1/e9e56b1b-1863-59e0-a7bb-a2cb0c8729ef.json",
+          "attempts": 1,
+          "error": null,
+          "faces": [
+            {
+              "box": [
+                0.1,
+                0.2,
+                0.3,
+                0.4
+              ],
+              "confidence": 0.9,
+              "faceIndex": 0,
+              "personId": "254c768b-6a31-56cb-b421-2ee263e8155a",
+              "personName": "Avery"
+            }
+          ],
+          "model": "stub-vlm",
+          "modelVersion": "stub-digest-1",
+          "pipelineVersion": "photo-ai-v1",
+          "result": {
+            "activities": [
+              "walking"
+            ],
+            "faceCount": 1,
+            "objects": [
+              {
+                "count": 1,
+                "name": "river"
+              },
+              {
+                "count": 3,
+                "name": "tree"
+              }
+            ],
+            "personCount": 1,
+            "photoTypes": [
+              "landscape",
+              "travel"
+            ],
+            "scene": "riverside",
+            "setting": "outdoor",
+            "summary": "A calm river at golden hour.",
+            "tags": [
+              "golden",
+              "river",
+              "evening"
+            ],
+            "visibleText": []
+          },
+          "runId": "e9e56b1b-1863-59e0-a7bb-a2cb0c8729ef",
+          "status": "ready"
+        },
+        "assetId": "00000000-0000-0000-0000-00000000000d",
+        "blobs": [
+          {
+            "blobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
+            "mimeType": "image/jpeg",
+            "objectKey": "originals/00000000-0000-0000-0000-00000000000d/photo-13.JPEG",
+            "originalFilename": "photo-13.JPEG",
+            "role": "ORIGINAL_JPEG",
+            "sha256": "fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
+            "sizeBytes": 100
+          }
+        ],
+        "captureTime": "2024-05-02T09:30:00-08:00",
+        "deletedAt": null,
+        "importedAt": "2025-01-02T12:00:00Z",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+          "ExposureCompensation": 0,
+          "ExposureProgram": "Manual",
+          "ExposureTime": "1/250",
+          "FNumber": 2.8,
+          "Flash": "auto",
+          "FocalLength": 50.0,
+          "FocalLengthIn35mmFormat": 50.0,
+          "ISO": 100,
+          "ImageHeight": 3000,
+          "ImageWidth": 4000,
+          "LensModel": "35mm Prime",
+          "Make": "Sony",
+          "MeteringMode": "Spot",
+          "Model": "Camera",
+          "ShutterSpeed": "1/250",
+          "WhiteBalance": "Auto"
+        },
+        "mutation": {
+          "action": "asset.patch",
+          "changes": {
+            "caption": "Golden hour by the river",
+            "favorite": true,
+            "keywords": [
+              "golden",
+              "river"
+            ],
+            "location": {
+              "latitude": 47.6062,
+              "longitude": -122.3321,
+              "name": "Riverside Park"
+            },
+            "rating": 4
+          },
+          "entityId": "00000000-0000-0000-0000-00000000000d",
+          "expectedRevision": null
+        },
+        "operationId": "b55a28ce-af38-51ff-9f02-480668ecce13",
+        "preview": {
+          "error": "Decoder failure",
+          "status": "failed"
+        },
+        "previousRevision": 1,
+        "primaryBlobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
+        "processing": [
+          {
+            "attempts": 0,
+            "error": null,
+            "job_type": "fingerprint-v1",
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "job_type": "metadata-v1",
+            "status": "ready"
+          }
+        ],
+        "revision": 2,
+        "schemaVersion": 2,
+        "technical": {
+          "aperture": 2.8,
+          "exposureCompensation": 0,
+          "exposureProgram": "Manual",
+          "exposureTime": "1/250",
+          "flash": "auto",
+          "focalLength": 50.0,
+          "focalLength35mm": 50.0,
+          "iso": 100,
+          "lens": "35mm Prime",
+          "meteringMode": "Spot",
+          "shutterSpeed": "1/250",
+          "whiteBalance": "Auto"
+        },
+        "userState": {
+          "caption": "Golden hour by the river",
+          "favorite": true,
+          "keywords": [
+            "golden",
+            "river"
+          ],
+          "location": {
+            "latitude": 47.6062,
+            "longitude": -122.3321,
+            "name": "Riverside Park"
+          },
+          "rating": 4
+        }
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-00000000000d",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysis": {
+          "analyzedAt": null,
+          "artifactKey": null,
+          "attempts": 1,
+          "error": "simulated AI failure",
+          "faces": [],
+          "model": null,
+          "modelVersion": null,
+          "pipelineVersion": null,
+          "result": null,
+          "runId": null,
+          "status": "failed"
+        },
+        "assetId": "00000000-0000-0000-0000-00000000000e",
+        "blobs": [
+          {
+            "blobId": "848679a8-5889-5b52-9c00-93d1ee893153",
+            "mimeType": "image/jpeg",
+            "objectKey": "originals/00000000-0000-0000-0000-00000000000e/photo-14.HEIF",
+            "originalFilename": "photo-14.HEIF",
+            "role": "ORIGINAL_HEIF",
+            "sha256": "d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
+            "sizeBytes": 100
+          }
+        ],
+        "captureTime": null,
+        "deletedAt": null,
+        "importedAt": "2025-01-02T12:00:00Z",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+          "LensModel": "35mm Prime",
+          "Make": "Apple",
+          "Model": "Camera"
+        },
+        "mutation": null,
+        "operationId": "3cbad67b-1469-5379-b48d-cbf7253bafd9",
+        "preview": {
+          "error": null,
+          "status": "missing"
+        },
+        "previousRevision": null,
+        "primaryBlobId": "848679a8-5889-5b52-9c00-93d1ee893153",
+        "processing": [
+          {
+            "attempts": 0,
+            "error": null,
+            "job_type": "fingerprint-v1",
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": "exiftool not found",
+            "job_type": "metadata-v1",
+            "status": "failed"
+          }
+        ],
+        "revision": 1,
+        "schemaVersion": 2,
+        "technical": {
+          "aperture": null,
+          "exposureCompensation": null,
+          "exposureProgram": null,
+          "exposureTime": null,
+          "flash": null,
+          "focalLength": null,
+          "focalLength35mm": null,
+          "iso": null,
+          "lens": "35mm Prime",
+          "meteringMode": null,
+          "shutterSpeed": null,
+          "whiteBalance": null
+        },
+        "userState": {
+          "caption": "",
+          "favorite": false,
+          "keywords": [],
+          "location": null,
+          "rating": 0
+        }
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-00000000000e",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysis": {
+          "analyzedAt": null,
+          "artifactKey": null,
+          "attempts": 0,
+          "error": null,
+          "faces": [],
+          "model": null,
+          "modelVersion": null,
+          "pipelineVersion": null,
+          "result": null,
+          "runId": null,
+          "status": "missing"
+        },
+        "assetId": "00000000-0000-0000-0000-00000000000f",
+        "blobs": [
+          {
+            "blobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
+            "mimeType": "image/jpeg",
+            "objectKey": "originals/00000000-0000-0000-0000-00000000000f/photo-15.RAW",
+            "originalFilename": "photo-15.RAW",
+            "role": "ORIGINAL_RAW",
+            "sha256": "f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
+            "sizeBytes": 100
+          }
+        ],
+        "captureTime": "2024-05-03T18:00:00Z",
+        "deletedAt": null,
+        "importedAt": "2025-01-02T12:00:00Z",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+          "LensModel": "35mm Prime",
+          "Make": "Nikon",
+          "Model": "Camera"
+        },
+        "mutation": null,
+        "operationId": "befa2d44-b76a-561c-9cbd-b9ebd5bace23",
+        "preview": {
+          "error": "No embedded preview available",
+          "status": "unavailable"
+        },
+        "previousRevision": null,
+        "primaryBlobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
+        "processing": [
+          {
+            "attempts": 0,
+            "error": null,
+            "job_type": "fingerprint-v1",
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "job_type": "metadata-v1",
+            "status": "ready"
+          }
+        ],
+        "revision": 1,
+        "schemaVersion": 2,
+        "technical": {
+          "aperture": null,
+          "exposureCompensation": null,
+          "exposureProgram": null,
+          "exposureTime": null,
+          "flash": null,
+          "focalLength": null,
+          "focalLength35mm": null,
+          "iso": null,
+          "lens": "35mm Prime",
+          "meteringMode": null,
+          "shutterSpeed": null,
+          "whiteBalance": null
+        },
+        "userState": {
+          "caption": "",
+          "favorite": false,
+          "keywords": [],
+          "location": null,
+          "rating": 0
+        }
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-00000000000f",
+      "status": 200
+    },
+    {
+      "body": {
+        "analysis": {
+          "analyzedAt": null,
+          "artifactKey": null,
+          "attempts": 0,
+          "error": null,
+          "faces": [],
+          "model": null,
+          "modelVersion": null,
+          "pipelineVersion": null,
+          "result": null,
+          "runId": null,
+          "status": "pending"
+        },
+        "assetId": "00000000-0000-0000-0000-000000000010",
+        "blobs": [
+          {
+            "blobId": "853b1ef4-5817-507d-b71f-b8374cff4538",
+            "mimeType": "image/jpeg",
+            "objectKey": "originals/00000000-0000-0000-0000-000000000010/photo-16.JPEG",
+            "originalFilename": "photo-16.JPEG",
+            "role": "ORIGINAL_JPEG",
+            "sha256": "0259d2ded8ff75c6d9c7e468415c2a4f7a700a3b4bd9a76e6f5fa3bc46d1bc5f",
+            "sizeBytes": 100
+          }
+        ],
+        "captureTime": "2024-05-04T12:00:00+05:30",
+        "deletedAt": "2025-02-01T00:00:00+00:00",
+        "importedAt": "2025-01-02T12:00:00Z",
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+          "LensModel": "35mm Prime",
+          "Make": "Fujifilm",
+          "Model": "Camera"
+        },
+        "mutation": {
+          "action": "asset.delete",
+          "changes": {},
+          "entityId": "00000000-0000-0000-0000-000000000010",
+          "expectedRevision": null
+        },
+        "operationId": "dde77b9b-1c6e-5052-a89f-532aa16f5ca3",
+        "preview": {
+          "error": null,
+          "status": "pending"
+        },
+        "previousRevision": 1,
+        "primaryBlobId": "853b1ef4-5817-507d-b71f-b8374cff4538",
+        "processing": [
+          {
+            "attempts": 0,
+            "error": null,
+            "job_type": "fingerprint-v1",
+            "status": "pending"
+          },
+          {
+            "attempts": 1,
+            "error": null,
+            "job_type": "metadata-v1",
+            "status": "ready"
+          }
+        ],
+        "revision": 2,
+        "schemaVersion": 2,
+        "technical": {
+          "aperture": null,
+          "exposureCompensation": null,
+          "exposureProgram": null,
+          "exposureTime": null,
+          "flash": null,
+          "focalLength": null,
+          "focalLength35mm": null,
+          "iso": null,
+          "lens": "35mm Prime",
+          "meteringMode": null,
+          "shutterSpeed": null,
+          "whiteBalance": null
+        },
+        "userState": {
+          "caption": "",
+          "favorite": false,
+          "keywords": [],
+          "location": null,
+          "rating": 0
+        }
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-000000000010",
+      "status": 200
+    },
+    {
+      "body": {
+        "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+        "frames": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000a",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:00+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-10.JPEG",
+            "preview": {
+              "error": null,
+              "status": "pending"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000a/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000a/thumbnail",
+            "timelineTime": "2024-05-01T00:10:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000b",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:00+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-11.JPEG",
+            "preview": {
+              "error": null,
+              "status": "running"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000b/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000b/thumbnail",
+            "timelineTime": "2024-05-01T00:10:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000c",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:01+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-12.JPEG",
+            "preview": {
+              "error": null,
+              "status": "ready"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000c/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000c/thumbnail",
+            "timelineTime": "2024-05-01T00:10:01",
+            "width": null
+          }
+        ],
+        "representativeAssetId": "00000000-0000-0000-0000-00000000000b"
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-00000000000b/burst",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": "Asset has no burst"
+      },
+      "method": "GET",
+      "path": "/assets/00000000-0000-0000-0000-00000000000e/burst",
+      "status": 404
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000e",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Apple",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": null,
+            "dateSource": "import",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "HEIF",
+            "originalFilename": "photo-14.HEIF",
+            "preview": {
+              "error": null,
+              "status": "missing"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000e/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000e/thumbnail",
+            "timelineTime": "2025-01-02T12:00:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000f",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Nikon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-03T18:00:00Z",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "RAW",
+            "originalFilename": "photo-15.RAW",
+            "preview": {
+              "error": "No embedded preview available",
+              "status": "unavailable"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000f/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000f/thumbnail",
+            "timelineTime": "2024-05-03T18:00:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000d",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Sony",
+            "cameraModel": "Camera",
+            "caption": "Golden hour by the river",
+            "captureTime": "2024-05-02T09:30:00-08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": true,
+            "height": 3000,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-13.JPEG",
+            "preview": {
+              "error": "Decoder failure",
+              "status": "failed"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000d/preview",
+            "rating": 4,
+            "revision": 2,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": 2.8,
+              "exposureCompensation": 0,
+              "exposureProgram": "Manual",
+              "exposureTime": "1/250",
+              "flash": "auto",
+              "focalLength": 50.0,
+              "focalLength35mm": 50.0,
+              "iso": 100,
+              "lens": "35mm Prime",
+              "meteringMode": "Spot",
+              "shutterSpeed": "1/250",
+              "whiteBalance": "Auto"
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000d/thumbnail",
+            "timelineTime": "2024-05-02T09:30:00",
+            "width": 4000
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000c",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:01+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-12.JPEG",
+            "preview": {
+              "error": null,
+              "status": "ready"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000c/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000c/thumbnail",
+            "timelineTime": "2024-05-01T00:10:01",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000b",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:00+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-11.JPEG",
+            "preview": {
+              "error": null,
+              "status": "running"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000b/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000b/thumbnail",
+            "timelineTime": "2024-05-01T00:10:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000a",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:00+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-10.JPEG",
+            "preview": {
+              "error": null,
+              "status": "pending"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000a/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000a/thumbnail",
+            "timelineTime": "2024-05-01T00:10:00",
+            "width": null
+          }
+        ],
+        "nextCursor": null,
+        "total": 6
+      },
+      "method": "GET",
+      "path": "/library/assets",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000e",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Apple",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": null,
+            "dateSource": "import",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "HEIF",
+            "originalFilename": "photo-14.HEIF",
+            "preview": {
+              "error": null,
+              "status": "missing"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000e/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000e/thumbnail",
+            "timelineTime": "2025-01-02T12:00:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000f",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Nikon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-03T18:00:00Z",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "RAW",
+            "originalFilename": "photo-15.RAW",
+            "preview": {
+              "error": "No embedded preview available",
+              "status": "unavailable"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000f/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000f/thumbnail",
+            "timelineTime": "2024-05-03T18:00:00",
+            "width": null
+          }
+        ],
+        "nextCursor": "WzEsICJiOWQ1ZTkxMDAyOWQ4MzRmNzRkOTA4N2EiLCAiMjAyNC0wNS0wM1QxODowMDowMCIsICIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMGYiXQ",
+        "total": 6
+      },
+      "method": "GET",
+      "path": "/library/assets?limit=2",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000d",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Sony",
+            "cameraModel": "Camera",
+            "caption": "Golden hour by the river",
+            "captureTime": "2024-05-02T09:30:00-08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": true,
+            "height": 3000,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-13.JPEG",
+            "preview": {
+              "error": "Decoder failure",
+              "status": "failed"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000d/preview",
+            "rating": 4,
+            "revision": 2,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": 2.8,
+              "exposureCompensation": 0,
+              "exposureProgram": "Manual",
+              "exposureTime": "1/250",
+              "flash": "auto",
+              "focalLength": 50.0,
+              "focalLength35mm": 50.0,
+              "iso": 100,
+              "lens": "35mm Prime",
+              "meteringMode": "Spot",
+              "shutterSpeed": "1/250",
+              "whiteBalance": "Auto"
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000d/thumbnail",
+            "timelineTime": "2024-05-02T09:30:00",
+            "width": 4000
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000c",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:01+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-12.JPEG",
+            "preview": {
+              "error": null,
+              "status": "ready"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000c/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000c/thumbnail",
+            "timelineTime": "2024-05-01T00:10:01",
+            "width": null
+          }
+        ],
+        "nextCursor": "WzEsICJiOWQ1ZTkxMDAyOWQ4MzRmNzRkOTA4N2EiLCAiMjAyNC0wNS0wMVQwMDoxMDowMSIsICIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMGMiXQ",
+        "total": 6
+      },
+      "method": "GET",
+      "path": "/library/assets?limit=2&cursor=WzEsICJiOWQ1ZTkxMDAyOWQ4MzRmNzRkOTA4N2EiLCAiMjAyNC0wNS0wM1QxODowMDowMCIsICIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMGYiXQ",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000f",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Nikon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-03T18:00:00Z",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "RAW",
+            "originalFilename": "photo-15.RAW",
+            "preview": {
+              "error": "No embedded preview available",
+              "status": "unavailable"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000f/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000f/thumbnail",
+            "timelineTime": "2024-05-03T18:00:00",
+            "width": null
+          }
+        ],
+        "nextCursor": null,
+        "total": 1
+      },
+      "method": "GET",
+      "path": "/library/assets?media_type=RAW",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000c",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:01+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-12.JPEG",
+            "preview": {
+              "error": null,
+              "status": "ready"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000c/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000c/thumbnail",
+            "timelineTime": "2024-05-01T00:10:01",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000b",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:00+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-11.JPEG",
+            "preview": {
+              "error": null,
+              "status": "running"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000b/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000b/thumbnail",
+            "timelineTime": "2024-05-01T00:10:00",
+            "width": null
+          },
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000a",
+            "burstId": "f121f02a-0be8-59d3-a635-70a4ff458ade",
+            "burstRepresentativeAssetId": "00000000-0000-0000-0000-00000000000b",
+            "burstSize": 3,
+            "cameraMake": "Canon",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-01T00:10:00+08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-10.JPEG",
+            "preview": {
+              "error": null,
+              "status": "pending"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000a/preview",
+            "rating": 0,
+            "revision": 1,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000a/thumbnail",
+            "timelineTime": "2024-05-01T00:10:00",
+            "width": null
+          }
+        ],
+        "nextCursor": null,
+        "total": 3
+      },
+      "method": "GET",
+      "path": "/library/assets?date_from=2024-05-01&date_to=2024-05-01",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000d",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Sony",
+            "cameraModel": "Camera",
+            "caption": "Golden hour by the river",
+            "captureTime": "2024-05-02T09:30:00-08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": true,
+            "height": 3000,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-13.JPEG",
+            "preview": {
+              "error": "Decoder failure",
+              "status": "failed"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000d/preview",
+            "rating": 4,
+            "revision": 2,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": 2.8,
+              "exposureCompensation": 0,
+              "exposureProgram": "Manual",
+              "exposureTime": "1/250",
+              "flash": "auto",
+              "focalLength": 50.0,
+              "focalLength35mm": 50.0,
+              "iso": 100,
+              "lens": "35mm Prime",
+              "meteringMode": "Spot",
+              "shutterSpeed": "1/250",
+              "whiteBalance": "Auto"
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000d/thumbnail",
+            "timelineTime": "2024-05-02T09:30:00",
+            "width": 4000
+          }
+        ],
+        "nextCursor": null,
+        "total": 1
+      },
+      "method": "GET",
+      "path": "/library/assets?q=river",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-00000000000d",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Sony",
+            "cameraModel": "Camera",
+            "caption": "Golden hour by the river",
+            "captureTime": "2024-05-02T09:30:00-08:00",
+            "dateSource": "capture",
+            "deletedAt": null,
+            "favorite": true,
+            "height": 3000,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-13.JPEG",
+            "preview": {
+              "error": "Decoder failure",
+              "status": "failed"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-00000000000d/preview",
+            "rating": 4,
+            "revision": 2,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": 2.8,
+              "exposureCompensation": 0,
+              "exposureProgram": "Manual",
+              "exposureTime": "1/250",
+              "flash": "auto",
+              "focalLength": 50.0,
+              "focalLength35mm": 50.0,
+              "iso": 100,
+              "lens": "35mm Prime",
+              "meteringMode": "Spot",
+              "shutterSpeed": "1/250",
+              "whiteBalance": "Auto"
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-00000000000d/thumbnail",
+            "timelineTime": "2024-05-02T09:30:00",
+            "width": 4000
+          }
+        ],
+        "nextCursor": null,
+        "total": 1
+      },
+      "method": "GET",
+      "path": "/library/assets?rating_min=4&favorite=true",
+      "status": 200
+    },
+    {
+      "body": {
+        "items": [
+          {
+            "assetId": "00000000-0000-0000-0000-000000000010",
+            "burstId": null,
+            "burstRepresentativeAssetId": null,
+            "burstSize": null,
+            "cameraMake": "Fujifilm",
+            "cameraModel": "Camera",
+            "caption": "",
+            "captureTime": "2024-05-04T12:00:00+05:30",
+            "dateSource": "capture",
+            "deletedAt": "2025-02-01T00:00:00+00:00",
+            "favorite": false,
+            "height": null,
+            "importedAt": "2025-01-02T12:00:00Z",
+            "lens": "35mm Prime",
+            "mediaType": "JPEG",
+            "originalFilename": "photo-16.JPEG",
+            "preview": {
+              "error": null,
+              "status": "pending"
+            },
+            "previewUrl": "/assets/00000000-0000-0000-0000-000000000010/preview",
+            "rating": 0,
+            "revision": 2,
+            "sizeBytes": 100,
+            "technical": {
+              "aperture": null,
+              "exposureCompensation": null,
+              "exposureProgram": null,
+              "exposureTime": null,
+              "flash": null,
+              "focalLength": null,
+              "focalLength35mm": null,
+              "iso": null,
+              "lens": "35mm Prime",
+              "meteringMode": null,
+              "shutterSpeed": null,
+              "whiteBalance": null
+            },
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000010/thumbnail",
+            "timelineTime": "2024-05-04T12:00:00",
+            "width": null
+          }
+        ],
+        "nextCursor": null,
+        "total": 1
+      },
+      "method": "GET",
+      "path": "/library/assets?deleted=true",
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": {}
+            },
+            "input": {
+              "date_from": "2024-06-01",
+              "date_to": "2024-05-01",
+              "deleted": false,
+              "limit": 60,
+              "q": "",
+              "rating_min": 0,
+              "sort": "newest"
+            },
+            "loc": [
+              "query"
+            ],
+            "msg": "Value error, Start date must be on or before end date",
+            "type": "value_error"
+          }
+        ]
+      },
+      "method": "GET",
+      "path": "/library/assets?date_from=2024-06-01&date_to=2024-05-01",
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "Asset not found"
+      },
+      "method": "GET",
+      "path": "/assets/22222222-2222-4222-8222-222222222222",
+      "status": 404
+    }
+  ],
+  "description": "phase1a: seven pinned assets covering a three-frame burst, a v2 user-state edit, a completed AI analysis (run + face + person), a hidden asset, preview jobs in every status, a failed metadata stage, and every analysis status; GET /assets (full and paginated), an asset detail for each shape, the burst detail and a 404 for an asset with no burst, browse pages (full, limit=2 with a pinned cursor, media_type, date window, q, rating_min+favorite, deleted), a 422 on an inverted date range, and a 404 unknown asset",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase1a_flat"
+}

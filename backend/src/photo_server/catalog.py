@@ -102,6 +102,16 @@ jobs = Table(
     Column("lease_until", BigInteger),
     Column("force_full", Boolean, nullable=False, server_default="false"),
 )
+ai_stage_jobs = Table(
+    "ai_stage_jobs",
+    schema,
+    Column("asset_id", String, ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True),
+    Column("stage", String, primary_key=True),
+    Column("status", String, nullable=False),
+    Column("attempts", Integer, nullable=False, default=0),
+    Column("error", Text),
+    Column("lease_until", BigInteger),
+)
 upload_batches = Table(
     "upload_batches",
     schema,
@@ -111,6 +121,7 @@ upload_batches = Table(
     Column("updated_at", BigInteger, nullable=False),
     Column("sealed_at", BigInteger),
     Column("error", Text),
+    Column("album_id", String),
 )
 upload_files = Table(
     "upload_files",
@@ -242,11 +253,13 @@ class Catalog:
         self.engine = create_engine(url, pool_pre_ping=True)
         self._writer_lock = RLock()
         if settings is None:
-            self._burst_phash_max = 4
-            self._burst_dhash_max = 6
+            self._burst_phash_max = 24
+            self._burst_dhash_max = 16
+            self._burst_capture_window_seconds = 35
         else:
             self._burst_phash_max = settings.burst_cluster_phash_max_distance
             self._burst_dhash_max = settings.burst_cluster_dhash_max_distance
+            self._burst_capture_window_seconds = settings.burst_cluster_capture_window_seconds
 
     @contextmanager
     def writer(self):
@@ -361,6 +374,26 @@ class Catalog:
             .values(
                 asset_id=str(manifest.asset_id),
                 job_type="preview-v1",
+                status="pending",
+                attempts=0,
+            )
+            .on_conflict_do_nothing()
+        )
+        connection.execute(
+            insert(ai_stage_jobs)
+            .values(asset_id=str(manifest.asset_id), stage="face", status="pending", attempts=0)
+            .on_conflict_do_nothing()
+        )
+        connection.execute(
+            insert(ai_stage_jobs)
+            .values(asset_id=str(manifest.asset_id), stage="semantic", status="pending", attempts=0)
+            .on_conflict_do_nothing()
+        )
+        connection.execute(
+            insert(jobs)
+            .values(
+                asset_id=str(manifest.asset_id),
+                job_type="fingerprint-v1",
                 status="pending",
                 attempts=0,
             )
@@ -607,7 +640,7 @@ class Catalog:
 
             if kind == "asset":
                 changes = {}
-                if action in {"patch", "migrate"}:
+                if action == "patch":
                     changes["user_state"] = UserState.model_validate(
                         {**current.user_state.document(), **mutation.changes}
                     )
@@ -702,36 +735,6 @@ class Catalog:
             )
             return result
 
-    def migrate_legacy_user_state(self) -> int:
-        """Move Phase 2 rating/favorite columns into authoritative asset snapshots."""
-        with self.engine.connect() as connection:
-            rows = list(
-                connection.execute(
-                    select(
-                        assets.c.id, assets.c.rating, assets.c.favorite, assets.c.manifest
-                    ).where(
-                        assets.c.state_revision == 1,
-                        (assets.c.rating != 0) | assets.c.favorite,
-                    )
-                ).mappings()
-            )
-        migrated = 0
-        for row in rows:
-            manifest = Manifest.model_validate(row["manifest"])
-            operation_id = uuid5(
-                manifest.library_id, f"postgres-authority-migration:{manifest.asset_id}"
-            )
-            self.commit_mutation(
-                operation_id,
-                Mutation(
-                    action="asset.migrate",
-                    entity_id=manifest.asset_id,
-                    changes={"rating": row["rating"], "favorite": row["favorite"]},
-                ),
-            )
-            migrated += 1
-        return migrated
-
     def library_id(self) -> UUID:
         with self.engine.connect() as connection:
             value = connection.scalar(select(library.c.library_id).where(library.c.singleton == 1))
@@ -823,10 +826,11 @@ class Catalog:
             return row[0]
 
     def claim_processing_job(self) -> dict | None:
-        """Claim the next versioned processing stage before derived previews."""
+        """Claim the next processing stage whose prerequisites are ready."""
         from photo_server.processing import PROCESSING_JOB_TYPES
 
         with self.engine.begin() as connection:
+            preview_ready = jobs.alias("preview_ready")
             row = (
                 connection.execute(
                     select(jobs.c.asset_id, jobs.c.job_type)
@@ -834,6 +838,17 @@ class Catalog:
                         jobs.c.job_type.in_(PROCESSING_JOB_TYPES),
                         (jobs.c.status == "pending")
                         | ((jobs.c.status == "running") & (jobs.c.lease_until < int(time()))),
+                        or_(
+                            jobs.c.job_type != "fingerprint-v1",
+                            select(1)
+                            .select_from(preview_ready)
+                            .where(
+                                preview_ready.c.asset_id == jobs.c.asset_id,
+                                preview_ready.c.job_type == "preview-v1",
+                                preview_ready.c.status == "ready",
+                            )
+                            .exists(),
+                        ),
                     )
                     .order_by(jobs.c.job_type, jobs.c.asset_id)
                     .with_for_update(skip_locked=True)
@@ -978,6 +993,11 @@ class Catalog:
             if fingerprint.algorithm_version == BURST_HASH_VERSION:
                 self._join_burst(connection, asset_id)
 
+    def reconcile_burst(self, asset_id: str) -> None:
+        """Re-evaluate an existing burst membership against current neighbors."""
+        with self.engine.begin() as connection:
+            self._join_burst(connection, asset_id)
+
     def _join_burst(self, connection, asset_id: str):
         """Compute burst membership for one fingerprinted frame in the caller's transaction."""
         from photo_server.bursts import join_or_create_cluster
@@ -1007,7 +1027,84 @@ class Catalog:
             fingerprint,
             self._burst_phash_max,
             self._burst_dhash_max,
+            self._burst_capture_window_seconds,
         )
+
+    def recluster_bursts(self) -> dict:
+        """Rebuild all display burst memberships using the current policy."""
+        from photo_server.bursts import join_or_create_cluster
+
+        with self.engine.begin() as connection:
+            connection.execute(burst_members.delete())
+            connection.execute(burst_clusters.delete())
+            rows = (
+                connection.execute(
+                    select(
+                        assets.c.id,
+                        assets.c.timeline_at,
+                        image_fingerprints.c.algorithm_version,
+                        image_fingerprints.c.phash,
+                        image_fingerprints.c.dhash,
+                        image_fingerprints.c.width,
+                        image_fingerprints.c.height,
+                    )
+                    .join(image_fingerprints, image_fingerprints.c.asset_id == assets.c.id)
+                    .where(
+                        assets.c.deleted_at.is_(None),
+                        image_fingerprints.c.algorithm_version == BURST_HASH_VERSION,
+                    )
+                    .order_by(assets.c.timeline_at, assets.c.id)
+                )
+                .mappings()
+                .all()
+            )
+            for row in rows:
+                join_or_create_cluster(
+                    connection,
+                    row["id"],
+                    Fingerprint(
+                        algorithm_version=row["algorithm_version"],
+                        phash=row["phash"],
+                        dhash=row["dhash"],
+                        width=row["width"],
+                        height=row["height"],
+                    ),
+                    self._burst_phash_max,
+                    self._burst_dhash_max,
+                    self._burst_capture_window_seconds,
+                )
+            clusters = connection.scalar(select(func.count()).select_from(burst_clusters))
+            members = connection.scalar(select(func.count()).select_from(burst_members))
+            non_representatives = (
+                select(burst_members.c.asset_id)
+                .select_from(
+                    burst_members.join(
+                        burst_clusters,
+                        burst_clusters.c.id == burst_members.c.cluster_id,
+                    )
+                )
+                .where(burst_members.c.asset_id != burst_clusters.c.representative_asset_id)
+            )
+            cleared_analysis_jobs = connection.execute(
+                jobs.delete().where(
+                    jobs.c.job_type == "ai-v1",
+                    jobs.c.status == "pending",
+                    jobs.c.asset_id.in_(non_representatives),
+                )
+            ).rowcount
+            cleared_semantic_stages = connection.execute(
+                ai_stage_jobs.delete().where(
+                    ai_stage_jobs.c.stage == "semantic",
+                    ai_stage_jobs.c.status == "pending",
+                    ai_stage_jobs.c.asset_id.in_(non_representatives),
+                )
+            ).rowcount
+        return {
+            "fingerprintedAssets": len(rows),
+            "clusters": clusters,
+            "members": members,
+            "semanticJobsCleared": (cleared_analysis_jobs or 0) + (cleared_semantic_stages or 0),
+        }
 
     def get_fingerprint(self, asset_id: str, version: str) -> Fingerprint | None:
         with self.engine.connect() as connection:
@@ -1204,6 +1301,77 @@ class Catalog:
             )
             return dict(row)
 
+    def claim_ai_stage(self, stage: str) -> dict | None:
+        """Claim one AI stage independently of the other service."""
+        preview_jobs = jobs.alias("preview_jobs")
+        now = int(time())
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(
+                    select(
+                        ai_stage_jobs.c.asset_id,
+                        preview_jobs.c.status.label("preview_status"),
+                    )
+                    .select_from(
+                        ai_stage_jobs.join(
+                            preview_jobs,
+                            (preview_jobs.c.asset_id == ai_stage_jobs.c.asset_id)
+                            & (preview_jobs.c.job_type == "preview-v1"),
+                        )
+                    )
+                    .where(
+                        ai_stage_jobs.c.stage == stage,
+                        (ai_stage_jobs.c.status == "pending")
+                        | (
+                            (ai_stage_jobs.c.status == "running")
+                            & (ai_stage_jobs.c.lease_until < now)
+                        ),
+                        preview_jobs.c.status.in_(["ready", "failed", "unavailable"]),
+                    )
+                    .order_by(ai_stage_jobs.c.asset_id)
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            connection.execute(
+                ai_stage_jobs.update()
+                .where(
+                    ai_stage_jobs.c.asset_id == row["asset_id"],
+                    ai_stage_jobs.c.stage == stage,
+                )
+                .values(
+                    status="running",
+                    attempts=ai_stage_jobs.c.attempts + 1,
+                    lease_until=now + 1800,
+                    error=None,
+                )
+            )
+            return dict(row)
+
+    def claim_ai_face_stage(self) -> dict | None:
+        return self.claim_ai_stage("face")
+
+    def claim_ai_semantic_stage(self) -> dict | None:
+        return self.claim_ai_stage("semantic")
+
+    def finish_ai_face_stage(self, asset_id: str, status: str, error: str | None = None):
+        self.finish_ai_stage(asset_id, "face", status, error)
+
+    def finish_ai_stage(self, asset_id: str, stage: str, status: str, error: str | None = None):
+        with self.engine.begin() as connection:
+            connection.execute(
+                ai_stage_jobs.update()
+                .where(
+                    ai_stage_jobs.c.asset_id == asset_id,
+                    ai_stage_jobs.c.stage == stage,
+                )
+                .values(status=status, error=error, lease_until=None)
+            )
+
     def finish_ai_job(self, asset_id: str, status: str, error: str | None = None):
         with self.engine.begin() as connection:
             connection.execute(
@@ -1354,6 +1522,22 @@ class Catalog:
             connection.execute(
                 jobs.update()
                 .where(jobs.c.asset_id == asset_id, jobs.c.job_type == "ai-v1")
+                .values(status="ready", error=None, lease_until=None)
+            )
+            connection.execute(
+                ai_stage_jobs.update()
+                .where(
+                    ai_stage_jobs.c.asset_id == asset_id,
+                    ai_stage_jobs.c.stage == "face",
+                )
+                .values(status="ready", error=None, lease_until=None)
+            )
+            connection.execute(
+                ai_stage_jobs.update()
+                .where(
+                    ai_stage_jobs.c.asset_id == asset_id,
+                    ai_stage_jobs.c.stage == "semantic",
+                )
                 .values(status="ready", error=None, lease_until=None)
             )
         return {"faceCount": len(assigned), "personCount": len(used)}
@@ -1844,12 +2028,15 @@ class Catalog:
             )
         return int(value or 0)
 
-    def create_upload_batch(self, batch_id: UUID, files: list[dict]):
+    def create_upload_batch(self, batch_id: UUID, files: list[dict], album_id: UUID | None = None):
         now = int(time())
         with self.engine.begin() as connection:
             connection.execute(
                 insert(upload_batches)
-                .values(id=str(batch_id), status="accepting", created_at=now, updated_at=now)
+                .values(
+                    id=str(batch_id), status="accepting", created_at=now, updated_at=now,
+                    album_id=str(album_id) if album_id else None,
+                )
                 .on_conflict_do_nothing()
             )
             for file in files:
@@ -1859,6 +2046,11 @@ class Catalog:
                     select(upload_files).where(upload_files.c.batch_id == str(batch_id))
                 ).mappings()
             )
+            stored_batch = connection.execute(
+                select(upload_batches).where(upload_batches.c.id == str(batch_id))
+            ).mappings().one()
+            if stored_batch["album_id"] != (str(album_id) if album_id else None):
+                raise LibraryError("Batch ID was reused with a different album target")
             expected = {
                 file["id"]: (
                     file["relative_path"],
@@ -1936,11 +2128,47 @@ class Catalog:
                 ).scalars()
             )
 
+    def ready_upload_batch_ids(self, limit: int = 100) -> list[str]:
+        """Find accepting batches whose required files are all complete.
+
+        The sealing operation performs the authoritative locked recheck; this
+        method is only a bounded discovery pass for reconciliation.
+        """
+        with self.engine.connect() as connection:
+            batches = list(
+                connection.execute(
+                    select(upload_batches.c.id)
+                    .where(upload_batches.c.status == "accepting")
+                    .order_by(upload_batches.c.updated_at, upload_batches.c.id)
+                    .limit(limit)
+                ).scalars()
+            )
+            ready = []
+            for batch_id in batches:
+                missing = connection.scalar(
+                    select(func.count())
+                    .select_from(upload_files)
+                    .where(
+                        upload_files.c.batch_id == batch_id,
+                        upload_files.c.required == 1,
+                        upload_files.c.status.not_in(
+                            ["uploaded", "duplicate", "queued", "processing", "imported"]
+                        ),
+                    )
+                )
+                if not missing:
+                    ready.append(str(batch_id))
+            return ready
+
     def begin_upload(self, batch_id: UUID, file_id: UUID) -> dict:
         with self.engine.begin() as connection:
             row = (
                 connection.execute(
-                    select(upload_files, upload_batches.c.status.label("batch_status"))
+                    select(
+                        upload_files,
+                        upload_batches.c.status.label("batch_status"),
+                        upload_batches.c.sealed_at,
+                    )
                     .join(upload_batches, upload_files.c.batch_id == upload_batches.c.id)
                     .where(
                         upload_files.c.id == str(file_id),
@@ -1955,7 +2183,7 @@ class Catalog:
                 raise LibraryError("Upload file does not belong to this batch")
             if not row["required"]:
                 raise LibraryError("This companion was skipped by the batch selection rules")
-            if row["batch_status"] != "accepting":
+            if row["sealed_at"] is not None:
                 raise LibraryError("This batch is already sealed")
             connection.execute(
                 upload_batches.update()
@@ -1990,6 +2218,56 @@ class Catalog:
                     .where(upload_batches.c.id == batch_id)
                     .values(updated_at=int(time()))
                 )
+
+    def queue_ready_onboarding_jobs(self, batch_id: UUID | str, plan: dict):
+        """Queue each asset as soon as its uploaded files are complete.
+
+        The batch remains accepting so other assets can continue uploading. A
+        later seal makes the batch immutable and moves it to the normal queued
+        or complete state.
+        """
+        with self.engine.begin() as connection:
+            rows = list(
+                connection.execute(
+                    select(upload_files)
+                    .where(upload_files.c.batch_id == str(batch_id))
+                    .with_for_update()
+                ).mappings()
+            )
+            by_path = {row["relative_path"]: row for row in rows}
+            for asset in plan["assets"]:
+                primary = by_path[asset["path"]]
+                if primary["status"] in ("duplicate", "imported", "processing"):
+                    continue
+                paths = [asset["path"], *asset["sidecars"]]
+                if any(by_path[path]["status"] != "uploaded" for path in paths):
+                    continue
+                job_id = uuid5(UUID(str(batch_id)), f"onboard:{asset['path']}")
+                connection.execute(
+                    insert(onboarding_jobs)
+                    .values(
+                        id=str(job_id),
+                        batch_id=str(batch_id),
+                        primary_file_id=primary["id"],
+                        sidecar_file_ids=[by_path[path]["id"] for path in asset["sidecars"]],
+                        status="pending",
+                        attempts=0,
+                    )
+                    .on_conflict_do_nothing()
+                )
+                connection.execute(
+                    upload_files.update()
+                    .where(
+                        upload_files.c.id.in_([by_path[path]["id"] for path in paths]),
+                        upload_files.c.status == "uploaded",
+                    )
+                    .values(status="queued")
+                )
+            connection.execute(
+                upload_batches.update()
+                .where(upload_batches.c.id == str(batch_id))
+                .values(updated_at=int(time()))
+            )
 
     def fail_upload(self, file_id: UUID | str, error: str):
         with self.engine.begin() as connection:
@@ -2117,12 +2395,15 @@ class Catalog:
             missing = [
                 row["relative_path"]
                 for row in rows
-                if row["required"] and row["status"] != "uploaded"
+                if row["required"]
+                and row["status"] not in ("uploaded", "duplicate", "queued", "processing", "imported")
             ]
             if missing:
                 raise LibraryError(f"Upload these required files before sealing: {missing}")
             for asset in plan["assets"]:
                 primary = by_path[asset["path"]]
+                if primary["status"] == "duplicate":
+                    continue
                 job_id = uuid5(batch_id, f"onboard:{asset['path']}")
                 connection.execute(
                     insert(onboarding_jobs)
@@ -2138,7 +2419,11 @@ class Catalog:
                 )
             connection.execute(
                 upload_files.update()
-                .where(upload_files.c.batch_id == str(batch_id), upload_files.c.required == 1)
+                .where(
+                    upload_files.c.batch_id == str(batch_id),
+                    upload_files.c.required == 1,
+                    upload_files.c.status == "uploaded",
+                )
                 .values(status="queued")
             )
             connection.execute(
@@ -2146,6 +2431,16 @@ class Catalog:
                 .where(upload_batches.c.id == str(batch_id))
                 .values(status="queued", sealed_at=int(time()), updated_at=int(time()))
             )
+            if connection.scalar(
+                select(func.count()).select_from(onboarding_jobs).where(
+                    onboarding_jobs.c.batch_id == str(batch_id)
+                )
+            ) == 0:
+                connection.execute(
+                    upload_batches.update()
+                    .where(upload_batches.c.id == str(batch_id))
+                    .values(status="complete", updated_at=int(time()))
+                )
 
     def claim_onboarding_job(self, lease_seconds: int = 900) -> dict | None:
         now = int(time())
@@ -2187,7 +2482,10 @@ class Catalog:
             )
             connection.execute(
                 upload_batches.update()
-                .where(upload_batches.c.id == row["batch_id"])
+                .where(
+                    upload_batches.c.id == row["batch_id"],
+                    upload_batches.c.status != "accepting",
+                )
                 .values(status="processing")
             )
             file_rows = list(
@@ -2225,12 +2523,57 @@ class Catalog:
                     .where(upload_files.c.id.in_(ids))
                     .values(status=outcome, asset_id=result["assetId"], error=None)
                 )
+                album_id = connection.scalar(
+                    select(upload_batches.c.album_id).where(
+                        upload_batches.c.id == str(job["batch_id"])
+                    )
+                )
+                if album_id:
+                    self._append_album_asset(
+                        connection, UUID(str(album_id)), UUID(result["assetId"]), UUID(job["id"])
+                    )
         self._refresh_upload_batch_status(job["batch_id"])
+
+    def _append_album_asset(self, connection, album_id: UUID, asset_id: UUID, job_id: UUID):
+        value = connection.scalar(
+            select(albums.c.state).where(albums.c.id == str(album_id)).with_for_update()
+        )
+        if value is None:
+            raise LibraryError("Upload target album no longer exists")
+        current = Album.model_validate(value)
+        if current.deleted_at:
+            raise LibraryError("Upload target album is hidden")
+        if asset_id in current.asset_ids:
+            return
+        asset_ids = [*map(str, current.asset_ids), str(asset_id)]
+        operation_id = uuid5(job_id, "album-membership")
+        mutation = Mutation(
+            action="album.patch", entity_id=album_id,
+            changes={"assetIds": asset_ids}, expected_revision=current.revision,
+        )
+        snapshot = Album.model_validate({
+            **current.document(), "revision": current.revision + 1,
+            "previousRevision": current.revision, "operationId": str(operation_id),
+            "mutation": mutation.document(), "assetIds": asset_ids,
+        })
+        self._apply_album(connection, snapshot)
+        connection.execute(insert(operations).values(
+            id=str(operation_id), request=mutation.document(), result=snapshot.document()
+        ))
+
+    def add_upload_asset_to_album(self, album_id: UUID, asset_id: UUID, operation_id: UUID):
+        with self.writer(), self.engine.begin() as connection:
+            self._append_album_asset(connection, album_id, asset_id, operation_id)
 
     def _refresh_upload_batch_status(self, batch_id: UUID | str):
         # Run after the job transaction commits. The last concurrent finisher then sees
         # every earlier completion instead of leaving the batch stuck at "processing".
         with self.engine.begin() as connection:
+            current = connection.scalar(
+                select(upload_batches.c.status).where(upload_batches.c.id == str(batch_id))
+            )
+            if current == "accepting":
+                return
             remaining = connection.scalar(
                 select(func.count())
                 .select_from(onboarding_jobs)

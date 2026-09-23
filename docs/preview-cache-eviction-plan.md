@@ -65,7 +65,8 @@ access time. No eviction yet.
 
 ### Changes
 
-**Migration `0010_preview_cache.sql`** (new file in
+**The flattened baseline schema** (replacing the historical
+`010_preview_cache.sql` migration) includes
 `backend/src/photo_server/db_migrations/`):
 
 ```sql

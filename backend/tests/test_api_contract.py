@@ -413,7 +413,7 @@ def test_seed(backend):
 
     run_sequence(
         backend,
-        "seed_v2",
+            "seed_flat",
         [
             ("GET", "/assets"),
             ("GET", "/library/assets"),
@@ -501,7 +501,7 @@ def seed_phase_1a(service) -> dict:
             insert(burst_clusters).values(
                 id=cluster_id,
                 representative_asset_id=asset_ids[11],
-                policy_version="burst-cluster-v1",
+                policy_version="burst-cluster-v2",
                 created_at=datetime.fromisoformat("2025-01-02T12:00:00+00:00"),
             )
         )
@@ -655,7 +655,7 @@ def test_phase_1a(backend):
 
     run_sequence(
         backend,
-        "phase1a",
+            "phase1a_flat",
         [
             ("GET", "/assets"),
             ("GET", "/assets?limit=3&offset=3"),
@@ -1508,7 +1508,7 @@ def seed_phase_3b(service) -> dict:
             insert(burst_clusters).values(
                 id=PHASE3B_CLUSTER_ID,
                 representative_asset_id=asset_ids[34],
-                policy_version="burst-cluster-v1",
+                policy_version="burst-cluster-v2",
                 created_at=datetime.fromisoformat("2025-01-02T12:00:00+00:00"),
             )
         )

@@ -22,17 +22,13 @@ from photo_server.api_schemas import (
     AnalysisFaceOut,
     AnalysisResultOut,
     AnalysisStatusOut,
-    AssetDetailOut,
-    AssetDetailV1Out,
-    AssetDetailV2Out,
-    AssetDocOut,
-    AssetDocV1Out,
-    AssetDocV2Out,
     BatchAbandonedOut,
     BlobOut,
     BrowsePageOut,
     BurstDetailOut,
     BurstRepresentativeOut,
+    CurrentAssetDetailOut,
+    CurrentAssetDocOut,
     FaceMoveOut,
     FaceRefOut,
     HealthOut,
@@ -117,67 +113,20 @@ def asset_path(number: int) -> str:
     return f"/assets/{UUID(int=number)}"
 
 
-DOC_ADAPTER = TypeAdapter(AssetDocOut)
-DETAIL_ADAPTER = TypeAdapter(AssetDetailOut)
+DOC_ADAPTER = TypeAdapter(CurrentAssetDocOut)
+DETAIL_ADAPTER = TypeAdapter(CurrentAssetDetailOut)
 
 
-def test_asset_doc_union_round_trips_both_versions():
-    """The document union routes on schemaVersion and preserves each variant's
-    exact key set (11 for v1, 14 for v2) byte-for-byte."""
-    seed_docs = body(SEED, "/assets")
-    for doc in seed_docs:
-        assert doc["schemaVersion"] == 1
-        assert set(doc) == {
-            "schemaVersion",
-            "libraryId",
-            "assetId",
-            "revision",
-            "previousRevision",
-            "operationId",
-            "primaryBlobId",
-            "blobs",
-            "importedAt",
-            "captureTime",
-            "metadata",
-        }
-        instance = DOC_ADAPTER.validate_python(doc)
-        assert isinstance(instance, AssetDocV1Out)
-        assert_round_trip(AssetDocV1Out, doc)
-
-    phase1a_docs = body(PHASE1A, "/assets")
-    v2_docs = [doc for doc in phase1a_docs if doc["schemaVersion"] == 2]
-    v1_docs = [doc for doc in phase1a_docs if doc["schemaVersion"] == 1]
-    assert v2_docs and v1_docs
-    for doc in v2_docs:
-        assert set(doc) == set(seed_docs[0]) | {"userState", "deletedAt", "mutation"}
-        assert doc["previousRevision"] is not None and doc["mutation"] is not None
-        instance = DOC_ADAPTER.validate_python(doc)
-        assert isinstance(instance, AssetDocV2Out)
-        assert_round_trip(AssetDocV2Out, doc)
-    for doc in v1_docs:
-        instance = DOC_ADAPTER.validate_python(doc)
-        assert isinstance(instance, AssetDocV1Out)
-        assert_round_trip(AssetDocV1Out, doc)
+def test_current_asset_doc_round_trips():
+    for doc in body(FIXTURES / "seed_flat.json", "/assets"):
+        assert doc["schemaVersion"] == 2
+        assert_round_trip(CurrentAssetDocOut, doc)
 
 
-def test_asset_detail_round_trips():
-    seed_detail = body(SEED, asset_path(1))
-    assert seed_detail["schemaVersion"] == 1
-    instance = DETAIL_ADAPTER.validate_python(seed_detail)
-    assert isinstance(instance, AssetDetailV1Out)
-    assert_round_trip(AssetDetailV1Out, seed_detail)
-
-    for number in (13, 16):
-        detail = body(PHASE1A, asset_path(number))
-        assert detail["schemaVersion"] == 2
-        instance = DETAIL_ADAPTER.validate_python(detail)
-        assert isinstance(instance, AssetDetailV2Out)
-        assert_round_trip(AssetDetailV2Out, detail)
-
-    for number in (10, 14, 15):
-        detail = body(PHASE1A, asset_path(number))
-        assert detail["schemaVersion"] == 1
-        assert_round_trip(AssetDetailV1Out, detail)
+def test_current_asset_detail_round_trips():
+    detail = body(FIXTURES / "phase1a_flat.json", asset_path(13))
+    assert detail["schemaVersion"] == 2
+    assert_round_trip(CurrentAssetDetailOut, detail)
 
 
 def test_photo_summary_round_trips():
@@ -249,19 +198,14 @@ def test_nested_models_round_trip():
 
 
 def test_models_reject_forbidden_shapes():
-    v1_doc = body(SEED, "/assets")[0]
-    v2_doc = next(doc for doc in body(PHASE1A, "/assets") if doc["schemaVersion"] == 2)
+    current_doc = body(FIXTURES / "seed_flat.json", "/assets")[0]
     summary = body(PHASE1A, "/library/assets")["items"][0]
 
-    # A v1 document carrying a v2-only key breaks the union (the v1 variant
-    # forbids extras instead of silently dropping or passing the key through).
+    # Current documents require the complete state shape.
     with pytest.raises(ValidationError):
-        DOC_ADAPTER.validate_python({**v1_doc, "userState": {}})
-    # v2 documents must carry a non-null mutation and integer ancestry.
+        DOC_ADAPTER.validate_python({k: v for k, v in current_doc.items() if k != "userState"})
     with pytest.raises(ValidationError):
-        DOC_ADAPTER.validate_python({k: v for k, v in v2_doc.items() if k != "mutation"})
-    with pytest.raises(ValidationError):
-        DOC_ADAPTER.validate_python({**v2_doc, "previousRevision": None})
+        DOC_ADAPTER.validate_python({**current_doc, "schemaVersion": 1})
     # Wrong primitive types never coerce.
     with pytest.raises(ValidationError):
         PhotoSummaryOut.model_validate({**summary, "width": "4000"})
@@ -277,12 +221,12 @@ def test_models_reject_forbidden_shapes():
     with pytest.raises(ValidationError):
         BlobOut.model_validate(
             {
-                "blobId": v1_doc["blobs"][0]["blobId"],
+                "blobId": current_doc["blobs"][0]["blobId"],
                 "role": "ORIGINAL_TIFF",
-                "objectKey": v1_doc["blobs"][0]["objectKey"],
-                "sha256": v1_doc["blobs"][0]["sha256"],
-                "sizeBytes": v1_doc["blobs"][0]["sizeBytes"],
-                "originalFilename": v1_doc["blobs"][0]["originalFilename"],
+                "objectKey": current_doc["blobs"][0]["objectKey"],
+                "sha256": current_doc["blobs"][0]["sha256"],
+                "sizeBytes": current_doc["blobs"][0]["sizeBytes"],
+                "originalFilename": current_doc["blobs"][0]["originalFilename"],
             }
         )
     # Unexpected keys are a contract break, not a pass-through.
@@ -301,9 +245,6 @@ def test_models_reject_forbidden_shapes():
         )
     with pytest.raises(ValidationError):
         LocationOut.model_validate({"name": "X", "latitude": 91, "longitude": 0})
-    # A v1 document claiming revision 2 is invalid (v1 revisions are always 1).
-    with pytest.raises(ValidationError):
-        DOC_ADAPTER.validate_python({**v1_doc, "revision": 2})
 
 
 # ---------------------------------------------------------------------------

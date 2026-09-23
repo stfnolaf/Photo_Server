@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -23,12 +24,13 @@ from pydantic.alias_generators import to_camel
 
 from photo_server.api_schemas import (
     AlbumOut,
-    AssetDetailOut,
-    AssetDocOut,
     BatchAbandonedOut,
     BrowsePageOut,
+    BurstReclusterOut,
     BurstDetailOut,
     BurstRepresentativeOut,
+    CurrentAssetDetailOut,
+    CurrentAssetDocOut,
     FaceMoveOut,
     HealthOut,
     MutationResultOut,
@@ -55,9 +57,11 @@ from photo_server.state import mutate
 from photo_server.uploads import (
     UploadGate,
     abandon_batch,
+    cleanup_abandoned_batches,
     create_batch,
     describe_batch,
     list_active_batches,
+    reconcile_ready_upload_batches,
     receive_file,
     seal_batch,
 )
@@ -196,10 +200,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         service.initialize()
+        await asyncio.to_thread(reconcile_ready_upload_batches, service)
+
+        async def maintenance():
+            while True:
+                await asyncio.sleep(service.settings.upload_cleanup_interval_seconds)
+                try:
+                    await asyncio.to_thread(reconcile_ready_upload_batches, service)
+                    await asyncio.to_thread(cleanup_abandoned_batches, service)
+                except Exception:
+                    # Cleanup is best-effort and must never take down the API.
+                    pass
+
+        maintenance_task = asyncio.create_task(maintenance())
         app.state.service = service
         app.state.upload_gate = upload_gate
-        yield
-        service.catalog.engine.dispose()
+        try:
+            yield
+        finally:
+            maintenance_task.cancel()
+            await asyncio.gather(maintenance_task, return_exceptions=True)
+            service.catalog.engine.dispose()
 
     app = FastAPI(title="Photo Server", version="0.6.0", lifespan=lifespan)
     # Phase 3B: the AI-service probe cache (Q4): the monotonic timestamp of
@@ -268,8 +289,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def start_upload_batch(body: UploadBatchRequest):
         return create_batch(
             service,
-            [file.model_dump(by_alias=True) for file in body.files],
+            [file.model_dump(by_alias=True, exclude_none=True) for file in body.files],
             body.batch_id,
+            body.album_id,
+            body.album_name,
         )
 
     @app.get(
@@ -339,7 +362,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def upload_queue():
         return {**service.catalog.queue_counts(), **upload_gate.status()}
 
-    @app.get("/assets", response_model=list[AssetDocOut], operation_id="listAssets")
+    @app.get("/assets", response_model=list[CurrentAssetDocOut], operation_id="listAssets")
     def list_assets(
         limit: int = Query(default=100, ge=1, le=1000), offset: int = Query(default=0, ge=0)
     ):
@@ -358,7 +381,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Asset not found")
         return manifest
 
-    @app.get("/assets/{asset_id}", response_model=AssetDetailOut, operation_id="getAssetDetail")
+    @app.get("/assets/{asset_id}", response_model=CurrentAssetDetailOut, operation_id="getAssetDetail")
     def get_asset(asset_id: UUID):
         manifest = find(asset_id)
         return {
@@ -776,6 +799,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def verify_storage(full: bool = False):
         return service.verify(full)
 
+    @app.post(
+        "/maintenance/recluster-bursts",
+        response_model=BurstReclusterOut,
+        operation_id="reclusterBursts",
+    )
+    def recluster_bursts():
+        return service.catalog.recluster_bursts()
+
     # The responses= declarations above are merged by FastAPI into (not
     # replacing) the untyped application/json placeholder it writes for
     # modelless 200 responses, which would leave an empty JSON schema beside
@@ -802,12 +833,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/assets/{asset_id}/thumbnail": "image/jpeg",
         "/faces/{face_id}/thumbnail": "image/jpeg",
     }
-    # (path, method, status) -> component name for the array's items: the
-    # inlined AssetDocOut union also lives inside the /assets array and is
-    # hoisted there too. Must run before the whole-schema hoist below.
-    _hoist_items = {
-        ("/assets", "get", "200"): "AssetDocOut",
-    }
+    # AssetDocOut is now a named flat model, so no array-item union hoisting is
+    # required here.
+    _hoist_items = {}
     # (path, method, status) -> component name for the whole inline 2xx schema.
     _hoist_response = {
         ("/albums", "get", "200"): "AlbumOutList",
@@ -848,6 +876,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ["content"]["application/json"]
             )
             schema = content["schema"]
+            if "$ref" in schema:
+                continue
             if name.endswith("OutList"):
                 if schema.get("type") != "array" or not isinstance(
                     schema.get("items"), dict

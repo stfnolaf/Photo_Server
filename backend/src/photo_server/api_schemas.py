@@ -30,11 +30,8 @@ Design rules (plan decisions 3 and 7):
   rendering, so the recorded bytes are deterministic. Settled in phase 1b,
   when Postgres jsonb's rendering of an integral ``float8`` confidence as
   the JSON integer ``1`` made the duality concrete.
-- The asset manifest document exists in two schema versions (the v1 document
-  has exactly 11 keys; v2 adds ``userState``/``deletedAt`` and a non-null
-  ``mutation``). A single flat model cannot express both without adding or
-  dropping keys, so the doc types are a discriminated union on
-  ``schema_version``: one variant per version, each ``extra="forbid"``.
+- The asset manifest document has one current schema. Fresh imports use the
+  same document shape as later mutations; there is no legacy document union.
 - ``dict[str, Any]`` is used only for genuinely open fields (EXIF ``metadata``,
   derived ``technical``, ``Mutation.changes``); the container itself is enforced.
 
@@ -49,10 +46,10 @@ of the spec (codegen from the spec is reserved for consumers that cannot
 share the server's code — currently, only the web app).
 """
 
-from typing import Annotated, Any, Literal, Union
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 from pydantic.alias_generators import to_camel
 
 # The 12 semantic photo classes the VLM reports (analysis.py SemanticAnalysis).
@@ -76,7 +73,6 @@ MUTATION_ACTIONS = Literal[
     "asset.patch",
     "asset.delete",
     "asset.restore",
-    "asset.migrate",
     "asset.metadata",
     "album.create",
     "album.patch",
@@ -217,40 +213,23 @@ class AnalysisStatusOut(ResponseModel):
     faces: list[AnalysisFaceOut]
 
 
-class AssetDocV1Out(ResponseModel):
-    """A v1 manifest document: exactly the 11 keys the v1 writer emits.
+class CurrentAssetDocOut(ResponseModel):
+    """The single current manifest document shape."""
 
-    v1 documents have ``revision`` fixed at 1, ``previousRevision`` null, and
-    no ``userState``/``deletedAt``/``mutation`` keys at all.
-    """
-
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     library_id: UUID
     asset_id: UUID
-    revision: Literal[1]
-    previous_revision: None
+    revision: StrictInt
+    previous_revision: StrictInt | None
     operation_id: UUID
     primary_blob_id: UUID
     blobs: list[BlobOut] = Field(min_length=1)
     imported_at: StrictStr
     capture_time: StrictStr | None
     metadata: dict[str, Any]
-
-
-class AssetDocV2Out(AssetDocV1Out):
-    """A v2 manifest document: v1 fields plus user state and mutation ancestry."""
-
-    schema_version: Literal[2]
-    revision: StrictInt
-    previous_revision: StrictInt
     user_state: UserStateOut
     deleted_at: StrictStr | None
-    mutation: MutationOut
-
-
-# The asset document as exposed by GET /assets: one variant per schema
-# version, selected by the ``schemaVersion`` discriminator.
-AssetDocOut = Annotated[Union[AssetDocV1Out, AssetDocV2Out], Field(discriminator="schema_version")]
+    mutation: MutationOut | None
 
 
 class PhotoSummaryOut(ResponseModel):
@@ -303,22 +282,8 @@ class BurstDetailOut(ResponseModel):
     frames: list[PhotoSummaryOut]
 
 
-class AssetDetailV1Out(AssetDocV1Out):
-    """GET /assets/{id} for a v1 document: the document plus derived blocks."""
-
-    technical: dict[str, Any]
-    processing: list[ProcessingStatusOut]
-    analysis: AnalysisStatusOut
-    preview: PreviewStatusOut
-    user_state: UserStateOut
-
-
-class AssetDetailV2Out(AssetDocV2Out):
-    """GET /assets/{id} for a v2 document: the document plus derived blocks.
-
-    ``userState`` is inherited from the document variant; the endpoint
-    overwrites it with the same (column-synced) values.
-    """
+class CurrentAssetDetailOut(CurrentAssetDocOut):
+    """GET /assets/{id}: the current document plus derived blocks."""
 
     technical: dict[str, Any]
     processing: list[ProcessingStatusOut]
@@ -326,11 +291,6 @@ class AssetDetailV2Out(AssetDocV2Out):
     preview: PreviewStatusOut
 
 
-# The asset detail as exposed by GET /assets/{id}: one variant per schema
-# version, selected by the ``schemaVersion`` discriminator.
-AssetDetailOut = Annotated[
-    Union[AssetDetailV1Out, AssetDetailV2Out], Field(discriminator="schema_version")
-]
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +402,11 @@ class UploadFileDeclaration(BaseModel):
     path: str = Field(min_length=1, max_length=1024)
     size_bytes: int = Field(gt=0)
     mime_type: str | None = Field(default=None, max_length=255)
+    sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class UploadBatchRequest(BaseModel):
@@ -449,6 +414,16 @@ class UploadBatchRequest(BaseModel):
 
     batch_id: UUID | None = None
     files: list[UploadFileDeclaration] = Field(min_length=1, max_length=10000)
+    album_id: UUID | None = Field(default=None, exclude_if=lambda value: value is None)
+    album_name: str | None = Field(
+        default=None, min_length=1, max_length=200, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def one_album_target(self):
+        if self.album_id is not None and self.album_name is not None:
+            raise ValueError("Choose an existing album or provide a new album name, not both")
+        return self
 
 
 class UploadFileOut(ResponseModel):
@@ -658,6 +633,15 @@ class QueueResultOut(ResponseModel):
     jobs_already_queued: StrictInt
     jobs_already_running: StrictInt
     job_types: list[StrictStr]
+
+
+class BurstReclusterOut(ResponseModel):
+    """Result of rebuilding display-only burst memberships."""
+
+    fingerprinted_assets: StrictInt
+    clusters: StrictInt
+    members: StrictInt
+    semantic_jobs_cleared: StrictInt
 
 
 # ---------------------------------------------------------------------------

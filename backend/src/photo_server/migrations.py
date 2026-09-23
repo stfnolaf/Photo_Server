@@ -1,4 +1,4 @@
-"""Transactional PostgreSQL migration runner for packaged SQL migrations."""
+"""Transactional PostgreSQL baseline runner for fresh library databases."""
 
 import re
 from dataclasses import dataclass
@@ -44,22 +44,12 @@ def available_migrations() -> list[Migration]:
     return migrations
 
 
-def _legacy_version(connection) -> int:
-    if connection.scalar(text("SELECT to_regclass('public.library')")) is None:
-        return 0
-    value = connection.scalar(text("SELECT schema_version FROM library WHERE singleton = 1"))
-    if value is None:
-        raise LibraryError("The database has a library table but no singleton library record")
-    return int(value)
-
-
 def migrate(engine: Engine, library_id: str) -> dict:
-    """Bring a database to the packaged schema in one locked transaction.
+    """Create or validate the one current schema in one locked transaction.
 
-    Databases created before SQL migrations are adopted at their recorded
-    ``library.schema_version``. Their historical migration rows are inserted
-    with the checksums of the now-canonical SQL files before pending migrations
-    run. No DDL is defined in this module.
+    The flattened deployment intentionally has no upgrade path from the
+    discarded test-era schema. A non-empty database without this baseline is
+    rejected rather than silently adopted.
     """
 
     migrations = available_migrations()
@@ -69,28 +59,24 @@ def migrate(engine: Engine, library_id: str) -> dict:
 
     with engine.begin() as connection:
         connection.execute(text("SELECT pg_advisory_xact_lock(:lock)"), {"lock": MIGRATION_LOCK})
-        legacy_version = _legacy_version(connection)
-        if legacy_version > latest:
-            raise LibraryError(
-                f"Database schema {legacy_version} is newer than this application ({latest})"
-            )
-
         tracking_exists = connection.scalar(text("SELECT to_regclass('public.schema_migrations')"))
         if tracking_exists is None:
-            connection.exec_driver_sql(bootstrap.sql)
-            if legacy_version:
-                for migration in versioned[:legacy_version]:
-                    connection.execute(
-                        text("""
-                            INSERT INTO schema_migrations (version, name, checksum)
-                            VALUES (:version, :name, :checksum)
-                        """),
-                        {
-                            "version": migration.version,
-                            "name": migration.name,
-                            "checksum": migration.checksum,
-                        },
+            has_objects = connection.scalar(
+                text("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_class c
+                        JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = 'public'
+                          AND c.relkind IN ('r', 'p', 'v', 'm')
+                          AND c.relname NOT IN ('schema_migrations')
                     )
+                """)
+            )
+            if has_objects:
+                raise LibraryError(
+                    "PostgreSQL is not empty and has no flattened schema; reset it explicitly"
+                )
+            connection.exec_driver_sql(bootstrap.sql)
 
         applied = {
             row.version: row
@@ -111,10 +97,6 @@ def migrate(engine: Engine, library_id: str) -> dict:
                 )
 
         current = max(applied, default=0)
-        if legacy_version != current:
-            raise LibraryError(
-                "library.schema_version and schema_migrations disagree; repair is required"
-            )
 
         for migration in versioned[current:]:
             connection.exec_driver_sql(migration.sql)
@@ -125,11 +107,6 @@ def migrate(engine: Engine, library_id: str) -> dict:
                         VALUES (1, :library_id, 1)
                     """),
                     {"library_id": library_id},
-                )
-            else:
-                connection.execute(
-                    text("UPDATE library SET schema_version = :version WHERE singleton = 1"),
-                    {"version": migration.version},
                 )
             connection.execute(
                 text("""
@@ -143,6 +120,11 @@ def migrate(engine: Engine, library_id: str) -> dict:
                 },
             )
             applied_now.append({"version": migration.version, "name": migration.name})
+
+        connection.execute(
+            text("UPDATE library SET schema_version = :version WHERE singleton = 1"),
+            {"version": latest},
+        )
 
         row = connection.execute(
             text("SELECT library_id, schema_version FROM library WHERE singleton = 1")
