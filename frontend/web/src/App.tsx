@@ -55,7 +55,7 @@ function ConnectedApp() {
             />
             <Route
               path="/photo/:assetId"
-              element={<PhotoPage filters={filters} albums={albums.active} library={library} />}
+              element={<PhotoPage filters={filters} albums={albums.active} library={library} health={health.data} />}
             />
             <Route path="/people" element={<PeoplePage filters={filters} />} />
             <Route path="*" element={<Navigate to={{ pathname: "/", search: writeFilters(filters).toString() }} replace />} />

@@ -1,5 +1,6 @@
 import copy
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Annotated, Literal
@@ -97,7 +98,7 @@ def _probe_vlm(settings: Settings) -> bool:
     try:
         with httpx.Client(timeout=API_HEALTH_PROBE_TIMEOUT_SECONDS) as client:
             response = client.get(f"{settings.ai_base_url}/models", headers=headers)
-        return response.status_code < 400
+        return 200 <= response.status_code < 300
     except Exception:
         # A probe failure never fails the endpoint: unreachable.
         return False
@@ -237,8 +238,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # probes never raise — a failure makes the reachable flag false.
         now = time.monotonic()
         if now - ai_probe_cache["ts"] >= _AI_PROBE_CACHE_SECONDS:
-            ai_probe_cache["semantic"] = _probe_vlm(service.settings)
-            ai_probe_cache["face"] = _probe_face(service.settings)
+            # Probe independently so two dead services cost at most the
+            # single per-service timeout, not the sum of both timeouts.
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                semantic_probe = executor.submit(_probe_vlm, service.settings)
+                face_probe = executor.submit(_probe_face, service.settings)
+                ai_probe_cache["semantic"] = semantic_probe.result()
+                ai_probe_cache["face"] = face_probe.result()
             ai_probe_cache["ts"] = now
         return {
             "status": "ok",

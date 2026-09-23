@@ -2291,6 +2291,9 @@ def test_health_ai_service_visibility(backend):
         vlm.status = 503
         with with_urls(ai_base_url=vlm.url, face_service_url=face.url) as client:
             assert _health_flags(client) == (True, False, True, True)
+        vlm.status = 302
+        with with_urls(ai_base_url=vlm.url, face_service_url=face.url) as client:
+            assert _health_flags(client) == (True, False, True, True)
         vlm.status = 200
         vlm.bearer = "expected-key"
         with with_urls(
@@ -2304,6 +2307,9 @@ def test_health_ai_service_visibility(backend):
         #    identity (200 + "ok", but the identity check fails:
         #    unreachable — never a silently different embedding space).
         face.status = 503
+        with with_urls(ai_base_url=vlm.url, face_service_url=face.url) as client:
+            assert _health_flags(client) == (True, True, True, False)
+        face.status = 302
         with with_urls(ai_base_url=vlm.url, face_service_url=face.url) as client:
             assert _health_flags(client) == (True, True, True, False)
         face.status = 200

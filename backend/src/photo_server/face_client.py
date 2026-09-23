@@ -68,7 +68,7 @@ def _error_detail(response: httpx.Response) -> str:
 
 
 def _raise_for_status(response: httpx.Response) -> None:
-    if response.status_code < 400:
+    if 200 <= response.status_code < 300:
         return
     message = f"face service request failed with HTTP {response.status_code}"
     detail = _error_detail(response)

@@ -991,6 +991,9 @@ that is 3C.
 
 Read in full: `frontend/web/src/api/types.ts` (96),
 `frontend/web/src/features/photo/PhotoInspector.tsx` (127),
+`frontend/web/src/features/photo/PhotoPage.tsx` (the route-owned inspector
+mount and props),
+`frontend/web/src/App.tsx` (the health query and route wiring),
 `frontend/web/src/features/shell/AppShell.tsx` (102),
 `frontend/web/src/api/client.ts` (264 — how `health` flows to the
 inspector).
@@ -1000,17 +1003,21 @@ already synchronized in Phase 3B; read only the `git diff` to confirm the
 four new fields remain the generated `HealthOut` surface.
 `npm run check:api` is the gate, not a read.
 
-Create / modify: `types.ts` (the hand-written `Health` type gains the
-four flags) and `PhotoInspector.tsx` (one conditional string).
+Create / modify: `App.tsx`, `PhotoPage.tsx`, and `PhotoInspector.tsx`.
+`types.ts` already aliases the generated `HealthOut`, so no hand-written
+type change is required; the generated client was synchronized in 3B.
 
 ### Changes
 
-- **Frontend.** `Health` type gains the four flags.
-  `PhotoInspector.tsx`: the `pending` branch splits — AI not configured
+- **Frontend.** Pass the existing `Health` value from `App.tsx` through
+  `PhotoPage.tsx` to `PhotoInspector.tsx`. The `pending` branch splits — AI
+  not configured (either required service URL is empty)
   ⇒ "AI services are not configured; this photo will be analyzed once
   they are"; configured ⇒ today's "Waiting for the background GPU
-  worker". (One conditional string; the inspector already receives
-  `detail.analysis` and the shell already carries `health`.)
+  worker". Reachability does not change this wording: configured but
+  temporarily unavailable remains waiting for the worker. The API runs
+  the two probes concurrently so the user-facing endpoint is bounded by
+  one probe timeout rather than their sum.
 
 ### Tests
 

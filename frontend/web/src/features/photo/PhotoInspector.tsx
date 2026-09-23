@@ -1,5 +1,5 @@
 import { Download, EyeOff, Heart, RefreshCw, RotateCcw, Sparkles, Users } from "lucide-react";
-import type { Album, LocationValue, MutationResult, PhotoDetail } from "../../api/types";
+import type { Album, Health, LocationValue, MutationResult, PhotoDetail } from "../../api/types";
 import { apiUrl } from "../../api/client";
 import { Button } from "../../components/Button";
 import { PanelSection } from "../../components/PanelSection";
@@ -10,6 +10,7 @@ import { MetadataForm } from "./MetadataForm";
 export function PhotoInspector({
   detail,
   albums,
+  health,
   busy,
   onState,
   onMetadata,
@@ -19,6 +20,7 @@ export function PhotoInspector({
 }: {
   detail: PhotoDetail;
   albums: Album[];
+  health: Health;
   busy: boolean;
   onState: (changes: Partial<MutationResult>) => Promise<void>;
   onMetadata: (changes: { caption: string; keywords: string[]; location: LocationValue | null }) => Promise<void>;
@@ -28,6 +30,7 @@ export function PhotoInspector({
 }) {
   const primary = primaryBlob(detail);
   const deleted = Boolean(detail.deletedAt);
+  const aiNotConfigured = !health.aiSemanticConfigured || !health.aiFaceConfigured;
   const analysisActive = detail.analysis.status === "pending" || detail.analysis.status === "running";
   const metadataRows = technicalRows(detail).filter((row): row is [string, string] => Boolean(row[1]));
   return (
@@ -58,7 +61,7 @@ export function PhotoInspector({
 
       <PanelSection title="AI analysis">
         <div className="ai-analysis">
-          {detail.analysis.status === "pending" && <p className="analysis-status"><Sparkles size={13} /> Waiting for the background GPU worker</p>}
+          {detail.analysis.status === "pending" && <p className="analysis-status"><Sparkles size={13} /> {aiNotConfigured ? "AI services are not configured; this photo will be analyzed once they are" : "Waiting for the background GPU worker"}</p>}
           {detail.analysis.status === "running" && <p className="analysis-status"><RefreshCw className="spin" size={13} /> Analyzing locally</p>}
           {detail.analysis.status === "failed" && <p className="form-error">{detail.analysis.error || "Analysis failed."}</p>}
           {detail.analysis.result ? (

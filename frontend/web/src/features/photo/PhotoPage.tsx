@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../../api/client";
 import { useDurableMutation } from "../../api/mutations";
-import type { Album, LibraryFilters, LocationValue, MutationResult, PhotoDetail } from "../../api/types";
+import type { Album, Health, LibraryFilters, LocationValue, MutationResult, PhotoDetail } from "../../api/types";
 import { PreviewImage } from "../../components/PreviewImage";
 import { useToast } from "../../components/Toast";
 import { primaryBlob, writeFilters } from "../../domain/library";
@@ -16,10 +16,12 @@ export function PhotoPage({
   filters,
   albums,
   library,
+  health,
 }: {
   filters: LibraryFilters;
   albums: Album[];
   library: ReturnType<typeof usePhotoLibrary>;
+  health: Health;
 }) {
   const { assetId = "" } = useParams();
   const navigate = useNavigate();
@@ -219,6 +221,7 @@ export function PhotoPage({
         <PhotoInspector
           detail={detail}
           albums={albums}
+          health={health}
           busy={busy}
           onState={(changes) => saveState(changes)}
           onMetadata={(changes: { caption: string; keywords: string[]; location: LocationValue | null }) => saveState(changes)}

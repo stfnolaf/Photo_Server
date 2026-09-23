@@ -1,6 +1,6 @@
 # Photo Server
 
-This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, jobs, and the current analysis index. S3 holds immutable originals, imported XMP sidecars, versioned AI artifacts, upload staging objects, and scheduled PostgreSQL backups. A threaded media worker keeps uploads and previews responsive; a separate single-concurrency CUDA worker performs face and semantic analysis without entering the ingestion critical path.
+This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, jobs, and the current analysis index. S3 holds immutable originals, imported XMP sidecars, versioned AI artifacts, upload staging objects, and scheduled PostgreSQL backups. A threaded media worker keeps uploads and previews responsive; a separate AI worker calls the OpenAI-compatible VLM and the standalone face-service without entering the ingestion critical path.
 
 See the historical [Phase 1](docs/verification.md), [Phase 2](docs/phase-2-verification.md), and [Phase 3](docs/phase-3-verification.md) reports, plus the current [PostgreSQL-authority verification](docs/postgres-authority-verification.md).
 
@@ -18,14 +18,14 @@ The backend has no dependency on a frontend build. Each frontend owns its source
 
 ## Start
 
-Docker and Docker Compose are sufficient for the core service. Local AI also requires an NVIDIA driver, NVIDIA Container Toolkit, and the verified AdaFace model directory from the sibling face-scanner. Confirm `docker run --rm --gpus all ubuntu nvidia-smi` works before starting.
+Docker and Docker Compose are sufficient for the core service. Local face analysis also requires an NVIDIA driver, NVIDIA Container Toolkit, and the verified AdaFace model directory from the sibling face-scanner. Confirm `docker run --rm --gpus all ubuntu nvidia-smi` works before starting.
 
 ```bash
 cp -n .env.example .env
 chmod 600 .env
 ```
 
-Set the S3 endpoint and database password in `.env`. `PHOTO_FACE_MODEL_DIR` defaults to `../face-scanner/runtime/raw-jpeg/models`; it must contain `face_detection_yunet_2023mar.onnx`, `face_recognition_sface_2021dec.onnx`, `adaface-ir101.onnx`, and `adaface-ir101.json`. The worker verifies their provenance and checksums and refuses CPU fallback. Then start:
+Set the S3 endpoint and database password in `.env`. `PHOTO_FACE_MODEL_DIR` defaults to `../face-scanner/runtime/raw-jpeg/models`; Compose mounts this host directory read-only into `face-service`, which verifies the provenance and checksums and refuses CPU fallback. It must contain `face_detection_yunet_2023mar.onnx`, `face_recognition_sface_2021dec.onnx`, `adaface-ir101.onnx`, and `adaface-ir101.json`. Then start:
 
 ```bash
 docker compose up --build -d
@@ -99,7 +99,7 @@ The relevant queue settings are:
 | `PHOTO_AI_EXTRA_BODY` | empty | JSON object merged into the VLM request for provider extensions (e.g. Ollama `options.num_ctx`); contract fields win |
 | `PHOTO_AI_FACE_MAX_IMAGE_SIDE` | 2000 | Longest image edge supplied to YuNet/AdaFace |
 | `PHOTO_AI_VLM_MAX_IMAGE_SIDE` | 1280 | Longest image edge supplied to Qwen |
-| `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into the AI worker |
+| `PHOTO_FACE_MODEL_DIR` | sibling scanner models | Host directory mounted read-only into `face-service` |
 | `PHOTO_FACE_DETECTION_THRESHOLD` | 0.8 | YuNet face detection threshold |
 | `PHOTO_FACE_MATCH_THRESHOLD` | 0.4 | AdaFace centroid similarity starting point |
 | `PHOTO_CORS_ORIGINS` | empty | Comma-separated browser origins allowed to call the API |
