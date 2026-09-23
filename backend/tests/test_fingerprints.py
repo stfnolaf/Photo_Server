@@ -19,6 +19,7 @@ from photo_server.fingerprints import (
     Candidate,
     Fingerprint,
     candidate_order,
+    chroma_histogram_distance,
     compute_fingerprint,
     hamming_distance,
 )
@@ -142,6 +143,14 @@ def test_hamming_distance_known_values():
     assert hamming_distance("8000000000000000", zero) == 1  # most significant bit
     assert hamming_distance("0000000000000001", zero) == 1  # least significant bit
     assert hamming_distance("0000000000000003", zero) == 2
+
+
+def test_chroma_histogram_distance_is_normalized():
+    same = "ff" + "00" * 11
+    other = "00" + "ff" + "00" * 10
+    assert chroma_histogram_distance(same, same) == 0
+    assert chroma_histogram_distance(same, other) == 1
+    assert chroma_histogram_distance(None, other) is None
 
 
 def test_candidate_order_is_deterministic():

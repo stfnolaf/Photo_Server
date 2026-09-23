@@ -5,7 +5,7 @@ from photo_server.migrations import available_migrations
 
 def test_packaged_migrations_are_contiguous_and_checksummed():
     migrations = available_migrations()
-    assert [migration.version for migration in migrations] == [0, 1, 2, 3, 4]
+    assert [migration.version for migration in migrations] == [0, 1, 2, 3, 4, 5]
     assert all(
         migration.checksum == sha256(migration.sql.encode()).hexdigest() for migration in migrations
     )

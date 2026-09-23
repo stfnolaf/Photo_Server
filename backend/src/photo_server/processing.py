@@ -65,7 +65,8 @@ def process_fingerprint(service, manifest: Manifest) -> dict:
     from photo_server.worker import cache_paths, generate
 
     asset_id = str(manifest.asset_id)
-    if service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is not None:
+    existing = service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION)
+    if existing is not None and existing.chroma_histogram is not None:
         # Reconciliation is intentionally also run for already-persisted
         # fingerprints so policy/context changes can repair split clusters.
         service.catalog.reconcile_burst(asset_id)
@@ -79,7 +80,7 @@ def process_fingerprint(service, manifest: Manifest) -> dict:
     fingerprint = compute_fingerprint(jpeg)
     service.catalog.upsert_fingerprint(asset_id, fingerprint)
     return {
-        "status": "created",
+        "status": "updated" if existing is not None else "created",
         "fingerprintVersion": fingerprint.algorithm_version,
         "width": fingerprint.width,
         "height": fingerprint.height,

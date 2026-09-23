@@ -26,8 +26,9 @@ from photo_server.api_schemas import (
     AlbumOut,
     BatchAbandonedOut,
     BrowsePageOut,
-    BurstReclusterOut,
     BurstDetailOut,
+    BurstMemberRemovedOut,
+    BurstReclusterOut,
     BurstRepresentativeOut,
     CurrentAssetDetailOut,
     CurrentAssetDocOut,
@@ -61,8 +62,8 @@ from photo_server.uploads import (
     create_batch,
     describe_batch,
     list_active_batches,
-    reconcile_ready_upload_batches,
     receive_file,
+    reconcile_ready_upload_batches,
     seal_batch,
 )
 from photo_server.worker import cache_paths
@@ -644,6 +645,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 action="burst.setRepresentative",
                 entity_id=UUID(detail["burstId"]),
                 changes={"representativeAssetId": str(asset_id)},
+            ),
+        )
+
+    @app.post(
+        "/assets/{asset_id}/burst/remove",
+        response_model=BurstMemberRemovedOut,
+        operation_id="removeBurstMember",
+    )
+    def remove_burst_member(asset_id: UUID, body: OperationRequest):
+        find(asset_id)
+        detail = service.catalog.burst_detail(str(asset_id))
+        if detail is None:
+            raise HTTPException(409, "Asset is not in a burst")
+        return mutate(
+            service,
+            body.operation_id,
+            Mutation(
+                action="burst.removeMember",
+                entity_id=UUID(detail["burstId"]),
+                changes={"assetId": str(asset_id)},
             ),
         )
 

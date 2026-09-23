@@ -22,6 +22,7 @@ x-backend: &backend
     # within their configured distances for a frame to join a burst.
     PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE: ${PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE:-17}
     PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE: ${PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE:-15}
+    PHOTO_BURST_CLUSTER_CHROMA_MAX_DISTANCE: ${PHOTO_BURST_CLUSTER_CHROMA_MAX_DISTANCE:-0.15}
     PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS: ${PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS:-35}
     # Preview cache LRU limit. Previews are disposable: after eviction a
     # GET /assets/{id}/preview returns 202 and re-encodes from the immutable

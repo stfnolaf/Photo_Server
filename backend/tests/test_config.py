@@ -89,6 +89,7 @@ def test_burst_cluster_thresholds_are_environment_overrides(monkeypatch, tmp_pat
     env.write_text(
         "PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE=28\n"
         "PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE=19\n"
+        "PHOTO_BURST_CLUSTER_CHROMA_MAX_DISTANCE=0.22\n"
     )
     settings = Settings(
         _env_file=env,
@@ -97,6 +98,7 @@ def test_burst_cluster_thresholds_are_environment_overrides(monkeypatch, tmp_pat
     )
     assert settings.burst_cluster_phash_max_distance == 28
     assert settings.burst_cluster_dhash_max_distance == 19
+    assert settings.burst_cluster_chroma_max_distance == 0.22
 
 
 def test_ai_settings_unconfigured_by_default(monkeypatch):

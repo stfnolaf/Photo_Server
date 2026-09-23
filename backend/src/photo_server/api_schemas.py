@@ -49,7 +49,16 @@ share the server's code — currently, only the web app).
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 # The 12 semantic photo classes the VLM reports (analysis.py SemanticAnalysis).
@@ -79,6 +88,7 @@ MUTATION_ACTIONS = Literal[
     "album.delete",
     "album.restore",
     "burst.setRepresentative",
+    "burst.removeMember",
 ]
 
 
@@ -615,6 +625,13 @@ class BurstRepresentativeOut(ResponseModel):
 
     burst_id: UUID
     representative_asset_id: UUID
+
+
+class BurstMemberRemovedOut(ResponseModel):
+    """POST /assets/{id}/burst/remove: the frame removed from its burst."""
+
+    burst_id: UUID
+    removed_asset_id: UUID
 
 
 class QueueResultOut(ResponseModel):

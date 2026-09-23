@@ -144,18 +144,25 @@ to an existing member of that burst:
 1. It is a different asset.
 2. Its fingerprint algorithm version matches.
 3. Its aspect ratio is effectively identical and its dimensions are compatible.
-4. Its capture time is within three seconds of the member when both timestamps are known;
-   timestamps with offsets are compared as instants, rather than as local clock values.
-   A wider time gap can be accepted when matching camera-sequence filenames and a shutter
-   count gap of at most three provide independent confirmation.
+4. Its capture time is within the configured window of the member when both timestamps are
+   known (35 seconds by default); timestamps with offsets are compared as instants, rather
+   than as local clock values. A bounded exception permits an exact next camera filename
+   with modest hashes to extend that window to 120 seconds, while a shutter-count gap of at
+   most three can independently corroborate a slower sequence.
 5. Its camera identity matches when both assets provide camera make/model. Known
    conflicting camera identities veto the match.
 6. pHash Hamming distance is at most the configured threshold (initially 17) and dHash
-   Hamming distance is at most the configured threshold (initially 15). A narrow relaxation
-   is allowed for exact consecutive camera filename pairs, with a smaller relaxation (up to
-   pHash 22/dHash 16) for filename sequence gaps up to six. Shutter-count evidence, when
-   available, is an additional corroborating signal. This preserves cases such as the
-   2843/2849, 3469/3470, and 3514/3515 frames without broadening ordinary matching.
+   Hamming distance is at most the configured threshold (initially 15). A modest relaxation
+   up to pHash 22/dHash 16 is allowed for same-camera filename sequence gaps up to six when
+   their timing corroborates the sequence. An exact next filename captured within five
+   seconds may use pHash 30/dHash 25 for abrupt pose or zoom changes. Only an exact next
+   filename may use the modest relaxation beyond the normal time window, and only through
+   120 seconds. This preserves cases such as 2843/2849, 3469/3470, and 3514/3515 while
+   keeping large time gaps and large visual changes from chaining ordinary frames.
+   When either hash uses a relaxed threshold, a compact 12-bin chroma histogram must also
+   remain within its configured distance. This catches cheap scene/subject color breaks
+   such as a gray-shirt frame followed by a blue-jacket frame without loading another
+   image or invoking an AI model.
 7. It reaches the minimum contextual evidence score. Capture proximity contributes three
    points, matching camera identity one, a nearby filename sequence two, nearby import
    time one, and a nearby shutter count one to three. A shutter-count gap over 20 or an
@@ -164,7 +171,7 @@ to an existing member of that burst:
 
 Filename sequence and import time are corroborating signals, not requirements. Filenames
 are only recognized when both names have the same non-numeric prefix and extension and
-their numeric portions are within three frames. Generic repeated names therefore cannot
+their numeric portions are within six frames. Generic repeated names therefore cannot
 create a burst by themselves. Shutter count is optional and reads maker-specific metadata
 such as `ShutterCount` when ExifTool exposes it; absent or unsupported maker metadata is
 neutral.
@@ -421,13 +428,21 @@ The clustering similarity thresholds are configurable in the environment file:
   for a frame to join a burst.
 - `PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE` (default 15): maximum dHash Hamming distance
   for a frame to join a burst.
+- `PHOTO_BURST_CLUSTER_CHROMA_MAX_DISTANCE` (default 0.15): maximum normalized distance
+  between compact chroma histograms when a relaxed hash gate is being used.
 - `PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS` (default 35): capture-time window for
-  the normal burst-context match. Consecutive filename and shutter-count evidence can
-  still corroborate a slower sequence outside this window.
+  the normal burst-context match. An exact sequential filename can use a modest hash
+  relaxation through a bounded 120-second extension; a close exact pair has a separate
+  five-second allowance for the wider hash gate.
 
 These settings affect only the display-only clustering policy. The conservative
 semantic-reuse thresholds remain fixed constants of the `burst-reuse-v1` policy and are
 not configurable, so environment tuning can never broaden the reuse gates.
+
+The chroma signature is generated alongside the ordinary fingerprint. After upgrading
+an existing catalog, run `photo-server backfill-fingerprints` and then
+`photo-server recluster-bursts` once to populate the signature for older assets and apply
+the color gate to their memberships.
 
 Use `photo-server recluster-bursts` or `POST /maintenance/recluster-bursts` after changing
 these settings. The operation rebuilds all current burst memberships from persisted

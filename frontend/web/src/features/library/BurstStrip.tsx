@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ImageOff, LoaderCircle } from "lucide-react";
+import { Check, ImageOff, LoaderCircle, Scissors } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../api/client";
 import type { PhotoSummary } from "../../api/types";
@@ -11,10 +11,12 @@ export function BurstStrip({
   photo,
   onClose,
   onRepresentative,
+  onRemove,
 }: {
   photo: PhotoSummary;
   onClose: () => void;
   onRepresentative: (assetId: string) => void | Promise<void>;
+  onRemove: (assetId: string) => void | Promise<void>;
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const burst = useQuery({
@@ -56,29 +58,36 @@ export function BurstStrip({
             const isRepresentative = frame.assetId === representativeId;
             const isPending = pending === frame.assetId;
             return (
-              <button
-                key={frame.assetId}
-                type="button"
-                className={`burst-frame ${isRepresentative ? "is-best" : ""} ${isPending ? "is-busy" : ""}`}
-                onClick={() => choose(frame.assetId)}
-                aria-label={isRepresentative ? `${frame.originalFilename} is the current best frame` : `Make ${frame.originalFilename} the best frame`}
-                aria-pressed={isRepresentative}
-                title={isRepresentative ? "Current best frame" : "Make this the best frame"}
-              >
-                <div className="burst-frame__image">
-                  <PreviewImage src={frame.previewUrl} status={frame.preview.status} alt="" eager />
-                </div>
-                <span className="burst-frame__caption">
-                  <strong>{frame.originalFilename}</strong>
-                  <span>{formatDate(frame.timelineTime, true)}</span>
-                </span>
-                {isRepresentative && (
-                  <span className="burst-frame__best">
-                    <Check size={12} strokeWidth={3} /> Best
+              <div key={frame.assetId} className="burst-frame-shell">
+                <button
+                  type="button"
+                  className={`burst-frame ${isRepresentative ? "is-best" : ""} ${isPending ? "is-busy" : ""}`}
+                  onClick={() => choose(frame.assetId)}
+                  aria-label={isRepresentative ? `${frame.originalFilename} is the current best frame` : `Make ${frame.originalFilename} the best frame`}
+                  aria-pressed={isRepresentative}
+                  title={isRepresentative ? "Current best frame" : "Make this the best frame"}
+                >
+                  <div className="burst-frame__image">
+                    <PreviewImage src={frame.previewUrl} status={frame.preview.status} alt="" eager />
+                  </div>
+                  <span className="burst-frame__caption">
+                    <strong>{frame.originalFilename}</strong>
+                    <span>{formatDate(frame.timelineTime, true)}</span>
                   </span>
-                )}
-                {isPending && <LoaderCircle className="spin" size={16} />}
-              </button>
+                  {isRepresentative && <span className="burst-frame__best"><Check size={12} strokeWidth={3} /> Best</span>}
+                  {isPending && <LoaderCircle className="spin" size={16} />}
+                </button>
+                <button
+                  type="button"
+                  className="burst-frame__remove"
+                  disabled={Boolean(pending)}
+                  onClick={() => {
+                    if (window.confirm(`Remove ${frame.originalFilename} from this burst?`)) onRemove(frame.assetId);
+                  }}
+                >
+                  <Scissors size={12} /> Split out
+                </button>
+              </div>
             );
           })}
         </div>

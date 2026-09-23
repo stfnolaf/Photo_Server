@@ -659,6 +659,28 @@
         "title": "BurstDetailOut",
         "type": "object"
       },
+      "BurstMemberRemovedOut": {
+        "additionalProperties": false,
+        "description": "POST /assets/{id}/burst/remove: the frame removed from its burst.",
+        "properties": {
+          "burstId": {
+            "format": "uuid",
+            "title": "Burstid",
+            "type": "string"
+          },
+          "removedAssetId": {
+            "format": "uuid",
+            "title": "Removedassetid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "burstId",
+          "removedAssetId"
+        ],
+        "title": "BurstMemberRemovedOut",
+        "type": "object"
+      },
       "BurstReclusterOut": {
         "additionalProperties": false,
         "description": "Result of rebuilding display-only burst memberships.",
@@ -1345,7 +1367,8 @@
               "album.patch",
               "album.delete",
               "album.restore",
-              "burst.setRepresentative"
+              "burst.setRepresentative",
+              "burst.removeMember"
             ],
             "title": "Action",
             "type": "string"
@@ -3303,6 +3326,56 @@
           }
         },
         "summary": "Get Asset Burst"
+      }
+    },
+    "/assets/{asset_id}/burst/remove": {
+      "post": {
+        "operationId": "removeBurstMember",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurstMemberRemovedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Burst Member"
       }
     },
     "/assets/{asset_id}/burst/representative": {

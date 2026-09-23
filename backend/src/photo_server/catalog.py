@@ -206,6 +206,7 @@ image_fingerprints = Table(
     Column("dhash", String(16), nullable=False),
     Column("width", Integer, nullable=False),
     Column("height", Integer, nullable=False),
+    Column("chroma_histogram", String(24)),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 burst_clusters = Table(
@@ -255,10 +256,12 @@ class Catalog:
         if settings is None:
             self._burst_phash_max = 17
             self._burst_dhash_max = 15
+            self._burst_chroma_max = 0.15
             self._burst_capture_window_seconds = 35
         else:
             self._burst_phash_max = settings.burst_cluster_phash_max_distance
             self._burst_dhash_max = settings.burst_cluster_dhash_max_distance
+            self._burst_chroma_max = settings.burst_cluster_chroma_max_distance
             self._burst_capture_window_seconds = settings.burst_cluster_capture_window_seconds
 
     @contextmanager
@@ -673,13 +676,23 @@ class Catalog:
                     self._join_burst(connection, entity_id)
                 result = mutation_result(snapshot)
             elif kind == "burst":
-                if action != "setRepresentative":
+                if action == "removeMember":
+                    member_id = mutation.changes.get("assetId")
+                    if not member_id:
+                        raise LibraryError("Asset is required")
+                    result = remove_member(
+                        connection,
+                        entity_id,
+                        str(member_id),
+                    )
+                elif action == "setRepresentative":
+                    result = set_representative(
+                        connection,
+                        entity_id,
+                        mutation.changes.get("representativeAssetId"),
+                    )
+                else:
                     raise LibraryError("Invalid burst mutation")
-                result = set_representative(
-                    connection,
-                    entity_id,
-                    mutation.changes.get("representativeAssetId"),
-                )
             else:
                 if action == "create" and current:
                     raise LibraryError("Album already exists")
@@ -978,18 +991,25 @@ class Catalog:
     def upsert_fingerprint(self, asset_id: str, fingerprint: Fingerprint):
         """Persist a fingerprint idempotently for (asset_id, algorithm_version)."""
         with self.engine.begin() as connection:
-            connection.execute(
-                insert(image_fingerprints)
-                .values(
-                    asset_id=asset_id,
-                    algorithm_version=fingerprint.algorithm_version,
-                    phash=fingerprint.phash,
-                    dhash=fingerprint.dhash,
-                    width=fingerprint.width,
-                    height=fingerprint.height,
-                )
-                .on_conflict_do_nothing(index_elements=["asset_id", "algorithm_version"])
+            statement = insert(image_fingerprints).values(
+                asset_id=asset_id,
+                algorithm_version=fingerprint.algorithm_version,
+                phash=fingerprint.phash,
+                dhash=fingerprint.dhash,
+                width=fingerprint.width,
+                height=fingerprint.height,
+                chroma_histogram=fingerprint.chroma_histogram,
             )
+            if fingerprint.chroma_histogram is None:
+                statement = statement.on_conflict_do_nothing(
+                    index_elements=["asset_id", "algorithm_version"]
+                )
+            else:
+                statement = statement.on_conflict_do_update(
+                    index_elements=["asset_id", "algorithm_version"],
+                    set_={"chroma_histogram": fingerprint.chroma_histogram},
+                )
+            connection.execute(statement)
             if fingerprint.algorithm_version == BURST_HASH_VERSION:
                 self._join_burst(connection, asset_id)
 
@@ -1020,6 +1040,7 @@ class Catalog:
             dhash=row["dhash"],
             width=row["width"],
             height=row["height"],
+            chroma_histogram=row["chroma_histogram"],
         )
         join_or_create_cluster(
             connection,
@@ -1028,6 +1049,7 @@ class Catalog:
             self._burst_phash_max,
             self._burst_dhash_max,
             self._burst_capture_window_seconds,
+            self._burst_chroma_max,
         )
 
     def recluster_bursts(self) -> dict:
@@ -1047,6 +1069,7 @@ class Catalog:
                         image_fingerprints.c.dhash,
                         image_fingerprints.c.width,
                         image_fingerprints.c.height,
+                        image_fingerprints.c.chroma_histogram,
                     )
                     .join(image_fingerprints, image_fingerprints.c.asset_id == assets.c.id)
                     .where(
@@ -1068,10 +1091,12 @@ class Catalog:
                         dhash=row["dhash"],
                         width=row["width"],
                         height=row["height"],
+                        chroma_histogram=row["chroma_histogram"],
                     ),
                     self._burst_phash_max,
                     self._burst_dhash_max,
                     self._burst_capture_window_seconds,
+                    self._burst_chroma_max,
                 )
             clusters = connection.scalar(select(func.count()).select_from(burst_clusters))
             members = connection.scalar(select(func.count()).select_from(burst_members))
@@ -1126,6 +1151,7 @@ class Catalog:
             dhash=row["dhash"],
             width=row["width"],
             height=row["height"],
+            chroma_histogram=row["chroma_histogram"],
         )
 
     def find_fingerprint_candidates(self, target_asset_id: str, version: str) -> list[Candidate]:
@@ -1180,6 +1206,7 @@ class Catalog:
                         assets.c.id,
                         image_fingerprints.c.phash,
                         image_fingerprints.c.dhash,
+                        image_fingerprints.c.chroma_histogram,
                         assets.c.timeline_at,
                     )
                     .select_from(
@@ -1201,6 +1228,7 @@ class Catalog:
                 phash=row["phash"],
                 dhash=row["dhash"],
                 capture_time=row["timeline_at"],
+                chroma_histogram=row["chroma_histogram"],
             )
             for row in rows
         ]

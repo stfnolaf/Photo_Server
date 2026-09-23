@@ -371,6 +371,22 @@ export type BurstDetailOut = {
 };
 
 /**
+ * BurstMemberRemovedOut
+ *
+ * POST /assets/{id}/burst/remove: the frame removed from its burst.
+ */
+export type BurstMemberRemovedOut = {
+    /**
+     * Burstid
+     */
+    burstId: string;
+    /**
+     * Removedassetid
+     */
+    removedAssetId: string;
+};
+
+/**
  * BurstReclusterOut
  *
  * Result of rebuilding display-only burst memberships.
@@ -818,7 +834,7 @@ export type MutationOut = {
     /**
      * Action
      */
-    action: 'asset.patch' | 'asset.delete' | 'asset.restore' | 'asset.metadata' | 'album.create' | 'album.patch' | 'album.delete' | 'album.restore' | 'burst.setRepresentative';
+    action: 'asset.patch' | 'asset.delete' | 'asset.restore' | 'asset.metadata' | 'album.create' | 'album.patch' | 'album.delete' | 'album.restore' | 'burst.setRepresentative' | 'burst.removeMember';
     /**
      * Changes
      */
@@ -2035,6 +2051,36 @@ export type GetBurstResponses = {
 };
 
 export type GetBurstResponse = GetBurstResponses[keyof GetBurstResponses];
+
+export type RemoveBurstMemberData = {
+    body: OperationRequest;
+    path: {
+        /**
+         * Asset Id
+         */
+        asset_id: string;
+    };
+    query?: never;
+    url: '/assets/{asset_id}/burst/remove';
+};
+
+export type RemoveBurstMemberErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type RemoveBurstMemberError = RemoveBurstMemberErrors[keyof RemoveBurstMemberErrors];
+
+export type RemoveBurstMemberResponses = {
+    /**
+     * Successful Response
+     */
+    200: BurstMemberRemovedOut;
+};
+
+export type RemoveBurstMemberResponse = RemoveBurstMemberResponses[keyof RemoveBurstMemberResponses];
 
 export type SetBurstRepresentativeData = {
     body: OperationRequest;

@@ -14,7 +14,7 @@ from sqlalchemy import insert, select
 
 from photo_server.catalog import assets, burst_clusters, burst_members, image_fingerprints
 from photo_server.config import LibraryError
-from photo_server.fingerprints import Fingerprint, hamming_distance
+from photo_server.fingerprints import Fingerprint, chroma_histogram_distance, hamming_distance
 from photo_server.models import Manifest
 
 BURST_CLUSTER_POLICY_VERSION = "burst-cluster-v2"
@@ -23,10 +23,17 @@ UPLOAD_NEAR_WINDOW = timedelta(minutes=10)
 UPLOAD_FAR_WINDOW = timedelta(days=7)
 _MISSING_TIME_MS = 10**18
 _MIN_EVIDENCE_SCORE = 4
-_STRONG_SEQUENCE_PHASH_MAX = 28
-_STRONG_SEQUENCE_DHASH_MAX = 26
-_NEAR_SEQUENCE_PHASH_MAX = 22
-_NEAR_SEQUENCE_DHASH_MAX = 16
+# The normal thresholds are intentionally conservative. Filename sequence can
+# identify a likely camera sequence, but it must not turn visually unrelated
+# frames into one burst. A modest sequence relaxation handles zoom and pose
+# changes; the wider exception is reserved for an immediately consecutive
+# frame captured almost at once.
+_SEQUENCE_PHASH_MAX = 22
+_SEQUENCE_DHASH_MAX = 16
+_CLOSE_SEQUENCE_PHASH_MAX = 30
+_CLOSE_SEQUENCE_DHASH_MAX = 25
+_CLOSE_SEQUENCE_WINDOW = timedelta(seconds=5)
+_SEQUENCE_EXTENSION_WINDOW = timedelta(seconds=120)
 _FILENAME_SEQUENCE = re.compile(r"^(?P<prefix>.*?)(?P<sequence>\d{2,})(?P<suffix>\.[^.]+)?$", re.IGNORECASE)
 _SHUTTER_COUNT_KEYS = ("ShutterCount", "Shutter Count", "MakerNotes:ShutterCount")
 
@@ -42,6 +49,7 @@ class ClusterCandidate:
     camera_identity: str | None
     original_filename: str
     shutter_count: int | None
+    chroma_histogram: str | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +138,7 @@ def _evaluate_candidate(
     phash_max: int,
     dhash_max: int,
     capture_window: timedelta = CAPTURE_WINDOW,
+    chroma_max: float = 0.15,
 ) -> BurstDecision:
     """Apply burst-v2 gates and return the evidence used for the decision."""
     target_camera = _camera_identity(target.metadata)
@@ -152,54 +161,80 @@ def _evaluate_candidate(
     sequence_delta = None
     if filename_reason:
         sequence_delta = int(filename_reason.rsplit("_", 1)[-1])
-    # Existing catalogs may not have persisted maker-specific shutter counts;
-    # an exact camera filename sequence is still strong evidence when the
-    # camera identity and perceptual gates agree.
-    strong_sequence = sequence_delta == 1
-    near_sequence = (
-        sequence_delta is not None
-        and sequence_delta <= 6
-        and shutter_delta is not None
-        and shutter_delta <= 6
-    )
-    if strong_sequence:
-        effective_phash_max = max(phash_max, _STRONG_SEQUENCE_PHASH_MAX)
-        effective_dhash_max = max(dhash_max, _STRONG_SEQUENCE_DHASH_MAX)
-    elif near_sequence:
-        effective_phash_max = max(phash_max, _NEAR_SEQUENCE_PHASH_MAX)
-        effective_dhash_max = max(dhash_max, _NEAR_SEQUENCE_DHASH_MAX)
-    else:
-        effective_phash_max = phash_max
-        effective_dhash_max = dhash_max
-    if hamming_distance(fingerprint.phash, candidate.phash) > effective_phash_max:
-        return BurstDecision(False, 0, (), "phash_distance")
-    if hamming_distance(fingerprint.dhash, candidate.dhash) > effective_dhash_max:
-        return BurstDecision(False, 0, (), "dhash_distance")
-
-    score = 0
-    evidence: list[str] = []
     target_capture = _burst_time(target.capture_time)
+    capture_delta = None
     if target_capture is not None and candidate.capture_time is not None:
         try:
             capture_delta = abs(target_capture - candidate.capture_time)
         except TypeError:
             capture_delta = None
+
+    shutter_confirms = (
+        target_shutter is not None
+        and candidate.shutter_count is not None
+        and shutter_delta is not None
+        and shutter_delta <= 3
+    )
+    exact_sequence = sequence_delta == 1
+    within_capture_window = capture_delta is not None and capture_delta <= capture_window
+    close_exact_sequence = (
+        exact_sequence
+        and capture_delta is not None
+        and capture_delta <= min(capture_window, _CLOSE_SEQUENCE_WINDOW)
+    )
+    # Existing catalogs may not have persisted maker-specific shutter counts,
+    # so filename sequence is useful on its own when the capture times agree.
+    # Beyond the ordinary window, only an exact next filename gets a bounded
+    # extension; a broad filename match must not override elapsed time.
+    sequence_relaxation = (
+        sequence_delta is not None
+        and sequence_delta <= 6
+        and (
+            within_capture_window
+            or shutter_confirms
+            or (
+                exact_sequence
+                and capture_delta is not None
+                and capture_delta <= _SEQUENCE_EXTENSION_WINDOW
+            )
+        )
+    )
+    if close_exact_sequence:
+        effective_phash_max = max(phash_max, _CLOSE_SEQUENCE_PHASH_MAX)
+        effective_dhash_max = max(dhash_max, _CLOSE_SEQUENCE_DHASH_MAX)
+    elif sequence_relaxation:
+        effective_phash_max = max(phash_max, _SEQUENCE_PHASH_MAX)
+        effective_dhash_max = max(dhash_max, _SEQUENCE_DHASH_MAX)
+    else:
+        effective_phash_max = phash_max
+        effective_dhash_max = dhash_max
+    phash_distance = hamming_distance(fingerprint.phash, candidate.phash)
+    dhash_distance = hamming_distance(fingerprint.dhash, candidate.dhash)
+    if phash_distance > effective_phash_max:
+        return BurstDecision(False, 0, (), "phash_distance")
+    if dhash_distance > effective_dhash_max:
+        return BurstDecision(False, 0, (), "dhash_distance")
+    if phash_distance > phash_max or dhash_distance > dhash_max:
+        chroma_distance = chroma_histogram_distance(
+            fingerprint.chroma_histogram, candidate.chroma_histogram
+        )
+        if chroma_distance is not None and chroma_distance > chroma_max:
+            return BurstDecision(False, 0, (), "chroma_distance")
+
+    score = 0
+    evidence: list[str] = []
+    if target_capture is not None and candidate.capture_time is not None:
         if capture_delta is not None:
             if capture_delta > capture_window:
-                # A camera can pause between frames, or metadata can be
-                # rounded/coarsened. Keep the time gate strict unless the
-                # camera sequence and shutter count independently identify a
-                # consecutive pair.
-                shutter_confirms = (
-                    target_shutter is not None
-                    and candidate.shutter_count is not None
-                    and shutter_delta <= 3
-                )
-                if filename_score == 0 or not (
-                    filename_reason == "filename_sequence_delta_1" or shutter_confirms
-                ):
+                # A camera can pause between frames, but elapsed time remains
+                # negative evidence. Only the bounded exact-sequence or
+                # shutter-confirmed path can compensate for this gap.
+                if filename_score == 0 or not (sequence_relaxation or shutter_confirms):
                     return BurstDecision(False, 0, (), "capture_time_outside_window")
                 evidence.append(f"capture_delta_outside_window_{capture_delta.total_seconds():g}s")
+                if sequence_relaxation:
+                    score += 1
+                    evidence.append("bounded_sequence_time_extension")
             else:
                 score += 3
                 evidence.append(f"capture_delta_{capture_delta.total_seconds():g}s")
@@ -272,6 +307,7 @@ def _candidate_rows(
                 assets.c.id,
                 image_fingerprints.c.phash,
                 image_fingerprints.c.dhash,
+                image_fingerprints.c.chroma_histogram,
                 assets.c.manifest,
                 burst_members.c.cluster_id,
             )
@@ -298,6 +334,7 @@ def join_or_create_cluster(
     phash_max: int,
     dhash_max: int,
     capture_window_seconds: int = int(CAPTURE_WINDOW.total_seconds()),
+    chroma_max: float = 0.15,
 ) -> str:
     """Assign one fingerprinted frame to a burst cluster, creating or merging as needed.
 
@@ -338,18 +375,28 @@ def join_or_create_cluster(
                 camera_identity=_camera_identity(manifest.metadata),
                 original_filename=manifest.primary.original_filename,
                 shutter_count=_shutter_count(manifest.metadata),
+                chroma_histogram=row["chroma_histogram"],
             )
         )
 
     target_capture = _burst_time(target.capture_time)
-    candidates.sort(
-        key=lambda c: (
-            hamming_distance(fingerprint.phash, c.phash),
-            hamming_distance(fingerprint.dhash, c.dhash),
-            _capture_distance_ms(target_capture, c.capture_time),
-            c.asset_id,
+    def candidate_sort_key(candidate: ClusterCandidate) -> tuple:
+        _, filename_reason = _filename_evidence(
+            target.primary.original_filename, candidate.original_filename
         )
-    )
+        # Prefer the exact camera sequence neighbor over a visually closer
+        # but non-adjacent frame. Otherwise a borderline frame can attach to
+        # an older scene cluster before its exact filename pair is examined.
+        exact_sequence_priority = 0 if filename_reason == "filename_sequence_delta_1" else 1
+        return (
+            exact_sequence_priority,
+            hamming_distance(fingerprint.phash, candidate.phash),
+            hamming_distance(fingerprint.dhash, candidate.dhash),
+            _capture_distance_ms(target_capture, candidate.capture_time),
+            candidate.asset_id,
+        )
+
+    candidates.sort(key=candidate_sort_key)
 
     for candidate in candidates:
         if _evaluate_candidate(
@@ -359,6 +406,7 @@ def join_or_create_cluster(
             phash_max,
             dhash_max,
             timedelta(seconds=capture_window_seconds),
+            chroma_max,
         ).accepted:
             if existing is None:
                 connection.execute(
@@ -398,21 +446,28 @@ def join_or_create_cluster(
     return cluster_id
 
 
-def remove_member(connection, asset_id: str) -> None:
-    """Remove one frame from its burst cluster, moving the representative if needed."""
+def remove_member(connection, cluster_id: str, asset_id: str | None = None) -> dict | None:
+    """Remove one frame, optionally requiring membership in a specific cluster."""
+    if asset_id is None:
+        asset_id, cluster_id = cluster_id, None
     row = (
         connection.execute(
             select(burst_members.c.cluster_id, burst_clusters.c.representative_asset_id)
             .join_from(
                 burst_members, burst_clusters, burst_clusters.c.id == burst_members.c.cluster_id
             )
-            .where(burst_members.c.asset_id == asset_id)
+            .where(
+                burst_members.c.asset_id == asset_id,
+                *((burst_members.c.cluster_id == cluster_id,) if cluster_id else ()),
+            )
         )
         .mappings()
         .one_or_none()
     )
     if row is None:
-        return
+        if cluster_id is None:
+            return None
+        raise LibraryError("Asset is not a member of this burst")
     cluster_id = row["cluster_id"]
     was_representative = row["representative_asset_id"] == asset_id
     connection.execute(
@@ -436,6 +491,7 @@ def remove_member(connection, asset_id: str) -> None:
             .where(burst_clusters.c.id == cluster_id)
             .values(representative_asset_id=survivor)
         )
+    return {"burstId": cluster_id, "removedAssetId": asset_id}
 
 
 def set_representative(connection, cluster_id: str, asset_id: str) -> dict:

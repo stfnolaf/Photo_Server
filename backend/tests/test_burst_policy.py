@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from photo_server.bursts import ClusterCandidate, _evaluate_candidate, _filename_evidence
@@ -42,6 +42,49 @@ def _candidate(manifest, *, shutter_count=None):
         camera_identity="Sony ILCE-7M4",
         original_filename=manifest.primary.original_filename,
         shutter_count=shutter_count,
+    )
+
+
+def _calibration_decision(
+    target_number: int,
+    candidate_number: int,
+    seconds: int,
+    phash_distance: int,
+    dhash_distance: int,
+    chroma_change: bool = False,
+):
+    start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    camera = {"Make": "Sony", "Model": "ILCE-7M4"}
+    target = _manifest(
+        filename=f"A{target_number}.ARW",
+        capture_time=start.isoformat(),
+        metadata=camera,
+    )
+    candidate_manifest = _manifest(
+        filename=f"A{candidate_number}.ARW",
+        capture_time=(start + timedelta(seconds=seconds)).isoformat(),
+        metadata=camera,
+    )
+    candidate = replace(
+        _candidate(candidate_manifest),
+        capture_time=start + timedelta(seconds=seconds),
+        phash=f"{(1 << phash_distance) - 1:016x}",
+        dhash=f"{(1 << dhash_distance) - 1:016x}",
+        chroma_histogram=("00" + "ff" + "00" * 10) if chroma_change else ("ff" + "00" * 11),
+    )
+    return _evaluate_candidate(
+        target,
+        Fingerprint(
+            phash="0" * 16,
+            dhash="0" * 16,
+            width=640,
+            height=480,
+            chroma_histogram="ff" + "00" * 11,
+        ),
+        candidate,
+        17,
+        15,
+        timedelta(seconds=35),
     )
 
 
@@ -139,3 +182,49 @@ def test_filename_and_shutter_count_can_compensate_for_slow_burst_capture():
     )
     assert decision.accepted
     assert "capture_delta_outside_window_118s" in decision.evidence
+
+
+def test_close_exact_sequence_allows_large_visual_change():
+    decision = _calibration_decision(7403469, 7403470, 4, 30, 25)
+    assert decision.accepted
+
+
+def test_nonconsecutive_sequence_can_use_modest_hash_relaxation():
+    decision = _calibration_decision(7402757, 7402760, 2, 22, 15)
+    assert decision.accepted
+
+
+def test_exact_sequence_extension_preserves_two_minute_zoom_pair():
+    decision = _calibration_decision(7403514, 7403515, 118, 22, 14)
+    assert decision.accepted
+    assert "bounded_sequence_time_extension" in decision.evidence
+
+
+def test_long_exact_sequence_gap_does_not_override_large_visual_change():
+    decision = _calibration_decision(7403486, 7403487, 202, 28, 23)
+    assert not decision.accepted
+    assert decision.rejection == "phash_distance"
+
+
+def test_modest_sequence_relaxation_rejects_large_phash_change():
+    decision = _calibration_decision(7402836, 7402838, 15, 24, 15)
+    assert not decision.accepted
+    assert decision.rejection == "phash_distance"
+
+
+def test_filename_gap_over_six_gets_no_hash_relaxation():
+    decision = _calibration_decision(7402832, 7402839, 29, 18, 16)
+    assert not decision.accepted
+    assert decision.rejection == "phash_distance"
+
+
+def test_just_over_capture_window_requires_modest_hashes():
+    decision = _calibration_decision(7403485, 7403486, 36, 20, 23)
+    assert not decision.accepted
+    assert decision.rejection == "dhash_distance"
+
+
+def test_relaxed_hash_match_rejects_a_chroma_scene_break():
+    decision = _calibration_decision(7403488, 7403489, 17, 20, 11, chroma_change=True)
+    assert not decision.accepted
+    assert decision.rejection == "chroma_distance"

@@ -267,6 +267,16 @@ export function LibraryPage({
               toast.show(error instanceof Error ? error.message : "The burst selection could not be saved", "error");
             }
           }}
+          onRemove={async (assetId) => {
+            try {
+              await mutate(`/assets/${assetId}/burst/remove`, "POST", {});
+              await queryClient.invalidateQueries({ queryKey: ["library"] });
+              await queryClient.invalidateQueries({ queryKey: ["burst"] });
+              toast.show("Frame split out of the burst");
+            } catch (error) {
+              toast.show(error instanceof Error ? error.message : "The frame could not be split out", "error");
+            }
+          }}
         />
       )}
     </section>

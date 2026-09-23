@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     # gates so composition changes do not pass on pHash alone.
     burst_cluster_phash_max_distance: int = Field(default=17, ge=0, le=64)
     burst_cluster_dhash_max_distance: int = Field(default=15, ge=0, le=64)
+    burst_cluster_chroma_max_distance: float = Field(default=0.15, ge=0, le=1)
     burst_cluster_capture_window_seconds: int = Field(default=35, ge=1, le=3600)
     # Face inference runs in the standalone face-service (Phase 2B of
     # docs/ai-service-split-plan.md); the worker is a plain HTTP client

@@ -1,10 +1,14 @@
 """Perceptual image fingerprints for burst-aware semantic reuse and clustering.
 
 `burst-hash-v1` is a pure, deterministic computation over an orientation-corrected,
-metadata-free preview rendering. It produces two independent 64-bit hashes:
+metadata-free preview rendering. It produces two independent 64-bit hashes and a
+compact chroma signature:
 
 - pHash: low-frequency composition via a DCT of a 32x32 grayscale rendering.
 - dHash: coarse edge structure via horizontal gradients of a 9x8 grayscale rendering.
+- chroma histogram: a 12-bin hue distribution from the same 32x32 preview, ignoring
+  dark or nearly gray pixels so clothing/color changes can provide a cheap scene-break
+  signal when the grayscale hashes need a relaxed threshold.
 
 Both are expressed as 16-character lowercase hex strings (unsigned 64-bit values).
 The exact resize, colorspace, DCT, and bit-ordering rules are frozen by the algorithm
@@ -35,6 +39,11 @@ DHASH_MAX_DISTANCE = 6
 
 _PHASH_SIZE = 32
 _DHASH_SIZE = (9, 8)
+_CHROMA_SIZE = (32, 32)
+_CHROMA_BINS = 12
+_CHROMA_MIN_SATURATION = 38  # approximately 15% in Pillow's 0..255 HSV range
+_CHROMA_MIN_VALUE = 20
+_CHROMA_MIN_SAMPLES = 16
 _BLOCK = 8
 _MISSING_TIME_MS = 10**18
 
@@ -47,6 +56,7 @@ class Fingerprint(DurableModel):
     dhash: str
     width: int
     height: int
+    chroma_histogram: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,7 @@ class Candidate:
     phash: str
     dhash: str
     capture_time: datetime | None
+    chroma_histogram: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -121,6 +132,29 @@ def _dhash(gray: Image.Image) -> str:
     return _bits_to_hex(bits)
 
 
+def _chroma_histogram(image: Image.Image) -> str | None:
+    """Return a compact normalized hue histogram for scene-break checks."""
+    hsv = image.resize(_CHROMA_SIZE, Image.Resampling.LANCZOS).convert("HSV")
+    counts = [0] * _CHROMA_BINS
+    for hue, saturation, value in hsv.get_flattened_data():
+        if saturation < _CHROMA_MIN_SATURATION or value < _CHROMA_MIN_VALUE:
+            continue
+        counts[min(_CHROMA_BINS - 1, hue * _CHROMA_BINS // 256)] += 1
+    samples = sum(counts)
+    if samples < _CHROMA_MIN_SAMPLES:
+        return None
+    return "".join(f"{round(count * 255 / samples):02x}" for count in counts)
+
+
+def chroma_histogram_distance(a: str | None, b: str | None) -> float | None:
+    """Return normalized L1 distance for two compact chroma histograms."""
+    if a is None or b is None or len(a) != _CHROMA_BINS * 2 or len(b) != _CHROMA_BINS * 2:
+        return None
+    left = bytes.fromhex(a)
+    right = bytes.fromhex(b)
+    return sum(abs(x - y) for x, y in zip(left, right)) / (2 * 255)
+
+
 def compute_fingerprint(jpeg: bytes) -> Fingerprint:
     """Compute burst-hash-v1 pHash/dHash from an orientation-corrected preview.
 
@@ -136,12 +170,14 @@ def compute_fingerprint(jpeg: bytes) -> Fingerprint:
         width, height = gray.size
         phash = _phash(gray)
         dhash = _dhash(gray)
+        chroma_histogram = _chroma_histogram(image)
     return Fingerprint(
         algorithm_version=BURST_HASH_VERSION,
         phash=phash,
         dhash=dhash,
         width=width,
         height=height,
+        chroma_histogram=chroma_histogram,
     )
 
 
@@ -185,6 +221,7 @@ __all__ = [
     "Fingerprint",
     "PHASH_MAX_DISTANCE",
     "candidate_order",
+    "chroma_histogram_distance",
     "compute_fingerprint",
     "hamming_distance",
 ]
