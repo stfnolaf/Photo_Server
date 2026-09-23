@@ -1196,6 +1196,10 @@
     },
     {
       "body": {
+        "aiFaceConfigured": false,
+        "aiFaceReachable": false,
+        "aiSemanticConfigured": false,
+        "aiSemanticReachable": false,
         "analysisFailed": 0,
         "analysisPending": 0,
         "analysisRunning": 0,
@@ -1224,9 +1228,10 @@
       "status": 200
     }
   ],
-  "description": "phase2: five pinned batches (A complete with a sidecar, B failed then retried to queued, C discarded, D content-length mismatch then discarded, E sealed) exercising every upload lifecycle state and error shape, then GET /upload-batches (created_at-ordered, limit=1 and full), GET /upload-queue (13 counts plus gate statistics), and GET /health (ok, library id, asset/blob counts, every queue count, gate statistics, null backup marker); onboarding terminal states seeded in SQL, created_at/sealed_at pinned by hooks, the catalog clock pinned for the session (sealedAt in the seal 202 bodies), no workers started",
+  "description": "phase2: five pinned batches (A complete with a sidecar, B failed then retried to queued, C discarded, D content-length mismatch then discarded, E sealed) exercising every upload lifecycle state and error shape, then GET /upload-batches (created_at-ordered, limit=1 and full), GET /upload-queue (13 counts plus gate statistics), and GET /health (ok, library id, asset/blob counts, every queue count, gate statistics, null backup marker); onboarding terminal states seeded in SQL, created_at/sealed_at pinned by hooks, the catalog clock pinned for the session (sealedAt in the seal 202 bodies), no workers started; Phase 3B service-visibility fields added to /health",
   "libraryId": "11111111-1111-4111-8111-111111111111",
   "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
   "schemaVersion": 1,
-  "section": "phase2"
+  "section": "phase2_v2"
 }
+

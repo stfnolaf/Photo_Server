@@ -39,7 +39,7 @@ ADAFACE_IDENTITY = {
 }
 
 # A health probe is a short liveness/identity check, not an inference request.
-HEALTH_TIMEOUT_SECONDS = 5.0
+FACE_SERVICE_HEALTH_TIMEOUT_SECONDS = 5.0
 
 
 class FaceServiceError(Exception):
@@ -168,7 +168,7 @@ class RemoteFaceAnalyzer:
             headers=headers,
         )
 
-    def health(self, timeout: float = HEALTH_TIMEOUT_SECONDS) -> dict:
+    def health(self, timeout: float = FACE_SERVICE_HEALTH_TIMEOUT_SECONDS) -> dict:
         """Probe the service and verify the embedding-model identity.
 
         Returns the ``/health`` payload (provenance plus live queue state).
@@ -177,9 +177,9 @@ class RemoteFaceAnalyzer:
         an embedding model that does not match ``ADAFACE_IDENTITY``;
         ``FaceServiceError`` on 401 or other 4xx and unusable shapes.
 
-        ``timeout`` defaults to the worker's 5 s liveness budget; Phase 3B's
-        API ``/health`` probe passes its shorter 3 s budget, reusing this
-        exact probe and identity check (a drift therefore shows as
+        ``timeout`` defaults to the worker's 5 s liveness budget. The API's
+        user-facing ``/health`` probe passes its shorter 3 s budget, reusing
+        this exact probe and identity check (a drift therefore shows as
         unreachable there too).
         """
         with self._client(timeout) as client:

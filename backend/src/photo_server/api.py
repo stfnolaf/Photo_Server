@@ -80,7 +80,7 @@ _PREVIEW_TOUCH_COOLDOWN = 30.0
 # embedding model therefore shows as unreachable — one embedding space,
 # global invariant), and a not-configured service (empty URL) is simply not
 # probed.
-_AI_PROBE_TIMEOUT_SECONDS = 3.0
+API_HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
 _AI_PROBE_CACHE_SECONDS = 30.0
 
 
@@ -95,7 +95,7 @@ def _probe_vlm(settings: Settings) -> bool:
         return False
     headers = {"Authorization": f"Bearer {settings.ai_api_key}"} if settings.ai_api_key else {}
     try:
-        with httpx.Client(timeout=_AI_PROBE_TIMEOUT_SECONDS) as client:
+        with httpx.Client(timeout=API_HEALTH_PROBE_TIMEOUT_SECONDS) as client:
             response = client.get(f"{settings.ai_base_url}/models", headers=headers)
         return response.status_code < 400
     except Exception:
@@ -112,7 +112,7 @@ def _probe_face(settings: Settings) -> bool:
     if not settings.face_service_url:
         return False
     try:
-        RemoteFaceAnalyzer(settings).health(timeout=_AI_PROBE_TIMEOUT_SECONDS)
+        RemoteFaceAnalyzer(settings).health(timeout=API_HEALTH_PROBE_TIMEOUT_SECONDS)
         return True
     except Exception:
         # A probe failure never fails the endpoint: unreachable.

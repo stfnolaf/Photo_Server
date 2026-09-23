@@ -917,13 +917,17 @@ block and the health assertions change),
 identity-check logic; do not duplicate them).
 
 Create / modify: `api.py` (the health endpoint runs the probes),
-`api_schemas.py` (four new `StrictBool` fields on `HealthOut`), and
-surgical edits to the two test files.
+`api_schemas.py` (four new `StrictBool` fields on `HealthOut`),
+`face_client.py` (a timeout parameter so the API can reuse the existing
+identity-checked probe at its 3 s budget while the worker keeps its 5 s
+default), and surgical edits to the two test files.
 
 Diff-only artifacts: `openapi/openapi.json` — regenerated with
-`scripts/dump_openapi.py`; read only the `git diff` (expected: four new
-properties on the `HealthOut` schema). `scripts/check_openapi.py` is the
-gate, not a read.
+`scripts/dump_openapi.py`; and `frontend/web/src/api/generated/` —
+regenerated with `npm run generate:api`. Read only the diffs (expected:
+four new properties on the `HealthOut` schema and the corresponding four
+generated fields). `scripts/check_openapi.py` and frontend `check:api` are
+the gates, not reads.
 
 **Sizing note: this is the ceiling case of the plan** (~5,200 lines of
 full reads, the bulk of it the two test files; every edit is surgical).
@@ -973,10 +977,11 @@ frontend consumes them in 3C).
 
 ### Handoff
 
-After 3B: `HealthOut` carries the four service-visibility fields and
-the OpenAPI golden is updated; the API process probes the services
-itself (3 s probes, 30 s cache; the face probe includes the identity
-check). The web UI does not know about the new fields yet — that is 3C.
+After 3B: `HealthOut` carries the four service-visibility fields, the
+OpenAPI and generated-client artifacts are synchronized, and the API
+process probes the services itself (3 s probes, 30 s cache; the face probe
+includes the identity check). The web UI has not consumed the fields yet —
+that is 3C.
 
 ---
 
@@ -990,9 +995,9 @@ Read in full: `frontend/web/src/api/types.ts` (96),
 `frontend/web/src/api/client.ts` (264 — how `health` flows to the
 inspector).
 
-Diff-only artifacts: `frontend/web/src/api/generated/` (~3,300 lines) —
-regenerated with `npm run generate:api`; read only the `git diff`
-(expected: the four new fields on the generated `Health` type).
+Diff-only artifact: `frontend/web/src/api/generated/` (~3,300 lines) —
+already synchronized in Phase 3B; read only the `git diff` to confirm the
+four new fields remain the generated `HealthOut` surface.
 `npm run check:api` is the gate, not a read.
 
 Create / modify: `types.ts` (the hand-written `Health` type gains the

@@ -413,7 +413,7 @@ def test_seed(backend):
 
     run_sequence(
         backend,
-        "seed",
+        "seed_v2",
         [
             ("GET", "/assets"),
             ("GET", "/library/assets"),
@@ -1162,7 +1162,7 @@ def test_phase_2(backend):
     """
     run_sequence(
         backend,
-        "phase2",
+        "phase2_v2",
         phase_2_cases(backend.service),
         clock=PINNED_SEALED_A,
         describe=(
@@ -2083,6 +2083,24 @@ def test_phase_4(backend):
                 "for the session; no workers started"
             ),
         )
+
+# ---------------------------------------------------------------------------
+# Phase 3B's additive /health wire contract gets its own append-only golden.
+# The seed and Phase 2 fixtures remain immutable historical contracts.
+
+
+def test_phase_3b_health_golden(backend):
+    """Record the four new service-visibility fields separately."""
+    run_sequence(
+        backend,
+        "phase3b_health",
+        [("GET", "/health")],
+        describe=(
+            "phase3b: GET /health with the four AI service-visibility flags; "
+            "both AI URLs are unset, so all four flags are false"
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # AI service split plan Phase 3B (docs/ai-service-split-plan.md): /health

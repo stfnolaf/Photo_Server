@@ -1,0 +1,42 @@
+{
+  "cases": [
+    {
+      "body": {
+        "aiFaceConfigured": false,
+        "aiFaceReachable": false,
+        "aiSemanticConfigured": false,
+        "aiSemanticReachable": false,
+        "analysisFailed": 0,
+        "analysisPending": 0,
+        "analysisRunning": 0,
+        "assets": 0,
+        "blobs": 0,
+        "libraryId": "11111111-1111-4111-8111-111111111111",
+        "onboardingFailed": 0,
+        "onboardingPending": 0,
+        "onboardingRunning": 0,
+        "postgresBackupAt": null,
+        "postgresBackupKey": null,
+        "previewFailed": 0,
+        "previewPending": 0,
+        "previewRunning": 0,
+        "processingFailed": 0,
+        "processingPending": 0,
+        "processingRunning": 0,
+        "status": "ok",
+        "uploadBatchesQueued": 0,
+        "uploadWorkers": 4,
+        "uploadsActive": 0,
+        "uploadsWaiting": 0
+      },
+      "method": "GET",
+      "path": "/health",
+      "status": 200
+    }
+  ],
+  "description": "phase3b: GET /health with the four AI service-visibility flags; both AI URLs are unset, so all four flags are false",
+  "libraryId": "11111111-1111-4111-8111-111111111111",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
+  "schemaVersion": 1,
+  "section": "phase3b_health"
+}
