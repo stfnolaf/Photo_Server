@@ -1214,8 +1214,7 @@ network services:
                  local / remote / hosted  YuNet + SFace + AdaFace
 ```
 
-The AI worker keeps at most `PHOTO_AI_WORKER_CONCURRENCY` requests in flight;
-this is a client resource bound, not a rate limiter. The services pace work:
+The AI worker processes one VLM request at a time. The services pace work:
 the VLM provider owns its queue/rate limits, while face-service owns a FIFO
 queue and returns `429` with `Retry-After` when saturated. Defaults are one
 in-flight request and one face-service GPU slot. Semantic burst reuse applies

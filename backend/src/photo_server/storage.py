@@ -18,6 +18,7 @@ def canonical_json(value: dict) -> bytes:
 
 class Storage:
     def __init__(self, settings: Settings):
+        self.settings = settings
         self.bucket = settings.s3_bucket
         credentials = {}
         if not settings.s3_anonymous:
@@ -48,6 +49,27 @@ class Storage:
             if error.response["ResponseMetadata"]["HTTPStatusCode"] != 404:
                 raise
             self.client.create_bucket(Bucket=self.bucket)
+        # Application cleanup handles batches known to PostgreSQL. This bucket
+        # rule is the independent backstop for multipart uploads left behind
+        # by a hard process/container kill. Some S3-compatible stores do not
+        # implement lifecycle configuration, so lack of support must not make
+        # the library unavailable; the application cleanup loop remains active.
+        try:
+            self.client.put_bucket_lifecycle_configuration(
+                Bucket=self.bucket,
+                LifecycleConfiguration={
+                    "Rules": [{
+                        "ID": "expire-incomplete-photo-uploads",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": "incoming/"},
+                        "AbortIncompleteMultipartUpload": {
+                            "DaysAfterInitiation": self.settings.s3_multipart_expiry_days,
+                        },
+                    }]
+                },
+            )
+        except (ClientError, NotImplementedError):
+            pass
 
     def head(self, key: str) -> dict | None:
         try:

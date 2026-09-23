@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -15,9 +16,19 @@ from PIL import Image, ImageOps
 from photo_server.models import Manifest
 from photo_server.processing import run_stage
 from photo_server.service import Service
-from photo_server.uploads import cleanup_abandoned_batches, process_onboarding_job
+from photo_server.uploads import (
+    cleanup_abandoned_batches,
+    process_onboarding_job,
+    reconcile_ready_upload_batches,
+)
 
 pillow_heif.register_heif_opener()
+
+
+# Preview generation and cache cleanup share the same local filesystem.  In
+# particular, a newly-created cache directory has no preview_cache row until
+# generation completes, so the orphan sweep must not inspect it mid-write.
+_PREVIEW_CACHE_LOCK = threading.RLock()
 
 
 def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
@@ -31,7 +42,7 @@ def _cache_sizes(targets: dict[str, Path]) -> tuple[int | None, int | None]:
     return tuple(path.stat().st_size if path.exists() else None for path in targets.values())
 
 
-def generate(service: Service, manifest: Manifest) -> bool:
+def _generate(service: Service, manifest: Manifest) -> bool:
     targets = cache_paths(service, manifest)
     if all(path.exists() for path in targets.values()):
         # Files from before tracking (or a crashed first run): backfill a row
@@ -98,6 +109,18 @@ def generate(service: Service, manifest: Manifest) -> bool:
     return True
 
 
+def generate(service: Service, manifest: Manifest) -> bool:
+    """Generate a preview while excluding cache cleanup from the write.
+
+    The lock is process-local because the preview workers and eviction loop
+    run in the same worker process.  Writes remain atomic via ``os.replace``;
+    the lock closes the separate race where the orphan sweep removes the
+    directory before the cache row is recorded.
+    """
+    with _PREVIEW_CACHE_LOCK:
+        return _generate(service, manifest)
+
+
 def rebuild_cache_index(service: Service) -> dict:
     """Backfill preview_cache rows for cache directories that predate tracking.
 
@@ -147,33 +170,34 @@ def sweep_orphaned_preview_dirs(service: Service) -> list[str]:
     always safe. Only valid ``{asset_id}-{sha256}-v1`` names are ever touched;
     anything else is left alone.
     """
-    cache_root = service.settings.data_dir / "cache"
-    if not cache_root.is_dir():
-        return []
-    from sqlalchemy import select
+    with _PREVIEW_CACHE_LOCK:
+        cache_root = service.settings.data_dir / "cache"
+        if not cache_root.is_dir():
+            return []
+        from sqlalchemy import select
 
-    from photo_server.catalog import preview_cache
+        from photo_server.catalog import preview_cache
 
-    with service.catalog.engine.connect() as connection:
-        known = {
-            str(value)
-            for value in connection.scalars(
-                select(preview_cache.c.asset_id).order_by(preview_cache.c.asset_id.asc())
-            )
-        }
-    removed: list[str] = []
-    for entry in sorted(cache_root.iterdir()):
-        if not entry.is_dir():
-            continue
-        match = re.fullmatch(r"(?P<asset_id>.+)-[0-9a-f]{64}-v1", entry.name)
-        if match is None:
-            continue
-        if match.group("asset_id") in known:
-            continue
-        shutil.rmtree(entry, ignore_errors=True)
-        if not entry.exists():
-            removed.append(match.group("asset_id"))
-    return removed
+        with service.catalog.engine.connect() as connection:
+            known = {
+                str(value)
+                for value in connection.scalars(
+                    select(preview_cache.c.asset_id).order_by(preview_cache.c.asset_id.asc())
+                )
+            }
+        removed: list[str] = []
+        for entry in sorted(cache_root.iterdir()):
+            if not entry.is_dir():
+                continue
+            match = re.fullmatch(r"(?P<asset_id>.+)-[0-9a-f]{64}-v1", entry.name)
+            if match is None:
+                continue
+            if match.group("asset_id") in known:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            if not entry.exists():
+                removed.append(match.group("asset_id"))
+        return removed
 
 
 def evict_previews(service: Service) -> dict:
@@ -226,60 +250,62 @@ def evict_previews(service: Service) -> dict:
 
 def cache_dir_deleted(service: Service, asset_id: str) -> bool:
     """Delete one asset's files from its current cache directory, idempotently."""
-    manifest = service.catalog.get(asset_id)
-    if manifest is None:
-        return False
-    targets = cache_paths(service, manifest)
-    for path in targets.values():
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
+    with _PREVIEW_CACHE_LOCK:
+        manifest = service.catalog.get(asset_id)
+        if manifest is None:
             return False
-    try:
-        targets["preview"].parent.rmdir()
-    except OSError:
-        pass
-    return True
-
-
-def run_once(service: Service) -> dict | None:
-    onboarding = service.catalog.claim_onboarding_job()
-    if onboarding is not None:
-        try:
-            result = process_onboarding_job(service, onboarding)
-        except Exception as error:
+        targets = cache_paths(service, manifest)
+        for path in targets.values():
             try:
-                service.catalog.finish_onboarding_job(onboarding, error=str(error))
-            except Exception:
+                path.unlink()
+            except FileNotFoundError:
                 pass
-            result = {"status": "failed", "error": str(error)}
-        return {"jobType": "onboarding", "jobId": onboarding["id"], **result}
-
-    processing = service.catalog.claim_processing_job()
-    if processing is not None:
-        asset_id = processing["asset_id"]
-        job_type = processing["job_type"]
+            except OSError:
+                return False
         try:
-            result = run_stage(service, asset_id, job_type)
-            service.catalog.finish_processing_job(asset_id, job_type, "ready")
-            return {
-                "jobType": "processing",
-                "stage": job_type,
-                "assetId": asset_id,
-                **result,
-            }
-        except Exception as error:
-            service.catalog.finish_processing_job(asset_id, job_type, "failed", str(error))
-            return {
-                "jobType": "processing",
-                "stage": job_type,
-                "assetId": asset_id,
-                "status": "failed",
-                "error": str(error),
-            }
+            targets["preview"].parent.rmdir()
+        except OSError:
+            pass
+        return True
 
+
+def _run_onboarding_once(service: Service) -> dict | None:
+    onboarding = service.catalog.claim_onboarding_job()
+    if onboarding is None:
+        return None
+    try:
+        result = process_onboarding_job(service, onboarding)
+    except Exception as error:
+        try:
+            service.catalog.finish_onboarding_job(onboarding, error=str(error))
+        except Exception:
+            pass
+        result = {"status": "failed", "error": str(error)}
+    return {"jobType": "onboarding", "jobId": onboarding["id"], **result}
+
+
+def _run_processing_once(service: Service) -> dict | None:
+    processing = service.catalog.claim_processing_job()
+    if processing is None:
+        return None
+    asset_id = processing["asset_id"]
+    job_type = processing["job_type"]
+    try:
+        result = run_stage(service, asset_id, job_type)
+        service.catalog.finish_processing_job(asset_id, job_type, "ready")
+        return {"jobType": "processing", "stage": job_type, "assetId": asset_id, **result}
+    except Exception as error:
+        service.catalog.finish_processing_job(asset_id, job_type, "failed", str(error))
+        return {
+            "jobType": "processing",
+            "stage": job_type,
+            "assetId": asset_id,
+            "status": "failed",
+            "error": str(error),
+        }
+
+
+def _run_preview_once(service: Service) -> dict | None:
     asset_id = service.catalog.claim_job()
     if asset_id is None:
         return None
@@ -292,18 +318,27 @@ def run_once(service: Service) -> dict | None:
         return {"jobType": "preview", "assetId": asset_id, "status": status}
     except Exception as error:
         service.catalog.finish_job(asset_id, "failed", str(error))
-        return {
-            "jobType": "preview",
-            "assetId": asset_id,
-            "status": "failed",
-            "error": str(error),
-        }
+        return {"jobType": "preview", "assetId": asset_id, "status": "failed", "error": str(error)}
 
 
-def _worker_loop(service: Service):
+def run_once(service: Service, mode: str = "all") -> dict | None:
+    if mode in {"all", "onboarding"}:
+        result = _run_onboarding_once(service)
+        if result is not None or mode == "onboarding":
+            return result
+    if mode in {"all", "processing"}:
+        result = _run_processing_once(service)
+        if result is not None or mode == "processing":
+            return result
+    if mode in {"all", "preview"}:
+        return _run_preview_once(service)
+    raise ValueError(f"Unknown worker mode: {mode}")
+
+
+def _worker_loop(service: Service, mode: str):
     while True:
         try:
-            result = run_once(service)
+            result = run_once(service, mode)
         except Exception as error:
             print(json.dumps({"status": "worker_error", "error": str(error)}), flush=True)
             time.sleep(2)
@@ -317,12 +352,15 @@ def _worker_loop(service: Service):
 def _cleanup_loop(service: Service):
     while True:
         try:
+            sealed = reconcile_ready_upload_batches(service)
+            if sealed["batchesSealed"]:
+                print(json.dumps({"status": "upload_reconcile", **sealed}), flush=True)
             result = cleanup_abandoned_batches(service)
             if result["batchesDeleted"]:
                 print(json.dumps({"status": "upload_cleanup", **result}), flush=True)
         except Exception as error:
             print(json.dumps({"status": "upload_cleanup_error", "error": str(error)}), flush=True)
-        time.sleep(60)
+        time.sleep(service.settings.upload_cleanup_interval_seconds)
 
 
 def _eviction_loop(service: Service):
@@ -336,15 +374,20 @@ def _eviction_loop(service: Service):
             print(json.dumps({"status": "preview_eviction_error", "error": str(error)}), flush=True)
 
 
-def run(service: Service):
+def run(service: Service, mode: str = "all"):
+    if mode not in {"all", "onboarding", "processing", "preview"}:
+        raise ValueError(f"Unknown worker mode: {mode}")
     with ThreadPoolExecutor(
         max_workers=service.settings.worker_threads + 2,
         thread_name_prefix="photo-worker",
     ) as executor:
         futures = [
-            executor.submit(_worker_loop, service) for _ in range(service.settings.worker_threads)
+            executor.submit(_worker_loop, service, mode)
+            for _ in range(service.settings.worker_threads)
         ]
-        futures.append(executor.submit(_cleanup_loop, service))
-        futures.append(executor.submit(_eviction_loop, service))
+        if mode in {"all", "onboarding"}:
+            futures.append(executor.submit(_cleanup_loop, service))
+        if mode in {"all", "preview"}:
+            futures.append(executor.submit(_eviction_loop, service))
         for future in futures:
             future.result()

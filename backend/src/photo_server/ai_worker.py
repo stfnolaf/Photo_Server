@@ -18,10 +18,9 @@ Phase 3A makes AI an optional configuration:
   30 s per process (Q4). Jobs are claimed only when both probes are healthy.
   While a service is unhealthy the dispatcher claims nothing and sleeps with
   a 10 s backoff doubling to 120 s; the probes never raise out of the loop.
-- **In-flight bound**: at most ``PHOTO_AI_WORKER_CONCURRENCY`` (default 1)
-  analyses run concurrently; the dispatcher claims as slots free. At 1 this
-  is today's single-consumer loop, and the job rows' 1800 s lease already
-  makes crashed in-flight jobs reclaimable.
+- **In-flight bound**: the configured AI dispatcher count limits assets in
+  flight; within each asset, independent face and semantic stages run in
+  parallel and join before publication.
 - **Failure classification mid-job**: the service-unavailable classes
   (``AIServiceUnavailableError`` from the VLM client,
   ``FaceServiceUnavailable`` from the face client: connection errors,
@@ -35,7 +34,7 @@ Phase 3A makes AI an optional configuration:
 import json
 import sys
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -46,12 +45,15 @@ from photo_server.analysis import (
     ANALYSIS_TYPE,
     PIPELINE_VERSION,
     AIServiceUnavailableError,
+    SemanticAnalysis,
     analyze_semantics,
+    jpeg_dimensions,
     prepare_jpeg,
     resolve_model_digest,
     searchable_text,
 )
 from photo_server.browsing import camera_time
+from photo_server.ai_pipeline import independent
 from photo_server.face_client import ADAFACE_IDENTITY, FaceServiceUnavailable, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION, compute_fingerprint
 from photo_server.reuse import (
@@ -137,10 +139,9 @@ class AIWorker:
         """Classify the AI service state and return ``(state, detail)``.
 
         States: ``not-configured`` (a URL is empty), ``ready`` (both probes
-        pass), or ``face-service-unavailable`` / ``vlm-unavailable`` /
-        ``ai-services-unavailable`` (one or both probes failed). Probe
-        results are cached for 30 s per process (Q4); a job always runs both
-        stages, so both services must be healthy for any claim.
+        pass), ``face-only`` (only face-service is healthy), ``vlm-only``
+        (only VLM is healthy), or unavailable states. Probe results are
+        cached for 30 s per process (Q4).
         """
         settings = self.service.settings
         if not settings.ai_base_url or not settings.face_service_url:
@@ -155,9 +156,9 @@ class AIWorker:
         elif not face_ok and not vlm_ok:
             state, detail = "ai-services-unavailable", "both service probes failed"
         elif not face_ok:
-            state, detail = "face-service-unavailable", "face-service /health probe failed"
+            state, detail = "vlm-only", "VLM healthy; face-service /health probe failed"
         else:
-            state, detail = "vlm-unavailable", "VLM /models probe failed"
+            state, detail = "face-only", "face-service healthy; VLM /models probe failed"
         self._probe_cache = (now, state, detail)
         return state, detail
 
@@ -174,6 +175,161 @@ class AIWorker:
     def _claim(self) -> dict | None:
         return self.service.catalog.claim_ai_job()
 
+    def _claim_face_stage(self) -> dict | None:
+        return self.service.catalog.claim_ai_face_stage()
+
+    def _execute_face_stage(self, job: dict) -> dict:
+        asset_id = job["asset_id"]
+        try:
+            manifest = self.service.catalog.get(asset_id)
+            if manifest is None:
+                raise FileNotFoundError("Face stage references a missing asset")
+            if job["preview_status"] != "ready":
+                raise RuntimeError(
+                    f"Face analysis requires a usable preview; preview is {job['preview_status']}"
+                )
+            faces = self._load_face_stage(asset_id, manifest.primary.sha256)
+            if faces is None:
+                preview = cache_paths(self.service, manifest)["preview"]
+                if not preview.is_file() and not generate(self.service, manifest):
+                    raise RuntimeError("Preview could not be regenerated for face analysis")
+                face_jpeg = prepare_jpeg(preview, self.service.settings.ai_face_max_image_side)
+                faces = self.faces.analyze(face_jpeg)
+                self._persist_face_stage(asset_id, manifest.primary.sha256, faces)
+            self.service.catalog.finish_ai_face_stage(asset_id, "ready")
+            return {
+                "jobType": "analysis-stage",
+                "stage": "face",
+                "assetId": asset_id,
+                "status": "ready",
+                "faceCount": len(faces),
+            }
+        except FaceServiceUnavailable as error:
+            self.service.catalog.finish_ai_face_stage(asset_id, "pending", str(error))
+            return {
+                "jobType": "analysis-stage",
+                "stage": "face",
+                "assetId": asset_id,
+                "status": "requeued",
+                "error": str(error),
+            }
+        except Exception as error:
+            self.service.catalog.finish_ai_face_stage(asset_id, "failed", str(error))
+            return {
+                "jobType": "analysis-stage",
+                "stage": "face",
+                "assetId": asset_id,
+                "status": "failed",
+                "error": str(error),
+            }
+
+    def _face_stage_key(self, asset_id: str) -> str:
+        return f"analysis-stages/{asset_id}/{PIPELINE_VERSION}/face.json"
+
+    def _load_face_stage(self, asset_id: str, input_sha256: str) -> list[dict] | None:
+        """Load a durable face result from the current immutable input."""
+        key = self._face_stage_key(asset_id)
+        if self.service.storage.head(key) is None:
+            return None
+        try:
+            artifact = self.service.storage.get_json(key)
+        except Exception:
+            # A partial/evicted stage object is not a reason to fail analysis;
+            # the face stage can be recomputed.
+            return None
+        if (
+            artifact.get("assetId") != asset_id
+            or artifact.get("inputSha256") != input_sha256
+            or artifact.get("pipelineVersion") != PIPELINE_VERSION
+            or not isinstance(artifact.get("faces"), list)
+        ):
+            return None
+        return artifact["faces"]
+
+    def _persist_face_stage(self, asset_id: str, input_sha256: str, faces: list[dict]) -> None:
+        """Persist face output before waiting for semantic inference."""
+        self.service.storage.put_json(
+            self._face_stage_key(asset_id),
+            {
+                "schemaVersion": 1,
+                "assetId": asset_id,
+                "inputSha256": input_sha256,
+                "pipelineVersion": PIPELINE_VERSION,
+                "stage": "face",
+                "faces": faces,
+            },
+        )
+
+    def _semantic_stage_key(self, asset_id: str) -> str:
+        return f"analysis-stages/{asset_id}/{PIPELINE_VERSION}/semantic.json"
+
+    def _load_semantic_stage(self, asset_id: str, input_sha256: str) -> tuple[SemanticAnalysis, str, dict] | None:
+        key = self._semantic_stage_key(asset_id)
+        if self.service.storage.head(key) is None:
+            return None
+        try:
+            artifact = self.service.storage.get_json(key)
+            if (
+                artifact.get("assetId") != asset_id
+                or artifact.get("inputSha256") != input_sha256
+                or artifact.get("pipelineVersion") != PIPELINE_VERSION
+            ):
+                return None
+            return (
+                SemanticAnalysis.model_validate(artifact["semantic"]),
+                str(artifact["modelDigest"]),
+                artifact.get("metrics") or {},
+            )
+        except Exception:
+            return None
+
+    def _persist_semantic_stage(
+        self, asset_id: str, input_sha256: str, semantic: SemanticAnalysis,
+        model_digest: str, metrics: dict,
+    ) -> None:
+        self.service.storage.put_json(
+            self._semantic_stage_key(asset_id),
+            {
+                "schemaVersion": 1,
+                "assetId": asset_id,
+                "inputSha256": input_sha256,
+                "pipelineVersion": PIPELINE_VERSION,
+                "stage": "semantic",
+                "semantic": semantic.document(),
+                "modelDigest": model_digest,
+                "metrics": metrics,
+            },
+        )
+
+    def _execute_semantic_stage(self, job: dict) -> dict:
+        asset_id = job["asset_id"]
+        try:
+            manifest = self.service.catalog.get(asset_id)
+            if manifest is None:
+                raise FileNotFoundError("Semantic stage references a missing asset")
+            if job["preview_status"] != "ready":
+                raise RuntimeError(
+                    f"Semantic analysis requires a usable preview; preview is {job['preview_status']}"
+                )
+            cached = self._load_semantic_stage(asset_id, manifest.primary.sha256)
+            if cached is None:
+                preview = cache_paths(self.service, manifest)["preview"]
+                if not preview.is_file() and not generate(self.service, manifest):
+                    raise RuntimeError("Preview could not be regenerated for semantic analysis")
+                jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
+                semantic, model_digest, metrics = analyze_semantics(self.service.settings, jpeg)
+                self._persist_semantic_stage(
+                    asset_id, manifest.primary.sha256, semantic, model_digest, metrics
+                )
+            self.service.catalog.finish_ai_stage(asset_id, "semantic", "ready")
+            return {"jobType": "analysis-stage", "stage": "semantic", "assetId": asset_id, "status": "ready"}
+        except AIServiceUnavailableError as error:
+            self.service.catalog.finish_ai_stage(asset_id, "semantic", "pending", str(error))
+            return {"jobType": "analysis-stage", "stage": "semantic", "assetId": asset_id, "status": "requeued", "error": str(error)}
+        except Exception as error:
+            self.service.catalog.finish_ai_stage(asset_id, "semantic", "failed", str(error))
+            return {"jobType": "analysis-stage", "stage": "semantic", "assetId": asset_id, "status": "failed", "error": str(error)}
+
     def run_once(self) -> dict | None:
         """One dispatcher pass: gate, then claim and execute when ready.
 
@@ -184,6 +340,12 @@ class AIWorker:
         ``{"status": "idle", "reason": "ai-not-configured"}``.
         """
         state, _ = self._gate()
+        if state == "face-only":
+            job = self._claim_face_stage()
+            return self._execute_face_stage(job) if job is not None else None
+        if state == "vlm-only":
+            job = self.service.catalog.claim_ai_semantic_stage()
+            return self._execute_semantic_stage(job) if job is not None else None
         if state != "ready":
             return {
                 "status": "idle",
@@ -198,8 +360,31 @@ class AIWorker:
         asset_id = job["asset_id"]
         force_full = bool(job.get("force_full", False))
         stage = "setup"
+        pipeline_started = time.perf_counter()
+        stage_started = pipeline_started
+        current_timing_stage = "setup"
+        stage_durations_ms: dict[str, float] = {}
         rejections: dict[str, int] = {}
         policy_evaluated = False
+
+        def begin_timing(next_stage: str):
+            nonlocal stage_started, current_timing_stage
+            stage_durations_ms[current_timing_stage] = round(
+                (time.perf_counter() - stage_started) * 1000, 1
+            )
+            stage_started = time.perf_counter()
+            current_timing_stage = next_stage
+
+        def timing_snapshot() -> dict[str, float]:
+            if current_timing_stage not in stage_durations_ms:
+                stage_durations_ms[current_timing_stage] = round(
+                    (time.perf_counter() - stage_started) * 1000, 1
+                )
+            stage_durations_ms["total"] = round(
+                (time.perf_counter() - pipeline_started) * 1000, 1
+            )
+            return dict(stage_durations_ms)
+
         try:
             if job["preview_status"] != "ready":
                 raise RuntimeError(
@@ -228,27 +413,57 @@ class AIWorker:
 
             face_jpeg = prepare_jpeg(preview, self.service.settings.ai_face_max_image_side)
             vlm_jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
+            face_width, face_height = jpeg_dimensions(face_jpeg)
+            vlm_width, vlm_height = jpeg_dimensions(vlm_jpeg)
             # Fingerprint computation and persistence are part of the analysis
             # pipeline: a failure here fails the AI job normally.
+            begin_timing("fingerprint")
             stage = "fingerprint"
             fingerprint = compute_fingerprint(vlm_jpeg)
             if self.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is None:
                 self.service.catalog.upsert_fingerprint(asset_id, fingerprint)
             model_digest = resolve_model_digest(self.service.settings, self.service.settings.ai_model)
+            begin_timing("reuse")
             stage = "semantic"
             decision, source, source_run_id, rejections, policy_evaluated = self._semantic_reuse(
                 manifest, fingerprint, vlm_jpeg, model_digest, force_full
             )
-            # The face stage is a short remote call (a fraction of a second)
-            # that completes before the VLM's much heavier request starts; it
-            # runs on every claimed job, including reused frames (Q6).
-            stage = "face"
-            faces = self.faces.analyze(face_jpeg)
             reuse_mode = self.service.settings.ai_semantic_reuse_mode
             matched_source = source
             matched_source_run_id = source_run_id
-            stage = "semantic"
-            if reuse_mode == "on" and not force_full and decision.accepted and source is not None:
+            reuse_semantic = (
+                reuse_mode == "on" and not force_full and decision.accepted and source is not None
+            )
+            persisted_semantic = (
+                None
+                if reuse_semantic
+                else self._load_semantic_stage(asset_id, manifest.primary.sha256)
+            )
+            # Face and semantic are independent stages today. Run them in
+            # parallel; the publish stage below remains the join point. This
+            # is intentionally expressed as a dependency decision rather than
+            # a face/semantic special case so future stages can add
+            # prerequisites without changing the scheduler shape.
+            begin_timing("face")
+            stage = "face"
+            persisted_faces = self._load_face_stage(asset_id, manifest.primary.sha256)
+            if persisted_faces is not None:
+                faces = persisted_faces
+                face_elapsed = 0.0
+            elif persisted_semantic is not None:
+                face_started = time.perf_counter()
+                faces = self.faces.analyze(face_jpeg)
+                face_elapsed = (time.perf_counter() - face_started) * 1000
+                self._persist_face_stage(asset_id, manifest.primary.sha256, faces)
+            elif reuse_semantic:
+                face_started = time.perf_counter()
+                faces = self.faces.analyze(face_jpeg)
+                face_elapsed = (time.perf_counter() - face_started) * 1000
+                self._persist_face_stage(asset_id, manifest.primary.sha256, faces)
+            elif not independent("face", "semantic", {"preview"}):
+                raise RuntimeError("AI pipeline dependency graph rejected face/semantic stages")
+
+            if reuse_semantic:
                 # The semantic description is inherited from the verified
                 # near-duplicate; face observations and provenance stay
                 # target-specific and are never inherited.
@@ -257,15 +472,60 @@ class AIWorker:
                 semantic_origin = "reused"
                 reuse_policy_version = REUSE_POLICY_VERSION
                 similarity = decision.similarity
-            else:
-                vlm_started = time.monotonic()
-                semantic, model_digest, metrics = analyze_semantics(self.service.settings, vlm_jpeg)
-                self._last_vlm_seconds = time.monotonic() - vlm_started
+            elif persisted_faces is not None or persisted_semantic is not None:
+                semantic_started = time.perf_counter()
+                if persisted_semantic is not None:
+                    semantic, model_digest, metrics = persisted_semantic
+                    semantic_elapsed = 0.0
+                else:
+                    semantic, model_digest, metrics = analyze_semantics(
+                        self.service.settings, vlm_jpeg
+                    )
+                    semantic_elapsed = (time.perf_counter() - semantic_started) * 1000
+                    self._persist_semantic_stage(
+                        asset_id, manifest.primary.sha256, semantic, model_digest, metrics
+                    )
+                    self._last_vlm_seconds = semantic_elapsed / 1000
                 semantic_origin = "computed"
                 source = None
                 source_run_id = None
                 reuse_policy_version = None
                 similarity = None
+            else:
+                def run_face_stage():
+                    started = time.perf_counter()
+                    result = self.faces.analyze(face_jpeg)
+                    return result, (time.perf_counter() - started) * 1000
+
+                def run_semantic_stage():
+                    started = time.perf_counter()
+                    result = analyze_semantics(self.service.settings, vlm_jpeg)
+                    return result, (time.perf_counter() - started) * 1000
+
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="photo-ai-stage") as pool:
+                    face_future = pool.submit(run_face_stage)
+                    semantic_future = pool.submit(run_semantic_stage)
+                    faces, face_elapsed = face_future.result()
+                    # Make the face result durable as soon as that stage
+                    # returns. Semantic inference may still be running.
+                    self._persist_face_stage(asset_id, manifest.primary.sha256, faces)
+                    (semantic, model_digest, metrics), semantic_elapsed = semantic_future.result()
+                self._persist_semantic_stage(
+                    asset_id, manifest.primary.sha256, semantic, model_digest, metrics
+                )
+                self._last_vlm_seconds = semantic_elapsed / 1000
+                semantic_origin = "computed"
+                source = None
+                source_run_id = None
+                reuse_policy_version = None
+                similarity = None
+            stage_durations_ms["face"] = round(face_elapsed, 1)
+            if reuse_semantic:
+                stage_durations_ms["semantic"] = 0.0
+            else:
+                stage_durations_ms["semantic"] = round(semantic_elapsed, 1)
+            stage_started = time.perf_counter()
+            current_timing_stage = "publish"
             run_id = str(uuid4())
             created_at = datetime.now(UTC).isoformat()
             public_result = {
@@ -341,7 +601,15 @@ class AIWorker:
                     "runId": matched_source_run_id,
                 }
             result["counters"] = self._counters(
-                semantic_origin, force_full, rejections, policy_evaluated
+                semantic_origin,
+                force_full,
+                rejections,
+                policy_evaluated,
+                stage_durations_ms=timing_snapshot(),
+                input_metrics={
+                    "face": {"width": face_width, "height": face_height, "bytes": len(face_jpeg)},
+                    "vlm": {"width": vlm_width, "height": vlm_height, "bytes": len(vlm_jpeg)},
+                },
             )
             return result
         except (AIServiceUnavailableError, FaceServiceUnavailable) as error:
@@ -367,7 +635,12 @@ class AIWorker:
                 "stage": stage,
             }
             result["counters"] = self._counters(
-                None, force_full, rejections, policy_evaluated, failed_stage=stage
+                None,
+                force_full,
+                rejections,
+                policy_evaluated,
+                failed_stage=stage,
+                stage_durations_ms=timing_snapshot(),
             )
             return result
         except Exception as error:
@@ -383,7 +656,12 @@ class AIWorker:
                 "stage": stage,
             }
             result["counters"] = self._counters(
-                None, force_full, rejections, policy_evaluated, failed_stage=stage
+                None,
+                force_full,
+                rejections,
+                policy_evaluated,
+                failed_stage=stage,
+                stage_durations_ms=timing_snapshot(),
             )
             return result
 
@@ -394,6 +672,8 @@ class AIWorker:
         rejections: dict[str, int],
         policy_evaluated: bool,
         failed_stage: str | None = None,
+        stage_durations_ms: dict[str, float] | None = None,
+        input_metrics: dict | None = None,
     ) -> dict:
         """Operational counters for the rollout (see docs/rollout-semantic-reuse.md).
 
@@ -406,6 +686,7 @@ class AIWorker:
         - ``vlmTimeAvoided``: wall-clock seconds of the last real VLM call,
           reported on reused runs as the estimated VLM time avoided;
         - ``stageFailures``: failures split by setup/fingerprint/face/semantic.
+        - ``stageDurationsMs``: elapsed time by pipeline stage plus ``total``.
         """
         counters: dict = {
             "semanticComputed": 1 if semantic_origin == "computed" else 0,
@@ -426,6 +707,8 @@ class AIWorker:
                 "face": 0,
                 "semantic": 0,
             },
+            "stageDurationsMs": dict(stage_durations_ms or {}),
+            "inputMetrics": dict(input_metrics or {}),
         }
         if failed_stage is not None:
             counters["stageFailures"][failed_stage] = 1
@@ -586,6 +869,10 @@ def _log_state_transition(previous: str | None, state: str, detail: str) -> None
         message = "AI services not configured; the worker idles until both service URLs are set"
     elif state == "ready":
         message = "AI services healthy; claiming analysis jobs again"
+    elif state == "face-only":
+        message = "VLM unavailable; draining independent face stages"
+    elif state == "vlm-only":
+        message = "Face service unavailable; draining independent semantic stages"
     else:
         message = f"AI service unavailable ({detail}); not claiming, backing off"
     print(
@@ -602,7 +889,7 @@ def _log_state_transition(previous: str | None, state: str, detail: str) -> None
     )
 
 
-def run(service: Service, once: bool = False) -> dict | None:
+def _run_dispatcher(service: Service) -> None:
     """Run the AI dispatcher.
 
     ``once`` executes a single pass (gate, then claim and execute when
@@ -610,43 +897,46 @@ def run(service: Service, once: bool = False) -> dict | None:
     and an unconfigured worker reports
     ``{"status": "idle", "reason": "ai-not-configured"}``.
 
-    The loop keeps at most ``PHOTO_AI_WORKER_CONCURRENCY`` analyses in
-    flight: it claims jobs as slots free (the job rows' 1800 s lease makes
-    crashed in-flight jobs reclaimable) and runs them on a worker pool.
+    The loop claims and executes one analysis at a time. The job row's 1800 s
+    lease makes a crashed in-flight job reclaimable.
     Not configured: fixed 10 s cadence, no claim, slow heartbeat.
     Configured but a service unhealthy: 10 s backoff doubling to 120 s, no
     claim, transition-logged. The probes never raise out of the loop.
     """
     worker = AIWorker(service)
-    if once:
-        result = worker.run_once()
-        return result if result is not None else {"status": "idle"}
 
-    bound = service.settings.ai_worker_concurrency
-    pool = ThreadPoolExecutor(max_workers=bound, thread_name_prefix="ai-worker")
-    in_flight: set[Future] = set()
     last_state: str | None = None
     backoff = _BACKOFF_INITIAL_SECONDS
     last_heartbeat = 0.0
     try:
         while True:
-            for future in list(in_flight):
-                if future.done():
-                    in_flight.discard(future)
-                    try:
-                        result = future.result()
-                    except Exception as error:
-                        # An execution must never be able to kill the
-                        # dispatcher; the job's lease expires for reclamation.
-                        result = {
-                            "jobType": "analysis",
-                            "status": "failed",
-                            "stage": "setup",
-                            "error": f"analysis execution crashed: {error}",
-                        }
-                    print(json.dumps(result), flush=True)
-
             state, detail = worker._gate()
+            if state == "face-only":
+                if state != last_state:
+                    _log_state_transition(last_state, state, detail)
+                    backoff = _BACKOFF_INITIAL_SECONDS
+                    last_heartbeat = 0.0
+                last_state = state
+                job = worker._claim_face_stage()
+                if job is None:
+                    time.sleep(_NO_JOBS_SLEEP_SECONDS)
+                    continue
+                print(json.dumps(worker._execute_face_stage(job)), flush=True)
+                continue
+
+            if state == "vlm-only":
+                if state != last_state:
+                    _log_state_transition(last_state, state, detail)
+                    backoff = _BACKOFF_INITIAL_SECONDS
+                    last_heartbeat = 0.0
+                last_state = state
+                job = worker.service.catalog.claim_ai_semantic_stage()
+                if job is None:
+                    time.sleep(_NO_JOBS_SLEEP_SECONDS)
+                    continue
+                print(json.dumps(worker._execute_semantic_stage(job)), flush=True)
+                continue
+
             if state != "ready":
                 if state != last_state:
                     _log_state_transition(last_state, state, detail)
@@ -683,16 +973,50 @@ def run(service: Service, once: bool = False) -> dict | None:
                 _log_state_transition(last_state, "ready", detail)
             last_state = "ready"
 
-            while len(in_flight) < bound:
-                job = worker._claim()
-                if job is None:
-                    break
-                in_flight.add(pool.submit(worker._execute, job))
-
-            if not in_flight:
+            job = worker._claim()
+            if job is None:
                 time.sleep(_NO_JOBS_SLEEP_SECONDS)
+                continue
+            try:
+                result = worker._execute(job)
+            except Exception as error:
+                # An execution must never be able to kill the dispatcher; the
+                # job's lease expires for reclamation.
+                result = {
+                    "jobType": "analysis",
+                    "status": "failed",
+                    "stage": "setup",
+                    "error": f"analysis execution crashed: {error}",
+                }
+            print(json.dumps(result), flush=True)
     except _StopRunning:
         pass
-    finally:
-        pool.shutdown(wait=True)
+
+
+def run(service: Service, once: bool = False) -> dict | None:
+    """Run one pass or one/more independent AI dispatch loops.
+
+    Multiple loops use the database lease/claim mechanism for coordination.
+    They are intentionally opt-in because they make both face and semantic
+    requests concurrent; the VLM's ``max-num-seqs`` should be configured to
+    at least the same value.
+    """
+    if once:
+        worker = AIWorker(service)
+        result = worker.run_once()
+        return result if result is not None else {"status": "idle"}
+    if service.settings.ai_workers == 1:
+        _run_dispatcher(service)
+        return None
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(
+        max_workers=service.settings.ai_workers, thread_name_prefix="photo-ai"
+    ) as executor:
+        futures = [
+            executor.submit(_run_dispatcher, service)
+            for _ in range(service.settings.ai_workers)
+        ]
+        for future in futures:
+            future.result()
     return None

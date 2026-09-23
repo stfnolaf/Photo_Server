@@ -1,8 +1,8 @@
 """Local, versioned photo understanding through remote AI services.
 
 The semantic model is reached through an OpenAI-compatible chat-completions
-endpoint (``ai_base_url``; the default is the private Ollama service's ``/v1``
-path). Face detection and embedding run in the standalone face-service, which
+endpoint (``ai_base_url``; the default Compose target is vLLM's ``/v1`` path).
+Face detection and embedding run in the standalone face-service, which
 the worker talks to through ``face_client`` (Phase 2B of
 ``docs/ai-service-split-plan.md``) — no learned models live in the photo
 server.
@@ -111,6 +111,12 @@ def prepare_jpeg(path: Path, max_side: int) -> bytes:
     return output.getvalue()
 
 
+def jpeg_dimensions(jpeg: bytes) -> tuple[int, int]:
+    """Return encoded JPEG dimensions without decoding pixel data."""
+    with Image.open(io.BytesIO(jpeg)) as image:
+        return image.size
+
+
 def _model_digest(client: httpx.Client, model: str) -> str:
     response = client.get("/models")
     response.raise_for_status()
@@ -120,17 +126,17 @@ def _model_digest(client: httpx.Client, model: str) -> str:
     for entry in entries:
         name = str(entry.get("id", ""))
         if name == model or name.removesuffix(":latest") == requested:
-            return str(entry.get("digest") or "unknown")
+            return str(entry.get("digest") or f"model:{name}")
     return "unknown"
 
 
 def resolve_model_digest(settings, model: str) -> str:
     """Resolve the current model digest from the VLM without starting inference.
 
-    ``GET {ai_base_url}/models`` with a short fixed timeout; the entry's
-    ``digest`` field (an Ollama ``/v1/models`` extension) is used when
-    present. Any failure — unreachable, HTTP error, model not listed, or
-    no digest field — yields ``"unknown"``, which the reuse gates treat
+    ``GET {ai_base_url}/models`` with a short fixed timeout. Use a provider
+    digest when one is exposed; otherwise use the matched model ID as a
+    stable provider-neutral identity. Any failure — unreachable, HTTP error,
+    or model not listed — yields ``"unknown"``, which the reuse gates treat
     as "never reuse".
     """
     try:
@@ -160,7 +166,7 @@ def _vlm_body(settings, jpeg: bytes, response_format: str) -> dict:
         }
     body: dict = {}
     if settings.ai_extra_body:
-        # Provider extensions (e.g. Ollama options.num_ctx); validated as a
+        # Provider extensions; validated as a
         # JSON object at config parse. Contract fields below always win.
         body.update(json.loads(settings.ai_extra_body))
     body.update(

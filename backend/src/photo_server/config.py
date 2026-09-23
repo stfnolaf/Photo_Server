@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     s3_endpoint: str
     s3_bucket: str = "photo-library"
     s3_anonymous: bool = True
+    s3_multipart_expiry_days: int = Field(
+        default=2, ge=1, le=30, validation_alias="PHOTO_S3_MULTIPART_EXPIRY_DAYS"
+    )
     database_url: str = Field(default="", repr=False)
     postgres_host: str = "localhost"
     postgres_port: int = Field(default=55432, ge=1, le=65535)
@@ -30,6 +33,9 @@ class Settings(BaseSettings):
     max_file_bytes: int = Field(default=512 * 1024 * 1024, ge=1)
     upload_workers: int = Field(default=4, ge=1, le=32)
     upload_abandon_seconds: int = Field(default=24 * 60 * 60, ge=300)
+    upload_cleanup_interval_seconds: int = Field(
+        default=60, ge=10, le=86400, validation_alias="PHOTO_UPLOAD_CLEANUP_INTERVAL"
+    )
     worker_threads: int = Field(default=4, ge=1, le=32)
     postgres_backup_prefix: str = "backups/postgres"
     upload_part_bytes: int = Field(
@@ -41,20 +47,19 @@ class Settings(BaseSettings):
     exiftool: str = "exiftool"
     # OpenAI-compatible VLM endpoint: empty = AI not configured (Phase 3A —
     # the worker idles and analysis jobs accumulate as pending); any remote
-    # or hosted provider otherwise. Compose sets the local Ollama /v1 URL
+    # or hosted provider otherwise. Compose sets the local vLLM /v1 URL
     # explicitly, so standard deployments are unaffected.
     ai_base_url: str = ""
-    ai_model: str = "qwen3-vl:8b-instruct-q4_K_M"
+    ai_model: str = "unsloth/Qwen3-VL-8B-Instruct-bnb-4bit"
     ai_timeout_seconds: int = Field(default=600, ge=30, le=3600)
     ai_api_key: str = ""
     ai_extra_body: str = ""
     ai_face_max_image_side: int = Field(default=2000, ge=512, le=4096)
     ai_vlm_max_image_side: int = Field(default=1280, ge=512, le=4096)
-    # Phase 3A: the AI dispatcher's client-side bound — how many analyses it
-    # may run in flight at once (1 = today's single-consumer loop). It is a
-    # resource cap, not a throttle: beyond 1 the services pace the client
-    # (face-service queue / 429, Ollama's internal queue, provider limits).
-    ai_worker_concurrency: int = Field(default=1, ge=1, le=8)
+    # Number of AI dispatcher loops. Keep at one while benchmarking; increasing
+    # this permits multiple semantic requests in flight and should be paired
+    # with a matching vLLM max-num-seqs setting.
+    ai_workers: int = Field(default=1, ge=1, le=8)
     # Semantic-reuse rollout mode: "off" always invokes the VLM, "observe" records
     # the reuse decision but still invokes the VLM, "on" reuses semantics when every
     # gate passes. The first release defaults to "observe".
@@ -62,8 +67,12 @@ class Settings(BaseSettings):
     # Burst clustering thresholds. Clustering is an always-on display feature and
     # is independent of the semantic-reuse rollout mode; these only affect which
     # frames are grouped into a burst.
-    burst_cluster_phash_max_distance: int = Field(default=4, ge=0, le=64)
-    burst_cluster_dhash_max_distance: int = Field(default=6, ge=0, le=64)
+    # Calibrated against the Sony A7 IV Hawaii set: a modest zoom can reach
+    # pHash 22 / dHash 14 while still being an obvious burst pair. Keep both
+    # gates so composition changes do not pass on pHash alone.
+    burst_cluster_phash_max_distance: int = Field(default=24, ge=0, le=64)
+    burst_cluster_dhash_max_distance: int = Field(default=16, ge=0, le=64)
+    burst_cluster_capture_window_seconds: int = Field(default=35, ge=1, le=3600)
     # Face inference runs in the standalone face-service (Phase 2B of
     # docs/ai-service-split-plan.md); the worker is a plain HTTP client
     # (face_client). An empty URL means AI is not configured: Phase 3A's
@@ -105,9 +114,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_ai_extra_body(self):
-        # Provider extensions merged into the VLM request body (e.g. Ollama
-        # options.num_ctx). Must be a JSON object when set, so a typo is a
-        # startup error, not a failure mid-analysis.
+        # Provider extensions merged into the VLM request body. Must be a JSON
+        # object when set, so a typo is a startup error, not a failure
+        # mid-analysis.
         if self.ai_extra_body:
             try:
                 value = json.loads(self.ai_extra_body)

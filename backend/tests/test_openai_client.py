@@ -346,7 +346,7 @@ def test_digest_matches_model_id_with_latest_suffix(monkeypatch):
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
-        ({"data": [{"id": "m2:latest"}]}, "unknown"),  # no digest field
+        ({"data": [{"id": "m2:latest"}]}, "model:m2:latest"),  # provider has no digest extension
         ({"data": [{"id": "other", "digest": "sha256:other"}]}, "unknown"),  # no match
         ({"data": []}, "unknown"),  # nothing listed
         ({"wrong": "shape"}, "unknown"),  # not the models envelope

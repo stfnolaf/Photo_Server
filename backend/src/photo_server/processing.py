@@ -12,10 +12,11 @@ from uuid import uuid5
 
 from photo_server import metadata
 from photo_server.config import LibraryError
+from photo_server.fingerprints import BURST_HASH_VERSION, compute_fingerprint
 from photo_server.models import Manifest, Mutation
 from photo_server.storage import canonical_json
 
-STAGE_JOBS = {"metadata": "metadata-v1"}
+STAGE_JOBS = {"fingerprint": "fingerprint-v1", "metadata": "metadata-v1"}
 PROCESSING_JOB_TYPES = tuple(STAGE_JOBS.values())
 
 
@@ -59,6 +60,32 @@ def process_metadata(service, manifest: Manifest) -> dict:
     return {"status": "updated", "revision": result["revision"]}
 
 
+def process_fingerprint(service, manifest: Manifest) -> dict:
+    """Compute the burst fingerprint without requiring AI services."""
+    from photo_server.worker import cache_paths, generate
+
+    asset_id = str(manifest.asset_id)
+    if service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is not None:
+        # Reconciliation is intentionally also run for already-persisted
+        # fingerprints so policy/context changes can repair split clusters.
+        service.catalog.reconcile_burst(asset_id)
+        return {"status": "unchanged", "fingerprintVersion": BURST_HASH_VERSION}
+    preview = cache_paths(service, manifest)["preview"]
+    if not preview.is_file() and not generate(service, manifest):
+        raise LibraryError("Preview could not be generated for fingerprinting")
+    from photo_server.analysis import prepare_jpeg
+
+    jpeg = prepare_jpeg(preview, service.settings.ai_vlm_max_image_side)
+    fingerprint = compute_fingerprint(jpeg)
+    service.catalog.upsert_fingerprint(asset_id, fingerprint)
+    return {
+        "status": "created",
+        "fingerprintVersion": fingerprint.algorithm_version,
+        "width": fingerprint.width,
+        "height": fingerprint.height,
+    }
+
+
 def run_stage(service, asset_id: str, job_type: str) -> dict:
     """Dispatch a claimed processing job through the stage registry."""
     manifest = service.catalog.get(asset_id)
@@ -66,4 +93,6 @@ def run_stage(service, asset_id: str, job_type: str) -> dict:
         raise FileNotFoundError("Processing job references a missing asset")
     if job_type == STAGE_JOBS["metadata"]:
         return process_metadata(service, manifest)
+    if job_type == STAGE_JOBS["fingerprint"]:
+        return process_fingerprint(service, manifest)
     raise LibraryError(f"Unsupported processing job type: {job_type}")

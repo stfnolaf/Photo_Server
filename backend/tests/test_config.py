@@ -83,6 +83,22 @@ def test_ai_image_sizes_have_separate_environment_overrides(monkeypatch, tmp_pat
     assert settings.ai_vlm_max_image_side == 1024
 
 
+def test_burst_cluster_thresholds_are_environment_overrides(monkeypatch, tmp_path):
+    clear_credentials(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text(
+        "PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE=28\n"
+        "PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE=19\n"
+    )
+    settings = Settings(
+        _env_file=env,
+        s3_endpoint="http://localhost:9000",
+        database_url="postgresql+psycopg://test@localhost/test",
+    )
+    assert settings.burst_cluster_phash_max_distance == 28
+    assert settings.burst_cluster_dhash_max_distance == 19
+
+
 def test_ai_settings_unconfigured_by_default(monkeypatch):
     # Phase 3A: AI is an optional configuration — the VLM endpoint is empty
     # by default (the worker idles; compose sets the local URL explicitly).
@@ -95,7 +111,7 @@ def test_ai_settings_unconfigured_by_default(monkeypatch):
     assert settings.ai_base_url == ""
     assert settings.ai_api_key == ""
     assert settings.ai_extra_body == ""
-    assert settings.ai_worker_concurrency == 1
+    assert settings.ai_model == "unsloth/Qwen3-VL-8B-Instruct-bnb-4bit"
 
 
 def test_ai_endpoint_settings_come_from_environment(monkeypatch, tmp_path):

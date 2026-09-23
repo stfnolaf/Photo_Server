@@ -1,10 +1,11 @@
 name: photo-server
 x-backend: &backend
   build: ./backend
-  environment:
+  environment: &backend-environment
     PHOTO_S3_ENDPOINT: ${PHOTO_S3_ENDPOINT:?Set PHOTO_S3_ENDPOINT in .env}
     PHOTO_S3_BUCKET: ${PHOTO_S3_BUCKET:-photo-library}
     PHOTO_S3_ANONYMOUS: ${PHOTO_S3_ANONYMOUS:-true}
+    PHOTO_S3_MULTIPART_EXPIRY_DAYS: ${PHOTO_S3_MULTIPART_EXPIRY_DAYS:-2}
     POSTGRES_USER: ${POSTGRES_USER:-photo}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     POSTGRES_DB: ${POSTGRES_DB:-photo}
@@ -15,7 +16,13 @@ x-backend: &backend
     PHOTO_MAX_FILE_BYTES: ${PHOTO_MAX_FILE_BYTES:-536870912}
     PHOTO_UPLOAD_WORKERS: ${PHOTO_UPLOAD_WORKERS:-4}
     PHOTO_UPLOAD_ABANDON_SECONDS: ${PHOTO_UPLOAD_ABANDON_SECONDS:-86400}
+    PHOTO_UPLOAD_CLEANUP_INTERVAL: ${PHOTO_UPLOAD_CLEANUP_INTERVAL:-60}
     PHOTO_WORKER_THREADS: ${PHOTO_WORKER_THREADS:-4}
+    # Display-only burst grouping thresholds. Both perceptual hashes must be
+    # within their configured distances for a frame to join a burst.
+    PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE: ${PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE:-24}
+    PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE: ${PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE:-16}
+    PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS: ${PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS:-35}
     # Preview cache LRU limit. Previews are disposable: after eviction a
     # GET /assets/{id}/preview returns 202 and re-encodes from the immutable
     # S3 original, so over budget costs only a re-encode. The worker evicts
@@ -28,21 +35,21 @@ x-backend: &backend
     PHOTO_UPLOAD_PART_BYTES: ${PHOTO_UPLOAD_PART_BYTES:-8388608}
     PHOTO_CORS_ORIGINS: ${PHOTO_CORS_ORIGINS:-}
     # OpenAI-compatible VLM endpoint; empty disables the AI worker gate.
-    # Local Compose uses http://ollama:11434/v1; hosted providers are also
+    # Local Compose uses http://vllm:8000/v1; hosted providers are also
     # supported when PHOTO_AI_API_KEY is set.
-    PHOTO_AI_BASE_URL: ${PHOTO_AI_BASE_URL:-}
-    PHOTO_AI_MODEL: ${PHOTO_AI_MODEL:-qwen3-vl:8b-instruct-q4_K_M}
+    PHOTO_AI_BASE_URL: ${PHOTO_AI_BASE_URL:-http://vllm:8000/v1}
+    PHOTO_AI_MODEL: ${PHOTO_AI_MODEL:-unsloth/Qwen3-VL-8B-Instruct-bnb-4bit}
     PHOTO_AI_TIMEOUT_SECONDS: ${PHOTO_AI_TIMEOUT_SECONDS:-600}
     PHOTO_AI_API_KEY: ${PHOTO_AI_API_KEY:-}
     PHOTO_AI_EXTRA_BODY: ${PHOTO_AI_EXTRA_BODY:-}
-    PHOTO_AI_WORKER_CONCURRENCY: ${PHOTO_AI_WORKER_CONCURRENCY:-1}
     PHOTO_AI_FACE_MAX_IMAGE_SIDE: ${PHOTO_AI_FACE_MAX_IMAGE_SIDE:-2000}
     PHOTO_AI_VLM_MAX_IMAGE_SIDE: ${PHOTO_AI_VLM_MAX_IMAGE_SIDE:-1280}
+    PHOTO_AI_WORKERS: ${PHOTO_AI_WORKERS:-1}
     # Face inference runs in the standalone face-service (Phase 2B of
     # docs/ai-service-split-plan.md); the worker only talks to it over HTTP
-    # (face_client). An empty PHOTO_FACE_SERVICE_URL leaves the face stage
-    # unavailable (Phase 3A idles on it).
-    PHOTO_FACE_SERVICE_URL: ${PHOTO_FACE_SERVICE_URL:-}
+    # (face_client). Local Compose wires the face-service automatically;
+    # setting either AI URL empty still disables the AI worker gate.
+    PHOTO_FACE_SERVICE_URL: ${PHOTO_FACE_SERVICE_URL:-http://face-service:8901}
     PHOTO_FACE_SERVICE_TOKEN: ${PHOTO_FACE_SERVICE_TOKEN:-}
     PHOTO_FACE_SERVICE_TIMEOUT: ${PHOTO_FACE_SERVICE_TIMEOUT:-120}
     PHOTO_FACE_MATCH_THRESHOLD: ${PHOTO_FACE_MATCH_THRESHOLD:-0.4}
@@ -70,15 +77,27 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
-  ollama:
-    image: ollama/ollama:0.12.7
+  vllm:
+    image: ${PHOTO_VLLM_IMAGE:-vllm/vllm-openai:v0.11.2}
     restart: unless-stopped
-    environment:
-      OLLAMA_KEEP_ALIVE: 10m
-      OLLAMA_MAX_LOADED_MODELS: 1
-      OLLAMA_NUM_PARALLEL: 1
+    command:
+      - --model
+      - ${PHOTO_AI_MODEL:-unsloth/Qwen3-VL-8B-Instruct-bnb-4bit}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --served-model-name
+      - ${PHOTO_AI_MODEL:-unsloth/Qwen3-VL-8B-Instruct-bnb-4bit}
+      - --max-model-len
+      - ${PHOTO_VLLM_MAX_MODEL_LEN:-4096}
+      - --max-num-seqs
+      - "${PHOTO_VLLM_MAX_NUM_SEQS:-1}"
+      - --gpu-memory-utilization
+      - ${PHOTO_VLLM_GPU_MEMORY_UTILIZATION:-0.70}
+      - --no-enforce-eager
     volumes:
-      - ollama-data:/root/.ollama
+      - vllm-cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -87,19 +106,10 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 5s
-      timeout: 5s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 10s
       retries: 30
-  ollama-model:
-    image: ollama/ollama:0.12.7
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["/bin/ollama"]
-    command: ["pull", "${PHOTO_AI_MODEL:-qwen3-vl:8b-instruct-q4_K_M}"]
-    depends_on:
-      ollama:
-        condition: service_healthy
   backup:
     build: ./ops/postgres-backup
     restart: unless-stopped
@@ -127,7 +137,22 @@ services:
       - "${PHOTO_API_BIND:-0.0.0.0}:${PHOTO_API_PORT:-8000}:8000"
   worker:
     <<: *backend
-    command: ["photo-server", "worker"]
+    command: ["photo-server", "worker", "--mode", "onboarding"]
+    environment:
+      <<: *backend-environment
+      PHOTO_WORKER_THREADS: ${PHOTO_ONBOARDING_WORKERS:-4}
+  processing-worker:
+    <<: *backend
+    command: ["photo-server", "worker", "--mode", "processing"]
+    environment:
+      <<: *backend-environment
+      PHOTO_WORKER_THREADS: ${PHOTO_PROCESSING_WORKERS:-2}
+  preview-worker:
+    <<: *backend
+    command: ["photo-server", "worker", "--mode", "preview"]
+    environment:
+      <<: *backend-environment
+      PHOTO_WORKER_THREADS: ${PHOTO_PREVIEW_WORKERS:-2}
   face-service:
     # The GPU service of the stack (Phase 2B): the only place a face model
     # runs. Stateless — results flow back over HTTP and land in Postgres/S3
@@ -170,4 +195,4 @@ services:
 volumes:
   postgres-data:
   app-data:
-  ollama-data:
+  vllm-cache:
