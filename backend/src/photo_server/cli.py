@@ -21,6 +21,10 @@ def main():
         help="Download and hash every blob, in addition to checking its size",
     )
     commands.add_parser("list", help="List up to 100 indexed assets")
+    commands.add_parser(
+        "recluster-bursts",
+        help="Rebuild all display burst memberships using the current thresholds",
+    )
     refresh = commands.add_parser(
         "refresh-metadata", help="Queue metadata reprocessing from immutable originals"
     )
@@ -28,6 +32,15 @@ def main():
         "--asset", type=UUID, action="append", help="Asset to process; repeat for many"
     )
     refresh.add_argument(
+        "--include-deleted", action="store_true", help="Include hidden when processing the library"
+    )
+    fingerprint = commands.add_parser(
+        "backfill-fingerprints", help="Queue preview-independent burst fingerprint processing"
+    )
+    fingerprint.add_argument(
+        "--asset", type=UUID, action="append", help="Asset to process; repeat for many"
+    )
+    fingerprint.add_argument(
         "--include-deleted", action="store_true", help="Include hidden when processing the library"
     )
     analyze = commands.add_parser(
@@ -51,6 +64,12 @@ def main():
     )
     worker = commands.add_parser("worker")
     worker.add_argument("--once", action="store_true", help="Process at most one queued job")
+    worker.add_argument(
+        "--mode",
+        choices=("all", "onboarding", "processing", "preview"),
+        default="all",
+        help="Queue lane to serve (default: all; use dedicated Compose workers for isolation)",
+    )
     ai_worker = commands.add_parser("ai-worker")
     ai_worker.add_argument("--once", action="store_true", help="Analyze at most one queued asset")
     commands.add_parser(
@@ -73,10 +92,18 @@ def main():
                 result = service.verify(args.full)
             elif args.command == "list":
                 result = service.catalog.list_assets()
+            elif args.command == "recluster-bursts":
+                result = service.catalog.recluster_bursts()
             elif args.command == "refresh-metadata":
                 result = service.queue_processing(
                     args.asset,
                     ["metadata"],
+                    args.include_deleted,
+                )
+            elif args.command == "backfill-fingerprints":
+                result = service.queue_processing(
+                    args.asset,
+                    ["fingerprint"],
                     args.include_deleted,
                 )
             elif args.command == "analyze":
@@ -97,9 +124,9 @@ def main():
                 from photo_server.worker import run, run_once
 
                 if args.once:
-                    result = run_once(service) or {"status": "idle"}
+                    result = run_once(service, args.mode) or {"status": "idle"}
                 else:
-                    run(service)
+                    run(service, args.mode)
                     return
         print(json.dumps(result, indent=2))
         if isinstance(result, dict) and (

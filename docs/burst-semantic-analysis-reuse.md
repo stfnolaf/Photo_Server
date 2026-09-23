@@ -136,18 +136,36 @@ reversible user state.
 
 ### Clustering policy
 
-Clustering uses a separate, display-only policy, initially `burst-cluster-v1`, so that
+Clustering uses a separate, display-only policy, now `burst-cluster-v2`, so that
 tuning it can never broaden the conservative semantic-reuse policy. A frame joins a burst
-when, relative to an existing member of that burst, all of the following hold:
+when its perceptual fingerprint matches and its contextual evidence is sufficient relative
+to an existing member of that burst:
 
 1. It is a different asset.
 2. Its fingerprint algorithm version matches.
 3. Its aspect ratio is effectively identical and its dimensions are compatible.
-4. Its capture time is within three seconds of the member when both timestamps are known.
-5. Its camera identity matches when both assets provide camera make/model or a stable
-   device identifier.
-6. pHash Hamming distance is at most the configured threshold (initially 4) and dHash
-   Hamming distance is at most the configured threshold (initially 6).
+4. Its capture time is within three seconds of the member when both timestamps are known;
+   timestamps with offsets are compared as instants, rather than as local clock values.
+   A wider time gap can be accepted when matching camera-sequence filenames and a shutter
+   count gap of at most three provide independent confirmation.
+5. Its camera identity matches when both assets provide camera make/model. Known
+   conflicting camera identities veto the match.
+6. pHash Hamming distance is at most the configured threshold (initially 24) and dHash
+   Hamming distance is at most the configured threshold (initially 16). These display-only
+   thresholds are calibrated to tolerate modest zoom while retaining both independent hash
+   gates.
+7. It reaches the minimum contextual evidence score. Capture proximity contributes three
+   points, matching camera identity one, a nearby filename sequence two, nearby import
+   time one, and a nearby shutter count one to three. A shutter-count gap over 20 or an
+   import gap over seven days contributes a small negative signal. At least two evidence
+   signals and four points are required.
+
+Filename sequence and import time are corroborating signals, not requirements. Filenames
+are only recognized when both names have the same non-numeric prefix and extension and
+their numeric portions are within three frames. Generic repeated names therefore cannot
+create a burst by themselves. Shutter count is optional and reads maker-specific metadata
+such as `ShutterCount` when ExifTool exposes it; absent or unsupported maker metadata is
+neutral.
 
 Unlike the reuse policy, clustering does not require the member to have a current
 analysis run, and it does not perform the final pixel comparison. The Hamming gates are
@@ -156,7 +174,8 @@ that the user can still expand and review. The thresholds start at the reuse val
 are tuned independently; changing them increments the clustering policy version without
 affecting `reuse_policy_version`. The clustering thresholds are configurable in the
 environment file, so operators can tune burst grouping without a code change (see the
-Configuration and rollout section).
+Configuration and rollout section). The policy version is persisted on each cluster so
+historical clusters can be explicitly rebuilt when the policy changes.
 
 A frame with no fingerprint, or with metadata that fails the gates, is not clustered and
 is shown as an individual frame.
@@ -390,20 +409,29 @@ Useful operational counters are:
 Clustering ships as an always-on display feature, not gated by `PHOTO_AI_SEMANTIC_REUSE_MODE`.
 It is display-only and carries no correctness risk: a false positive only stacks two similar
 frames that the user can still expand and review, and no frame is ever merged, deleted, or
-hidden at rest. Because it is governed by the separate `burst-cluster-v1` policy version,
+hidden at rest. Because it is governed by the separate `burst-cluster-v2` policy version,
 tuning its thresholds can never broaden the conservative semantic-reuse policy, and the reuse
 mode (`off`/`observe`/`on`) does not change clustering behavior.
 
 The clustering similarity thresholds are configurable in the environment file:
 
-- `PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE` (default 4): maximum pHash Hamming distance
+- `PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE` (default 24): maximum pHash Hamming distance
   for a frame to join a burst.
-- `PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE` (default 6): maximum dHash Hamming distance
+- `PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE` (default 16): maximum dHash Hamming distance
   for a frame to join a burst.
+- `PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS` (default 35): capture-time window for
+  the normal burst-context match. Consecutive filename and shutter-count evidence can
+  still corroborate a slower sequence outside this window.
 
 These settings affect only the display-only clustering policy. The conservative
 semantic-reuse thresholds remain fixed constants of the `burst-reuse-v1` policy and are
 not configurable, so environment tuning can never broaden the reuse gates.
+
+Use `photo-server recluster-bursts` or `POST /maintenance/recluster-bursts` after changing
+these settings. The operation rebuilds all current burst memberships from persisted
+fingerprints and is safe to repeat. It also removes pending semantic-analysis work for
+non-representative burst members; running analysis is allowed to finish, and existing
+analysis results are preserved.
 
 ## Failure handling
 
@@ -596,7 +624,7 @@ distance, and deterministic candidate ordering. No database or worker changes.
 
 ### Phase 5 — Clustering and best-shot backend
 
-**Objective.** Implement `burst-cluster-v1` membership, representative management,
+**Objective.** Implement `burst-cluster-v2` membership, representative management,
 deletion semantics, and the burst API surface. Introduces migration `008`.
 
 **Create.**
@@ -625,8 +653,8 @@ deletion semantics, and the burst API surface. Introduces migration `008`.
   - Attach `burstId`, `burstSize`, and `burstRepresentativeAssetId` to `asset_summary`
     via a join on `burst_members`/`burst_clusters`.
 - `backend/src/photo_server/config.py`
-  - `burst_cluster_phash_max_distance: int = 4` and
-    `burst_cluster_dhash_max_distance: int = 6`.
+  - `burst_cluster_phash_max_distance: int = 24` and
+    `burst_cluster_dhash_max_distance: int = 16`.
 
 **Acceptance criteria** (Testing → Clustering and best-shot tests):
 - `burst.setRepresentative` persists and survives a reload; selecting another frame moves

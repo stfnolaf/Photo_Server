@@ -35,14 +35,23 @@ export function PhotoCard({
           <PreviewImage src={photo.thumbnailUrl} status={photo.preview.status} alt="" />
           <span className="format-chip">{photo.mediaType}</span>
           {photo.dateSource === "import" && <span className="import-chip">Import date</span>}
-          {burst && (
-            <span className="burst-badge">
-              <Layers size={12} />
-              {photo.burstSize}
-            </span>
-          )}
         </div>
       </button>
+      {burst && onBurst && (
+        <button
+          className="burst-badge"
+          type="button"
+          title="Choose the best frame"
+          aria-label={`Choose the best frame in this burst of ${photo.burstSize}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onBurst();
+          }}
+        >
+          <Layers size={12} />
+          {photo.burstSize}
+        </button>
+      )}
       <button
         className="photo-card__select"
         type="button"
@@ -52,17 +61,6 @@ export function PhotoCard({
       >
         {selected && <Check size={13} strokeWidth={3} />}
       </button>
-      {burst && onBurst && (
-        <button
-          className="burst-picker"
-          type="button"
-          title="Choose the best frame"
-          aria-label={`Choose the best frame in this burst of ${photo.burstSize}`}
-          onClick={onBurst}
-        >
-          <Layers size={14} />
-        </button>
-      )}
       <div className="photo-card__meta">
         <div className="photo-card__copy">
           <strong title={photo.originalFilename}>{photo.originalFilename}</strong>

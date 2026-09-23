@@ -10,7 +10,7 @@ from test_integration import pytestmark  # noqa: F401
 
 from photo_server.browsing import BrowseQuery
 from photo_server.bursts import BURST_CLUSTER_POLICY_VERSION
-from photo_server.catalog import Catalog
+from photo_server.catalog import Catalog, image_fingerprints
 from photo_server.config import LibraryError
 from photo_server.fingerprints import BURST_HASH_VERSION, Fingerprint, hamming_distance
 from photo_server.models import Blob, Manifest, Mutation
@@ -129,6 +129,32 @@ def test_near_identical_frames_share_cluster(backend):
     catalog = backend.service.catalog
     a, b = make_pair(backend)
     assert cluster_id_of(backend, a) == cluster_id_of(backend, b)
+
+
+def test_existing_cluster_reconciles_with_later_compatible_cluster(backend):
+    """A frame that already has a cluster can still absorb a compatible one."""
+    catalog = backend.service.catalog
+    a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
+    b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
+    catalog.upsert_fingerprint(a, fp(phash="0000000000000000", dhash="0000000000000000"))
+    catalog.upsert_fingerprint(b, fp(phash="ffffffffffffffff", dhash="ffffffffffffffff"))
+    first_cluster = cluster_id_of(backend, a)
+    second_cluster = cluster_id_of(backend, b)
+    assert first_cluster != second_cluster
+
+    # Simulate a later fingerprint recalculation making b compatible with a.
+    with catalog.engine.begin() as connection:
+        connection.execute(
+            image_fingerprints.update()
+            .where(image_fingerprints.c.asset_id == b)
+            .values(phash="0000000000000001", dhash="0000000000000001")
+        )
+    catalog.upsert_fingerprint(b, fp(phash="0000000000000001", dhash="0000000000000001"))
+    assert cluster_id_of(backend, b) == second_cluster
+    assert cluster_id_of(backend, a) == second_cluster
+    detail = catalog.burst_detail(a)
+    assert detail is not None
+    assert {frame["assetId"] for frame in detail["frames"]} == {a, b}
     detail = catalog.burst_detail(a)
     assert len(detail["frames"]) == 2
     item_a = get_item(backend, a)
@@ -299,7 +325,7 @@ def test_hamming_over_threshold_separate_cluster(backend):
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
     far_phash = "ffffffffffffffff"
-    assert hamming_distance(PHASH, far_phash) > 4
+    assert hamming_distance(PHASH, far_phash) > 24
     catalog.upsert_fingerprint(a, fp())
     catalog.upsert_fingerprint(b, fp(phash=far_phash))
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)

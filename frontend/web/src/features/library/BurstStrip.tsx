@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "../../api/client";
 import type { PhotoSummary } from "../../api/types";
 import { Modal } from "../../components/Modal";
+import { PreviewImage } from "../../components/PreviewImage";
 import { formatDate } from "../../domain/library";
 
 export function BurstStrip({
@@ -64,8 +65,13 @@ export function BurstStrip({
                 aria-pressed={isRepresentative}
                 title={isRepresentative ? "Current best frame" : "Make this the best frame"}
               >
-                <img src={frame.thumbnailUrl} alt="" loading="lazy" />
-                <span className="burst-frame__caption">{formatDate(frame.timelineTime)}</span>
+                <div className="burst-frame__image">
+                  <PreviewImage src={frame.previewUrl} status={frame.preview.status} alt="" eager />
+                </div>
+                <span className="burst-frame__caption">
+                  <strong>{frame.originalFilename}</strong>
+                  <span>{formatDate(frame.timelineTime, true)}</span>
+                </span>
                 {isRepresentative && (
                   <span className="burst-frame__best">
                     <Check size={12} strokeWidth={3} /> Best
