@@ -23,6 +23,10 @@ UPLOAD_NEAR_WINDOW = timedelta(minutes=10)
 UPLOAD_FAR_WINDOW = timedelta(days=7)
 _MISSING_TIME_MS = 10**18
 _MIN_EVIDENCE_SCORE = 4
+_STRONG_SEQUENCE_PHASH_MAX = 28
+_STRONG_SEQUENCE_DHASH_MAX = 26
+_NEAR_SEQUENCE_PHASH_MAX = 22
+_NEAR_SEQUENCE_DHASH_MAX = 16
 _FILENAME_SEQUENCE = re.compile(r"^(?P<prefix>.*?)(?P<sequence>\d{2,})(?P<suffix>\.[^.]+)?$", re.IGNORECASE)
 _SHUTTER_COUNT_KEYS = ("ShutterCount", "Shutter Count", "MakerNotes:ShutterCount")
 
@@ -102,7 +106,7 @@ def _filename_evidence(target: str, candidate: str) -> tuple[int, str | None]:
     delta = abs(int(target_match.group("sequence")) - int(candidate_match.group("sequence")))
     if delta == 0:
         return 0, None
-    if delta <= 3:
+    if delta <= 6:
         return 2, f"filename_sequence_delta_{delta}"
     return 0, None
 
@@ -128,11 +132,6 @@ def _evaluate_candidate(
     capture_window: timedelta = CAPTURE_WINDOW,
 ) -> BurstDecision:
     """Apply burst-v2 gates and return the evidence used for the decision."""
-    if hamming_distance(fingerprint.phash, candidate.phash) > phash_max:
-        return BurstDecision(False, 0, (), "phash_distance")
-    if hamming_distance(fingerprint.dhash, candidate.dhash) > dhash_max:
-        return BurstDecision(False, 0, (), "dhash_distance")
-
     target_camera = _camera_identity(target.metadata)
     if (
         target_camera is not None
@@ -140,6 +139,42 @@ def _evaluate_candidate(
         and target_camera.casefold() != candidate.camera_identity.casefold()
     ):
         return BurstDecision(False, 0, (), "camera_conflict")
+
+    filename_score, filename_reason = _filename_evidence(
+        target.primary.original_filename, candidate.original_filename
+    )
+    target_shutter = _shutter_count(target.metadata)
+    shutter_delta = (
+        abs(target_shutter - candidate.shutter_count)
+        if target_shutter is not None and candidate.shutter_count is not None
+        else None
+    )
+    sequence_delta = None
+    if filename_reason:
+        sequence_delta = int(filename_reason.rsplit("_", 1)[-1])
+    # Existing catalogs may not have persisted maker-specific shutter counts;
+    # an exact camera filename sequence is still strong evidence when the
+    # camera identity and perceptual gates agree.
+    strong_sequence = sequence_delta == 1
+    near_sequence = (
+        sequence_delta is not None
+        and sequence_delta <= 6
+        and shutter_delta is not None
+        and shutter_delta <= 6
+    )
+    if strong_sequence:
+        effective_phash_max = max(phash_max, _STRONG_SEQUENCE_PHASH_MAX)
+        effective_dhash_max = max(dhash_max, _STRONG_SEQUENCE_DHASH_MAX)
+    elif near_sequence:
+        effective_phash_max = max(phash_max, _NEAR_SEQUENCE_PHASH_MAX)
+        effective_dhash_max = max(dhash_max, _NEAR_SEQUENCE_DHASH_MAX)
+    else:
+        effective_phash_max = phash_max
+        effective_dhash_max = dhash_max
+    if hamming_distance(fingerprint.phash, candidate.phash) > effective_phash_max:
+        return BurstDecision(False, 0, (), "phash_distance")
+    if hamming_distance(fingerprint.dhash, candidate.dhash) > effective_dhash_max:
+        return BurstDecision(False, 0, (), "dhash_distance")
 
     score = 0
     evidence: list[str] = []
@@ -155,17 +190,14 @@ def _evaluate_candidate(
                 # rounded/coarsened. Keep the time gate strict unless the
                 # camera sequence and shutter count independently identify a
                 # consecutive pair.
-                filename_score, _ = _filename_evidence(
-                    target.primary.original_filename, candidate.original_filename
-                )
-                target_shutter = _shutter_count(target.metadata)
-                candidate_shutter = candidate.shutter_count
                 shutter_confirms = (
                     target_shutter is not None
-                    and candidate_shutter is not None
-                    and abs(target_shutter - candidate_shutter) <= 3
+                    and candidate.shutter_count is not None
+                    and shutter_delta <= 3
                 )
-                if filename_score == 0 or not shutter_confirms:
+                if filename_score == 0 or not (
+                    filename_reason == "filename_sequence_delta_1" or shutter_confirms
+                ):
                     return BurstDecision(False, 0, (), "capture_time_outside_window")
                 evidence.append(f"capture_delta_outside_window_{capture_delta.total_seconds():g}s")
             else:
@@ -176,9 +208,6 @@ def _evaluate_candidate(
         score += 1
         evidence.append("same_camera")
 
-    filename_score, filename_reason = _filename_evidence(
-        target.primary.original_filename, candidate.original_filename
-    )
     score += filename_score
     if filename_reason:
         evidence.append(filename_reason)
@@ -197,9 +226,8 @@ def _evaluate_candidate(
                 score -= 1
                 evidence.append("distant_import_time")
 
-    target_shutter = _shutter_count(target.metadata)
     if target_shutter is not None and candidate.shutter_count is not None:
-        shutter_delta = abs(target_shutter - candidate.shutter_count)
+        assert shutter_delta is not None
         if shutter_delta <= 3:
             score += 3
             evidence.append(f"shutter_count_delta_{shutter_delta}")
@@ -224,11 +252,12 @@ def _candidate_rows(
     width: int,
     height: int,
 ) -> list:
-    """Cluster representatives that can accept a new frame.
+    """Fingerprinted, non-deleted frames in existing clusters with matching dimensions.
 
-    Matching only against representatives prevents transitive chaining: a
-    frame cannot gradually stretch a cluster by matching one slightly
-    different member after another.
+    Candidate matching considers all members so a strong consecutive-sequence
+    pair can merge two clusters whose chosen representatives differ slightly.
+    The tightened normal and sequence-specific hash gates prevent broad visual
+    transitive chaining.
     """
     filters = [
         assets.c.id != asset_id,
@@ -253,9 +282,8 @@ def _candidate_rows(
                     & (image_fingerprints.c.algorithm_version == version),
                 )
                 .join(burst_members, burst_members.c.asset_id == assets.c.id)
-                .join(burst_clusters, burst_clusters.c.id == burst_members.c.cluster_id)
             )
-            .where(*filters, assets.c.id == burst_clusters.c.representative_asset_id)
+            .where(*filters)
             .order_by(assets.c.id)
         )
         .mappings()

@@ -325,7 +325,7 @@ def test_hamming_over_threshold_separate_cluster(backend):
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
     far_phash = "ffffffffffffffff"
-    assert hamming_distance(PHASH, far_phash) > 24
+    assert hamming_distance(PHASH, far_phash) > 17
     catalog.upsert_fingerprint(a, fp())
     catalog.upsert_fingerprint(b, fp(phash=far_phash))
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)

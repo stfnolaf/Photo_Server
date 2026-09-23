@@ -253,8 +253,8 @@ class Catalog:
         self.engine = create_engine(url, pool_pre_ping=True)
         self._writer_lock = RLock()
         if settings is None:
-            self._burst_phash_max = 24
-            self._burst_dhash_max = 16
+            self._burst_phash_max = 17
+            self._burst_dhash_max = 15
             self._burst_capture_window_seconds = 35
         else:
             self._burst_phash_max = settings.burst_cluster_phash_max_distance

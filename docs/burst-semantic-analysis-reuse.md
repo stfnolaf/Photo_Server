@@ -150,10 +150,12 @@ to an existing member of that burst:
    count gap of at most three provide independent confirmation.
 5. Its camera identity matches when both assets provide camera make/model. Known
    conflicting camera identities veto the match.
-6. pHash Hamming distance is at most the configured threshold (initially 24) and dHash
-   Hamming distance is at most the configured threshold (initially 16). These display-only
-   thresholds are calibrated to tolerate modest zoom while retaining both independent hash
-   gates.
+6. pHash Hamming distance is at most the configured threshold (initially 17) and dHash
+   Hamming distance is at most the configured threshold (initially 15). A narrow relaxation
+   is allowed for exact consecutive camera filename pairs, with a smaller relaxation (up to
+   pHash 22/dHash 16) for filename sequence gaps up to six. Shutter-count evidence, when
+   available, is an additional corroborating signal. This preserves cases such as the
+   2843/2849, 3469/3470, and 3514/3515 frames without broadening ordinary matching.
 7. It reaches the minimum contextual evidence score. Capture proximity contributes three
    points, matching camera identity one, a nearby filename sequence two, nearby import
    time one, and a nearby shutter count one to three. A shutter-count gap over 20 or an
@@ -415,9 +417,9 @@ mode (`off`/`observe`/`on`) does not change clustering behavior.
 
 The clustering similarity thresholds are configurable in the environment file:
 
-- `PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE` (default 24): maximum pHash Hamming distance
+- `PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE` (default 17): maximum pHash Hamming distance
   for a frame to join a burst.
-- `PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE` (default 16): maximum dHash Hamming distance
+- `PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE` (default 15): maximum dHash Hamming distance
   for a frame to join a burst.
 - `PHOTO_BURST_CLUSTER_CAPTURE_WINDOW_SECONDS` (default 35): capture-time window for
   the normal burst-context match. Consecutive filename and shutter-count evidence can

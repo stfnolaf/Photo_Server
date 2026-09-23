@@ -70,8 +70,8 @@ class Settings(BaseSettings):
     # Calibrated against the Sony A7 IV Hawaii set: a modest zoom can reach
     # pHash 22 / dHash 14 while still being an obvious burst pair. Keep both
     # gates so composition changes do not pass on pHash alone.
-    burst_cluster_phash_max_distance: int = Field(default=24, ge=0, le=64)
-    burst_cluster_dhash_max_distance: int = Field(default=16, ge=0, le=64)
+    burst_cluster_phash_max_distance: int = Field(default=17, ge=0, le=64)
+    burst_cluster_dhash_max_distance: int = Field(default=15, ge=0, le=64)
     burst_cluster_capture_window_seconds: int = Field(default=35, ge=1, le=3600)
     # Face inference runs in the standalone face-service (Phase 2B of
     # docs/ai-service-split-plan.md); the worker is a plain HTTP client
