@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, CircleHelp, PanelLeftClose, PanelLeftOpen, RotateCw } from "lucide-react";
 import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import type { Health, LibraryFilters, PhotoSummary } from "../../api/types";
+import type { Album, Health, LibraryFilters, PhotoSummary } from "../../api/types";
 import { useDurableMutation } from "../../api/mutations";
 import { Button } from "../../components/Button";
 import { useToast } from "../../components/Toast";
@@ -15,11 +15,13 @@ export function AppShell({
   health,
   filters,
   knownPhotos,
+  albums,
   children,
 }: {
   health: Health;
   filters: LibraryFilters;
   knownPhotos: PhotoSummary[];
+  albums: Album[];
   children: ReactNode;
 }) {
   const location = useLocation();
@@ -78,7 +80,7 @@ export function AppShell({
         </div>
         <div className="topbar__right">
           <span className="library-count" title={`${health.blobs} stored files`}>{health.assets.toLocaleString()} originals</span>
-          <UploadQueue />
+          <UploadQueue albums={albums} />
           <button className="icon-button refresh-button" type="button" onClick={refresh} aria-label="Refresh library"><RotateCw size={16} /></button>
           <a className="icon-button" href="/docs" target="_blank" rel="noreferrer" aria-label="Open API documentation"><CircleHelp size={17} /></a>
         </div>

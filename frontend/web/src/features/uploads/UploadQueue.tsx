@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
-import type { UploadBatch, UploadFileStatus, UploadQueueStatus } from "../../api/types";
+import type { Album, UploadBatch, UploadFileStatus, UploadQueueStatus } from "../../api/types";
 import { Button } from "../../components/Button";
 import { createOperationId } from "../../domain/library";
 
@@ -44,6 +44,8 @@ interface QueueBatch {
   serverStatus: UploadBatch["status"] | null;
   files: QueueFile[];
   error: string | null;
+  albumId?: string;
+  albumName?: string;
 }
 
 const wait = (milliseconds: number) =>
@@ -67,6 +69,11 @@ function formatBytes(bytes: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The upload could not be completed.";
+}
+
+async function sha256(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function humanReason(reason: string | null): string {
@@ -112,14 +119,11 @@ function batchProgress(batch: QueueBatch): number {
 }
 
 function restoredBatch(server: UploadBatch): QueueBatch {
-  const interrupted = server.status === "accepting";
   return {
     id: server.batchId,
-    phase: interrupted ? "failed" : server.status === "failed" ? "failed" : "processing",
+    phase: server.status === "accepting" ? "uploading" : server.status === "failed" ? "failed" : "processing",
     serverStatus: server.status,
-    error: interrupted
-      ? "This upload was interrupted before it was queued. Dismiss it and select the files again."
-      : server.status === "failed"
+    error: server.status === "failed"
         ? server.jobs.find((job) => job.error)?.error ?? "One or more files could not be added."
         : null,
     files: server.files.map((file) => ({
@@ -131,7 +135,7 @@ function restoredBatch(server: UploadBatch): QueueBatch {
       uploadUrl: file.uploadUrl,
       required: file.required,
       status: file.status,
-      progress: ["waiting", "uploading"].includes(file.status) ? 0 : 1,
+          progress: file.status === "waiting" ? 0 : file.status === "uploading" ? 0 : 1,
       reason: file.reason,
       error: file.error,
     })),
@@ -164,7 +168,7 @@ async function inParallel<T>(items: T[], concurrency: number, task: (item: T) =>
   if (errors.length) throw errors[0];
 }
 
-export function UploadQueue() {
+export function UploadQueue({ albums }: { albums: Album[] }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const queryClient = useQueryClient();
@@ -172,6 +176,10 @@ export function UploadQueue() {
   const [open, setOpen] = useState(false);
   const [restoring, setRestoring] = useState(true);
   const [queueStatus, setQueueStatus] = useState<UploadQueueStatus | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
+  const [resumeBatchId, setResumeBatchId] = useState<string | null>(null);
+  const [destination, setDestination] = useState("");
+  const [newAlbumName, setNewAlbumName] = useState("");
 
   useEffect(() => {
     mounted.current = true;
@@ -238,7 +246,7 @@ export function UploadQueue() {
           return [...current, ...serverBatches.filter((batch) => !known.has(batch.batchId)).map(restoredBatch)];
         });
         for (const batch of serverBatches) {
-          if (batch.status === "queued" || batch.status === "processing") void pollBatch(batch.batchId);
+          if (["accepting", "queued", "processing"].includes(batch.status)) void pollBatch(batch.batchId);
         }
       } catch {
         // The activity summary below still exposes server availability problems.
@@ -263,21 +271,30 @@ export function UploadQueue() {
     };
   }, []);
 
-  const runBatch = async (id: string, localFiles: QueueFile[]) => {
+  const runBatch = async (id: string, localFiles: QueueFile[], album?: { albumId?: string; albumName?: string }) => {
     try {
       changeBatch(id, (batch) => ({ ...batch, phase: "preparing", error: null }));
+      const hashes = new Map(
+        await Promise.all(
+          localFiles
+            .filter((file) => file.source)
+            .map(async (file) => [file.path, await sha256(file.source!)] as const),
+        ),
+      );
       let server = await api.createUploadBatch(
         id,
         localFiles.map((file) => ({
           path: file.path,
           sizeBytes: file.sizeBytes,
           mimeType: file.mimeType,
+          sha256: hashes.get(file.path),
         })),
+        album,
       );
       applyServerState(id, server);
 
       if (server.status === "accepting") {
-        const pending = server.files.filter((file) => file.required && file.status !== "uploaded");
+        const pending = server.files.filter((file) => file.required && file.status === "waiting");
         const sources = new Map(localFiles.map((file) => [file.path, file.source]));
         await inParallel(pending, 4, async (remote) => {
           const source = sources.get(remote.path);
@@ -320,21 +337,48 @@ export function UploadQueue() {
   const selectFiles = (files: FileList | null) => {
     if (!files?.length) return;
     const selected = Array.from(files);
+    if (resumeBatchId) {
+      const batch = batches.find((item) => item.id === resumeBatchId);
+      if (batch) {
+        const sources = new Map(selected.map((file) => [filePath(file), file]));
+        const resumed = batch.files.map((file) => {
+          const source = sources.get(file.path);
+          return source && source.size === file.sizeBytes ? { ...file, source } : file;
+        });
+        setBatches((current) => current.map((item) => item.id === resumeBatchId
+          ? { ...item, files: resumed, phase: "preparing", error: null }
+          : item));
+        setResumeBatchId(null);
+        setOpen(true);
+        void runBatch(resumeBatchId, resumed, {
+          albumId: batch.albumId,
+          albumName: batch.albumName,
+        });
+      }
+      return;
+    }
+    setPendingFiles(selected);
+    setDestination("");
+    setNewAlbumName("");
+    /* The destination is chosen before the batch is created, so the server can
+       apply it even when the browser closes during background onboarding. */
+  };
+
+  const startSelectedUpload = () => {
+    if (!pendingFiles?.length) return;
+    const selected = pendingFiles;
+    setPendingFiles(null);
     const paths = selected.map(filePath);
     const duplicate = paths.find((path, index) => paths.indexOf(path) !== index);
     const id = createOperationId();
+    const album = destination === "new" && newAlbumName.trim()
+      ? { albumName: newAlbumName.trim() }
+      : destination ? { albumId: destination } : undefined;
     const queueFiles: QueueFile[] = selected.map((source) => ({
-      path: filePath(source),
-      source,
-      sizeBytes: source.size,
-      mimeType: source.type || "application/octet-stream",
-      fileId: null,
-      uploadUrl: null,
-      required: true,
-      status: "waiting",
-      progress: 0,
-      reason: null,
-      error: null,
+      path: filePath(source), source, sizeBytes: source.size,
+      mimeType: source.type || "application/octet-stream", fileId: null,
+      uploadUrl: null, required: true, status: "waiting", progress: 0,
+      reason: null, error: null,
     }));
     setBatches((current) => [{
       id,
@@ -342,9 +386,11 @@ export function UploadQueue() {
       serverStatus: null,
       files: queueFiles,
       error: duplicate ? `Two selected files have the same name: ${duplicate}` : null,
+      albumId: album?.albumId,
+      albumName: album?.albumName,
     }, ...current]);
     setOpen(true);
-    if (!duplicate) void runBatch(id, queueFiles);
+    if (!duplicate) void runBatch(id, queueFiles, album);
   };
 
   const retry = async (batch: QueueBatch) => {
@@ -356,10 +402,10 @@ export function UploadQueue() {
         applyServerState(batch.id, retried, "processing");
         await pollBatch(batch.id);
       } else {
-        await runBatch(batch.id, batch.files);
+        await runBatch(batch.id, batch.files, { albumId: batch.albumId, albumName: batch.albumName });
       }
     } catch {
-      await runBatch(batch.id, batch.files);
+      await runBatch(batch.id, batch.files, { albumId: batch.albumId, albumName: batch.albumName });
     }
   };
 
@@ -377,7 +423,7 @@ export function UploadQueue() {
   const backgroundRows = queueStatus ? [
     { label: "File transfers", pending: queueStatus.uploadsWaiting, running: queueStatus.uploadsActive, failed: 0 },
     { label: "Library imports", pending: queueStatus.onboardingPending, running: queueStatus.onboardingRunning, failed: queueStatus.onboardingFailed },
-    { label: "Metadata", pending: queueStatus.processingPending, running: queueStatus.processingRunning, failed: queueStatus.processingFailed },
+    { label: "Metadata & fingerprints", pending: queueStatus.processingPending, running: queueStatus.processingRunning, failed: queueStatus.processingFailed },
     { label: "Previews", pending: queueStatus.previewPending, running: queueStatus.previewRunning, failed: queueStatus.previewFailed },
     { label: "AI analysis", pending: queueStatus.analysisPending, running: queueStatus.analysisRunning, failed: queueStatus.analysisFailed },
   ].filter((row) => row.pending || row.running || row.failed) : [];
@@ -426,6 +472,23 @@ export function UploadQueue() {
             <button className="icon-button" type="button" onClick={() => setOpen(false)} aria-label="Close upload queue"><X size={17} /></button>
           </header>
           <div className="upload-queue__body">
+            {pendingFiles && (
+              <section className="upload-destination">
+                <strong>Add selected photos to an album?</strong>
+                <select value={destination} onChange={(event) => setDestination(event.target.value)}>
+                  <option value="">No album</option>
+                  {albums.map((album) => <option key={album.albumId} value={album.albumId}>{album.name}</option>)}
+                  <option value="new">Create a new album…</option>
+                </select>
+                {destination === "new" && (
+                  <input value={newAlbumName} onChange={(event) => setNewAlbumName(event.target.value)} placeholder="New album name" maxLength={200} autoFocus />
+                )}
+                <div className="upload-batch__actions">
+                  <Button compact tone="primary" disabled={destination === "new" && !newAlbumName.trim()} onClick={startSelectedUpload}>Start upload</Button>
+                  <Button compact tone="ghost" onClick={() => setPendingFiles(null)}>Cancel</Button>
+                </div>
+              </section>
+            )}
             {backgroundRows.length > 0 && (
               <section className="background-work">
                 <header>Background work</header>
@@ -483,7 +546,21 @@ export function UploadQueue() {
                   {batch.phase === "failed" && (
                     <div className="upload-batch__actions">
                       {canRetry && <Button compact onClick={() => void retry(batch)}><RotateCw size={13} /> Retry</Button>}
+                      {!canRetry && batch.files.some((file) => file.source === null) && (
+                        <Button compact onClick={() => {
+                          setResumeBatchId(batch.id);
+                          inputRef.current?.click();
+                        }}><RotateCw size={13} /> Select files</Button>
+                      )}
                       <Button compact tone="ghost" onClick={() => void dismiss(batch)}>Dismiss</Button>
+                    </div>
+                  )}
+                  {batch.phase === "uploading" && batch.files.some((file) => file.status === "waiting") && (
+                    <div className="upload-batch__actions">
+                      <Button compact onClick={() => {
+                        setResumeBatchId(batch.id);
+                        inputRef.current?.click();
+                      }}><RotateCw size={13} /> Select files to resume</Button>
                     </div>
                   )}
                 </section>

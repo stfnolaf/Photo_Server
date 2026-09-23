@@ -47,7 +47,7 @@ function ConnectedApp() {
   return (
     <DurableMutationProvider libraryId={health.data.libraryId}>
       <ToastProvider>
-        <AppShell health={health.data} filters={filters} knownPhotos={library.photos}>
+        <AppShell health={health.data} filters={filters} knownPhotos={library.photos} albums={albums.active}>
           <Routes>
             <Route
               path="/"

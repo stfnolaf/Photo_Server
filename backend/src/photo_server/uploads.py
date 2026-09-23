@@ -10,7 +10,7 @@ from uuid import UUID, uuid4, uuid5
 from botocore.exceptions import ClientError
 
 from photo_server.config import LibraryError
-from photo_server.models import Blob, Manifest
+from photo_server.models import Blob, Manifest, Mutation
 from photo_server.processing import extract_metadata
 from photo_server.selection import plan_names, role
 
@@ -72,6 +72,7 @@ def _records(batch_id: UUID, declaration: dict) -> list[dict]:
                 "original_filename": PurePosixPath(file["path"]).name,
                 "size_bytes": file["sizeBytes"],
                 "mime_type": file.get("mimeType"),
+                "sha256": file.get("sha256"),
                 "staging_key": f"incoming/{batch_id}/{file_id}",
                 "required": 1 if file["path"] in required else 0,
                 "status": "waiting" if file["path"] in required else "skipped",
@@ -84,7 +85,7 @@ def _records(batch_id: UUID, declaration: dict) -> list[dict]:
     return records
 
 
-def create_batch(service, files: list[dict], batch_id: UUID | None = None) -> dict:
+def create_batch(service, files: list[dict], batch_id: UUID | None = None, album_id: UUID | None = None, album_name: str | None = None) -> dict:
     batch_id = batch_id or uuid4()
     if len(files) > service.settings.max_batch_files:
         raise LibraryError(f"A batch may contain at most {service.settings.max_batch_files} files")
@@ -94,7 +95,12 @@ def create_batch(service, files: list[dict], batch_id: UUID | None = None) -> di
         size = file["sizeBytes"]
         if size <= 0 or size > service.settings.max_file_bytes:
             raise LibraryError(f"File size is outside the configured limit: {path}")
-        normalized.append({"path": path, "sizeBytes": size, "mimeType": file.get("mimeType")})
+        normalized.append({
+            "path": path,
+            "sizeBytes": size,
+            "mimeType": file.get("mimeType"),
+            "sha256": file.get("sha256"),
+        })
     plan = plan_names([file["path"] for file in normalized], service.settings.max_batch_files)
     if not plan["assets"]:
         raise LibraryError("A batch must contain at least one supported photo")
@@ -106,7 +112,36 @@ def create_batch(service, files: list[dict], batch_id: UUID | None = None) -> di
         "files": normalized,
         "plan": plan,
     }
-    service.catalog.create_upload_batch(batch_id, _records(batch_id, proposed))
+    records = _records(batch_id, proposed)
+    for asset in plan["assets"]:
+        declaration = next(file for file in normalized if file["path"] == asset["path"])
+        digest = declaration["sha256"]
+        if not digest:
+            continue
+        manifest = service.catalog.find_hash(digest)
+        if not manifest or manifest.primary.size_bytes != declaration["sizeBytes"]:
+            continue
+        duplicate_paths = {asset["path"], *asset["sidecars"]}
+        for record in records:
+            if record["relative_path"] in duplicate_paths:
+                record.update(status="duplicate", sha256=digest, asset_id=str(manifest.asset_id))
+    if album_id is not None:
+        album = service.catalog.get_album(str(album_id))
+        if album is None or album.deleted_at:
+            raise LibraryError("Upload target album does not exist or is hidden")
+    elif album_name is not None:
+        album_name = album_name.strip()
+        if not album_name:
+            raise LibraryError("New album name cannot be empty")
+        album_id = uuid5(service.library_id, f"upload-album:{batch_id}")
+        service.catalog.commit_mutation(
+            uuid5(batch_id, "album-create"),
+            Mutation(
+                action="album.create", entity_id=album_id,
+                changes={"name": album_name.strip(), "description": "", "assetIds": []},
+            ),
+        )
+    service.catalog.create_upload_batch(batch_id, records, album_id)
     return describe_batch(service, batch_id)
 
 
@@ -155,6 +190,20 @@ def list_active_batches(service, limit: int = 100) -> list[dict]:
     return [describe_batch(service, batch_id) for batch_id in service.catalog.active_upload_batch_ids(limit)]
 
 
+def reconcile_ready_upload_batches(service, limit: int = 100) -> dict:
+    """Seal completed batches when the browser never got to send ``/seal``."""
+    sealed = 0
+    for batch_id in service.catalog.ready_upload_batch_ids(limit):
+        try:
+            seal_batch(service, UUID(str(batch_id)))
+            sealed += 1
+        except LibraryError:
+            # A transfer may have raced the discovery query. The next pass
+            # will retry after the batch is actually complete.
+            continue
+    return {"batchesSealed": sealed}
+
+
 async def receive_file(
     service,
     gate: UploadGate,
@@ -187,6 +236,15 @@ async def receive_file(
                     raise LibraryError("A conflicting immutable staging object already exists")
                 digest = await asyncio.to_thread(_hash_object, service, row["staging_key"])
                 await asyncio.to_thread(service.catalog.complete_upload, file_id, digest)
+                await asyncio.to_thread(
+                    service.catalog.queue_ready_onboarding_jobs,
+                    batch_id,
+                    plan_names(
+                        [file["relative_path"] for file in service.catalog.upload_batch(batch_id)["files"]],
+                        service.settings.max_batch_files,
+                    ),
+                )
+                await asyncio.to_thread(reconcile_ready_upload_batches, service, 1)
                 return {
                     "fileId": str(file_id),
                     "status": "uploaded",
@@ -260,6 +318,17 @@ async def receive_file(
                 service.storage.verify, row["staging_key"], expected, digest.hexdigest()
             )
             await asyncio.to_thread(service.catalog.complete_upload, file_id, digest.hexdigest())
+            await asyncio.to_thread(
+                service.catalog.queue_ready_onboarding_jobs,
+                batch_id,
+                plan_names(
+                    [file["relative_path"] for file in service.catalog.upload_batch(batch_id)["files"]],
+                    service.settings.max_batch_files,
+                ),
+            )
+            # Close the browser-shutdown race between the final PUT and the
+            # frontend's separate seal request.
+            await asyncio.to_thread(reconcile_ready_upload_batches, service, 1)
             return {
                 "fileId": str(file_id),
                 "status": "uploaded",
@@ -292,10 +361,16 @@ def seal_batch(service, batch_id: UUID) -> dict:
     batch = service.catalog.upload_batch(batch_id)
     if batch is None:
         raise LibraryError("Upload batch not found")
+    if batch["batch"]["status"] != "accepting":
+        # The frontend may send its normal seal request after reconciliation
+        # already sealed the batch. Do not replay duplicate album mutations.
+        return describe_batch(service, batch_id)
     missing = [
         row["relative_path"]
         for row in batch["files"]
-        if row["required"] and row["status"] != "uploaded"
+        if row["required"] and row["status"] not in (
+            "uploaded", "duplicate", "queued", "processing", "imported"
+        )
     ]
     if missing:
         raise LibraryError(f"Upload these required files before sealing: {missing}")
@@ -303,6 +378,17 @@ def seal_batch(service, batch_id: UUID) -> dict:
         [row["relative_path"] for row in batch["files"]], service.settings.max_batch_files
     )
     service.catalog.seal_upload_batch(batch_id, plan)
+    target_album = batch["batch"].get("album_id")
+    if target_album:
+        duplicate_assets = {
+            UUID(row["asset_id"])
+            for row in batch["files"]
+            if row["status"] == "duplicate" and row["asset_id"]
+        }
+        for asset_id in duplicate_assets:
+            service.catalog.add_upload_asset_to_album(
+                UUID(str(target_album)), asset_id, uuid5(batch_id, f"album-duplicate:{asset_id}")
+            )
     return describe_batch(service, batch_id)
 
 
