@@ -29,13 +29,21 @@ pillow_heif.register_heif_opener()
 # particular, a newly-created cache directory has no preview_cache row until
 # generation completes, so the orphan sweep must not inspect it mid-write.
 _PREVIEW_CACHE_LOCK = threading.RLock()
+PREVIEW_RENDERER_VERSION = "v1"
 
 
 def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
     directory = (
-        service.settings.data_dir / "cache" / f"{manifest.asset_id}-{manifest.primary.sha256}-v1"
+        service.settings.data_dir
+        / "cache"
+        / f"{manifest.asset_id}-{manifest.primary.sha256}-{PREVIEW_RENDERER_VERSION}"
     )
     return {"preview": directory / "preview.jpg", "thumbnail": directory / "thumbnail.jpg"}
+
+
+def derivative_etag(manifest: Manifest, kind: str) -> str:
+    """Return the stable strong ETag for a generated derivative."""
+    return f'"{kind}-{PREVIEW_RENDERER_VERSION}-{manifest.primary.sha256}"'
 
 
 def _cache_sizes(targets: dict[str, Path]) -> tuple[int | None, int | None]:

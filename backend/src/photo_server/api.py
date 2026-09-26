@@ -66,7 +66,7 @@ from photo_server.uploads import (
     reconcile_ready_upload_batches,
     seal_batch,
 )
-from photo_server.worker import cache_paths
+from photo_server.worker import cache_paths, derivative_etag
 
 # In-process throttle for preview_cache.last_accessed_at updates: asset id ->
 # monotonic timestamp of the last touch. Bounded by the number of assets
@@ -504,7 +504,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Cache-Control": {
                         "description": "private, max-age=3600",
                         "schema": {"type": "string"},
-                    }
+                    },
+                    "ETag": {
+                        "description": "Stable validator for the derivative representation",
+                        "schema": {"type": "string"},
+                    },
                 },
             },
             "202": {
@@ -514,7 +518,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Retry-After": {
                         "description": "Seconds until the derivative is likely ready (2)",
                         "schema": {"type": "integer"},
-                    }
+                    },
+                    "Cache-Control": {
+                        "description": "no-store because the derivative is not ready",
+                        "schema": {"type": "string"},
+                    },
                 },
             },
         }
@@ -524,7 +532,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         responses=derivative_responses(),
         operation_id="getFaceThumbnail",
     )
-    def face_thumbnail(face_id: UUID):
+    def face_thumbnail(face_id: UUID, request: Request):
         face = service.catalog.face(str(face_id))
         if face is None:
             raise HTTPException(404, "Face not found")
@@ -535,15 +543,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not path.exists():
             status = service.catalog.preview_status(str(manifest.asset_id))
             if status["status"] == "unavailable":
-                raise HTTPException(404, "Photograph preview is unavailable")
+                raise HTTPException(
+                    404,
+                    "Photograph preview is unavailable",
+                    headers={"Cache-Control": "no-store"},
+                )
             if status["status"] == "failed":
-                raise HTTPException(503, "Photograph preview generation failed")
+                raise HTTPException(
+                    503,
+                    "Photograph preview generation failed",
+                    headers={"Cache-Control": "no-store"},
+                )
             service.catalog.queue_preview(str(manifest.asset_id))
             return JSONResponse(
                 status_code=202,
                 content={"status": "pending"},
-                headers={"Retry-After": "2"},
+                headers={"Retry-After": "2", "Cache-Control": "no-store"},
             )
+        etag = derivative_etag(manifest, f"face-thumbnail-{face_id}")
+        headers = {"Cache-Control": "private, max-age=3600", "ETag": etag}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
         with Image.open(path) as source:
             image = source.convert("RGB")
             x, y, width, height = [float(value) for value in face["bounding_box"]]
@@ -564,11 +584,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             crop.thumbnail((320, 320), Image.Resampling.LANCZOS)
             output = BytesIO()
             crop.save(output, format="JPEG", quality=88)
-        return Response(
-            output.getvalue(),
-            media_type="image/jpeg",
-            headers={"Cache-Control": "private, max-age=3600"},
-        )
+        return Response(output.getvalue(), media_type="image/jpeg", headers=headers)
 
     @app.patch(
         "/assets/{asset_id}/user-state",
@@ -772,22 +788,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
-    def derivative(asset_id: UUID, kind: str):
+    def derivative(asset_id: UUID, kind: str, request: Request):
         manifest = find(asset_id)
         path = cache_paths(service, manifest)[kind]
         if not path.exists():
             status = service.catalog.preview_status(str(asset_id))
             if status["status"] == "unavailable":
-                raise HTTPException(404, "Embedded preview unavailable")
+                raise HTTPException(
+                    404, "Embedded preview unavailable", headers={"Cache-Control": "no-store"}
+                )
             if status["status"] == "failed":
-                raise HTTPException(503, "Preview generation failed; see asset status")
+                raise HTTPException(
+                    503,
+                    "Preview generation failed; see asset status",
+                    headers={"Cache-Control": "no-store"},
+                )
             service.catalog.queue_preview(str(asset_id))
             return JSONResponse(
-                status_code=202, content={"status": "pending"}, headers={"Retry-After": "2"}
+                status_code=202,
+                content={"status": "pending"},
+                headers={"Retry-After": "2", "Cache-Control": "no-store"},
             )
         _record_access(service, manifest, str(asset_id))
+        etag = derivative_etag(manifest, kind)
+        headers = {"Cache-Control": "private, max-age=3600", "ETag": etag}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
         return FileResponse(
-            path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"}
+            path, media_type="image/jpeg", headers=headers
         )
 
     @app.get(
@@ -795,16 +823,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         responses=derivative_responses(),
         operation_id="getAssetPreview",
     )
-    def preview(asset_id: UUID):
-        return derivative(asset_id, "preview")
+    def preview(asset_id: UUID, request: Request):
+        return derivative(asset_id, "preview", request)
 
     @app.get(
         "/assets/{asset_id}/thumbnail",
         responses=derivative_responses(),
         operation_id="getAssetThumbnail",
     )
-    def thumbnail(asset_id: UUID):
-        return derivative(asset_id, "thumbnail")
+    def thumbnail(asset_id: UUID, request: Request):
+        return derivative(asset_id, "thumbnail", request)
 
     @app.post(
         "/assets/{asset_id}/preview/retry",

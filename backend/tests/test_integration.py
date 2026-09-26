@@ -712,11 +712,20 @@ def test_derivative_api_states(backend):
         assert client.get("/docs").status_code == 200
         with service.catalog.engine.begin() as connection:
             connection.execute(text("DELETE FROM jobs WHERE asset_id = :id"), {"id": asset_id})
-        assert client.get(f"/assets/{asset_id}/thumbnail").status_code == 202
+        pending = client.get(f"/assets/{asset_id}/thumbnail")
+        assert pending.status_code == 202
+        assert pending.headers["cache-control"] == "no-store"
         assert run_once(service)["status"] == "ready"
         response = client.get(f"/assets/{asset_id}/preview")
         assert response.headers["content-type"] == "image/jpeg"
         assert response.headers["cache-control"] == "private, max-age=3600"
+        assert response.headers["etag"].startswith('"preview-v1-')
+        not_modified = client.get(
+            f"/assets/{asset_id}/preview", headers={"If-None-Match": response.headers["etag"]}
+        )
+        assert not_modified.status_code == 304
+        assert not_modified.headers["cache-control"] == "private, max-age=3600"
+        assert not_modified.headers["etag"] == response.headers["etag"]
         for path in cache_paths(service, service.catalog.get(asset_id)).values():
             path.unlink()
         # Cache loss queues reconstruction even when the recorded job was ready.
