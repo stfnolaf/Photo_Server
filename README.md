@@ -119,6 +119,7 @@ The relevant queue settings are:
 | `PHOTO_CACHE_MAX_BYTES` | `0` (50 GiB in compose) | LRU byte budget for the local preview cache; `0` disables eviction |
 | `PHOTO_CACHE_EVICTION_INTERVAL` | 300 | Seconds between worker cache-eviction passes |
 | `PHOTO_CACHE_EVICT_TARGET_RATIO` | 0.9 | When over budget, evict until the cache is at most budget × ratio |
+| `PHOTO_PUBLIC_DERIVATIVE_CACHE` | false | Opt into one-year public browser/CDN caching for immutable previews; unsafe for private libraries |
 | `PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS` | 3600 | Seconds between full PostgreSQL backups |
 | `PHOTO_POSTGRES_BACKUP_RETENTION` | 168 | Number of backups retained in S3 |
 | `PHOTO_POSTGRES_BACKUP_PREFIX` | `backups/postgres` | Backup object-key prefix |
@@ -407,6 +408,7 @@ The same spec drives the checked-in web client (`frontend/web/src/api/generated`
 
 - One client/user per library is the supported V1 usage.
 - V1 has no API authentication or TLS termination; keep it on a trusted LAN or place it behind a configured reverse proxy.
+- Derivative responses remain private to browsers by default. `PHOTO_PUBLIC_DERIVATIVE_CACHE=true` adds one-year public/CDN caching and must only be used when the deployment intentionally treats derivative URLs as public.
 - Completed files and queue state survive service restarts. An individual client-to-API PUT is streamed and must restart from byte zero if its network connection fails.
 - PostgreSQL is the only authoritative structured-state store. Its scheduled backups share the configured S3 failure domain unless that S3 data is independently replicated.
 - Originals, imported XMP files, and completed AI run artifacts are immutable S3 blobs. Face naming/manual correction, photo editing, generated XMP, and semantic vector search remain future work.

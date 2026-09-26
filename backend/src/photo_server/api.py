@@ -75,6 +75,17 @@ from photo_server.worker import cache_paths
 _preview_touches: dict[str, float] = {}
 _PREVIEW_TOUCH_COOLDOWN = 30.0
 
+
+def derivative_cache_headers(settings: Settings) -> dict[str, str]:
+    """Return browser and shared-cache policy for immutable derivatives."""
+    if settings.public_derivative_cache:
+        policy = "public, max-age=31536000, immutable"
+        return {"Cache-Control": policy, "CDN-Cache-Control": policy}
+    return {
+        "Cache-Control": "private, max-age=3600",
+        "CDN-Cache-Control": "private, max-age=3600",
+    }
+
 # Phase 3B of the AI service split plan (docs/ai-service-split-plan.md):
 # /health reports whether each AI service is configured and reachable. The
 # API process runs its own probes — a GET {ai_base_url}/models for the
@@ -512,6 +523,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "description": "Stable validator for the derivative representation",
                         "schema": {"type": "string"},
                     },
+                    "CDN-Cache-Control": {
+                        "description": "Shared-cache policy; public only when explicitly enabled",
+                        "schema": {"type": "string"},
+                    },
                 },
             },
             "202": {
@@ -523,6 +538,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "schema": {"type": "integer"},
                     },
                     "Cache-Control": {
+                        "description": "no-store because the derivative is not ready",
+                        "schema": {"type": "string"},
+                    },
+                    "CDN-Cache-Control": {
                         "description": "no-store because the derivative is not ready",
                         "schema": {"type": "string"},
                     },
@@ -549,22 +568,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     404,
                     "Photograph preview is unavailable",
-                    headers={"Cache-Control": "no-store"},
+                    headers={"Cache-Control": "no-store", "CDN-Cache-Control": "no-store"},
                 )
             if status["status"] == "failed":
                 raise HTTPException(
                     503,
                     "Photograph preview generation failed",
-                    headers={"Cache-Control": "no-store"},
+                    headers={"Cache-Control": "no-store", "CDN-Cache-Control": "no-store"},
                 )
             service.catalog.queue_preview(str(manifest.asset_id))
             return JSONResponse(
                 status_code=202,
                 content={"status": "pending"},
-                headers={"Retry-After": "2", "Cache-Control": "no-store"},
+                headers={
+                    "Retry-After": "2",
+                    "Cache-Control": "no-store",
+                    "CDN-Cache-Control": "no-store",
+                },
             )
         etag = derivative_etag(f"face-thumbnail-{face_id}", manifest.primary.sha256)
-        headers = {"Cache-Control": "private, max-age=3600", "ETag": etag}
+        headers = {**derivative_cache_headers(service.settings), "ETag": etag}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
         with Image.open(path) as source:
@@ -798,23 +821,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status = service.catalog.preview_status(str(asset_id))
             if status["status"] == "unavailable":
                 raise HTTPException(
-                    404, "Embedded preview unavailable", headers={"Cache-Control": "no-store"}
+                    404,
+                    "Embedded preview unavailable",
+                    headers={"Cache-Control": "no-store", "CDN-Cache-Control": "no-store"},
                 )
             if status["status"] == "failed":
                 raise HTTPException(
                     503,
                     "Preview generation failed; see asset status",
-                    headers={"Cache-Control": "no-store"},
+                    headers={"Cache-Control": "no-store", "CDN-Cache-Control": "no-store"},
                 )
             service.catalog.queue_preview(str(asset_id))
             return JSONResponse(
                 status_code=202,
                 content={"status": "pending"},
-                headers={"Retry-After": "2", "Cache-Control": "no-store"},
+                headers={
+                    "Retry-After": "2",
+                    "Cache-Control": "no-store",
+                    "CDN-Cache-Control": "no-store",
+                },
             )
         _record_access(service, manifest, str(asset_id))
         etag = derivative_etag(kind, manifest.primary.sha256)
-        headers = {"Cache-Control": "private, max-age=3600", "ETag": etag}
+        headers = {**derivative_cache_headers(service.settings), "ETag": etag}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
         return FileResponse(

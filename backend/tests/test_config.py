@@ -3,6 +3,7 @@ from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 
 from photo_server.config import Settings
+from photo_server.api import derivative_cache_headers
 from photo_server.storage import Storage
 
 
@@ -38,6 +39,23 @@ def test_database_password_is_encoded_and_hidden(monkeypatch):
     assert parsed.host == "database" and parsed.port == 5432
     assert password not in repr(settings)
     assert settings.database_url not in repr(settings)
+
+
+def test_derivative_cache_policy_is_private_by_default_and_public_when_opted_in():
+    base = Settings(
+        _env_file=None,
+        s3_endpoint="http://localhost:9000",
+        database_url="postgresql+psycopg://test@localhost/test",
+    )
+    assert derivative_cache_headers(base) == {
+        "Cache-Control": "private, max-age=3600",
+        "CDN-Cache-Control": "private, max-age=3600",
+    }
+    public = base.model_copy(update={"public_derivative_cache": True})
+    assert derivative_cache_headers(public) == {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "CDN-Cache-Control": "public, max-age=31536000, immutable",
+    }
 
 
 def test_s3_credentials_are_loaded_from_dotenv(monkeypatch, tmp_path):

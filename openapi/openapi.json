@@ -3570,6 +3570,12 @@
             },
             "description": "The generated JPEG derivative",
             "headers": {
+              "CDN-Cache-Control": {
+                "description": "Shared-cache policy; public only when explicitly enabled",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "private, max-age=3600",
                 "schema": {
@@ -3594,6 +3600,12 @@
             },
             "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
             "headers": {
+              "CDN-Cache-Control": {
+                "description": "no-store because the derivative is not ready",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "no-store because the derivative is not ready",
                 "schema": {
@@ -3739,6 +3751,12 @@
             },
             "description": "The generated JPEG derivative",
             "headers": {
+              "CDN-Cache-Control": {
+                "description": "Shared-cache policy; public only when explicitly enabled",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "private, max-age=3600",
                 "schema": {
@@ -3763,6 +3781,12 @@
             },
             "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
             "headers": {
+              "CDN-Cache-Control": {
+                "description": "no-store because the derivative is not ready",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "no-store because the derivative is not ready",
                 "schema": {
@@ -3906,6 +3930,12 @@
             },
             "description": "The generated JPEG derivative",
             "headers": {
+              "CDN-Cache-Control": {
+                "description": "Shared-cache policy; public only when explicitly enabled",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "private, max-age=3600",
                 "schema": {
@@ -3930,6 +3960,12 @@
             },
             "description": "The JPEG is not ready yet; re-request after the Retry-After seconds",
             "headers": {
+              "CDN-Cache-Control": {
+                "description": "no-store because the derivative is not ready",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "no-store because the derivative is not ready",
                 "schema": {

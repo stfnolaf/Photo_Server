@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     cache_eviction_target_ratio: float = Field(
         default=0.9, ge=0.05, le=1.0, validation_alias="PHOTO_CACHE_EVICT_TARGET_RATIO"
     )
+    # Opt-in only: the V1 API has no authentication, so enabling this makes
+    # anyone who can obtain a derivative URL eligible to receive the cached
+    # image from a shared CDN.
+    public_derivative_cache: bool = False
 
     @model_validator(mode="after")
     def configure_database(self):
