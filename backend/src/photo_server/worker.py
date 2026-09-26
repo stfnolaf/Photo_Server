@@ -14,6 +14,7 @@ import pillow_heif
 from PIL import Image, ImageOps
 
 from photo_server.models import Manifest
+from photo_server.derivative_identity import PREVIEW_RENDERER_VERSION
 from photo_server.processing import run_stage
 from photo_server.service import Service
 from photo_server.uploads import (
@@ -29,9 +30,6 @@ pillow_heif.register_heif_opener()
 # particular, a newly-created cache directory has no preview_cache row until
 # generation completes, so the orphan sweep must not inspect it mid-write.
 _PREVIEW_CACHE_LOCK = threading.RLock()
-PREVIEW_RENDERER_VERSION = "v1"
-
-
 def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
     directory = (
         service.settings.data_dir
@@ -39,11 +37,6 @@ def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
         / f"{manifest.asset_id}-{manifest.primary.sha256}-{PREVIEW_RENDERER_VERSION}"
     )
     return {"preview": directory / "preview.jpg", "thumbnail": directory / "thumbnail.jpg"}
-
-
-def derivative_etag(manifest: Manifest, kind: str) -> str:
-    """Return the stable strong ETag for a generated derivative."""
-    return f'"{kind}-{PREVIEW_RENDERER_VERSION}-{manifest.primary.sha256}"'
 
 
 def _cache_sizes(targets: dict[str, Path]) -> tuple[int | None, int | None]:
@@ -132,7 +125,7 @@ def generate(service: Service, manifest: Manifest) -> bool:
 def rebuild_cache_index(service: Service) -> dict:
     """Backfill preview_cache rows for cache directories that predate tracking.
 
-    Walks ``{data_dir}/cache`` for ``{asset_id}-{sha256}-v1`` directories and
+    Walks ``{data_dir}/cache`` for ``{asset_id}-{sha256}-{renderer_version}`` directories and
     inserts a row (sizes via ``stat``) for each asset that lacks one. Never
     updates an existing row. Orphaned directories whose asset was purged are
     counted as skipped.
@@ -145,7 +138,10 @@ def rebuild_cache_index(service: Service) -> dict:
         for entry in sorted(cache_root.iterdir()):
             if not entry.is_dir():
                 continue
-            match = re.fullmatch(r"(?P<asset_id>.+)-[0-9a-f]{64}-v1", entry.name)
+            match = re.fullmatch(
+                rf"(?P<asset_id>.+)-[0-9a-f]{{64}}-{re.escape(PREVIEW_RENDERER_VERSION)}",
+                entry.name,
+            )
             if match is None:
                 continue
             directories += 1
@@ -175,7 +171,7 @@ def sweep_orphaned_preview_dirs(service: Service) -> list[str]:
     files): a crash in between, or an asset deleted while cached, can leave
     directories without a row. Such files are disposable either way (the miss
     path regenerates them from the immutable original), so removing them is
-    always safe. Only valid ``{asset_id}-{sha256}-v1`` names are ever touched;
+    always safe. Only valid renderer-versioned cache names are ever touched;
     anything else is left alone.
     """
     with _PREVIEW_CACHE_LOCK:
@@ -197,7 +193,10 @@ def sweep_orphaned_preview_dirs(service: Service) -> list[str]:
         for entry in sorted(cache_root.iterdir()):
             if not entry.is_dir():
                 continue
-            match = re.fullmatch(r"(?P<asset_id>.+)-[0-9a-f]{64}-v1", entry.name)
+            match = re.fullmatch(
+                rf"(?P<asset_id>.+)-[0-9a-f]{{64}}-{re.escape(PREVIEW_RENDERER_VERSION)}",
+                entry.name,
+            )
             if match is None:
                 continue
             if match.group("asset_id") in known:

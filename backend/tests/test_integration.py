@@ -710,6 +710,13 @@ def test_derivative_api_states(backend):
         assert root.status_code == 307 and root.headers["location"] == "/docs"
         assert client.get("/library.js").status_code == 404
         assert client.get("/docs").status_code == 200
+        detail = client.get(f"/assets/{asset_id}").json()
+        assert "?v=preview-v1-" in detail["previewUrl"]
+        assert "?v=thumbnail-v1-" in detail["thumbnailUrl"]
+        browse = client.get("/library/assets").json()
+        item = next(row for row in browse["items"] if row["assetId"] == str(asset_id))
+        assert item["previewUrl"] == detail["previewUrl"]
+        assert item["thumbnailUrl"] == detail["thumbnailUrl"]
         with service.catalog.engine.begin() as connection:
             connection.execute(text("DELETE FROM jobs WHERE asset_id = :id"), {"id": asset_id})
         pending = client.get(f"/assets/{asset_id}/thumbnail")

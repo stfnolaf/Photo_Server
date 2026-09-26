@@ -295,6 +295,8 @@ class BurstDetailOut(ResponseModel):
 class CurrentAssetDetailOut(CurrentAssetDocOut):
     """GET /assets/{id}: the current document plus derived blocks."""
 
+    thumbnail_url: StrictStr
+    preview_url: StrictStr
     technical: dict[str, Any]
     processing: list[ProcessingStatusOut]
     analysis: AnalysisStatusOut

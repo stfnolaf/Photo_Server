@@ -139,7 +139,7 @@
               "error": null,
               "status": "pending"
             },
-            "previewUrl": "/assets/00000000-0000-0000-0000-000000000003/preview",
+            "previewUrl": "/assets/00000000-0000-0000-0000-000000000003/preview?v=preview-v1-2a3b138efb1ca6718086548fb915439300096130e4fc1d9cd2c8ba1cab271a6f",
             "rating": 0,
             "revision": 1,
             "sizeBytes": 100,
@@ -157,7 +157,7 @@
               "shutterSpeed": null,
               "whiteBalance": null
             },
-            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000003/thumbnail",
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000003/thumbnail?v=thumbnail-v1-2a3b138efb1ca6718086548fb915439300096130e4fc1d9cd2c8ba1cab271a6f",
             "timelineTime": "2025-01-02T12:00:00",
             "width": null
           },
@@ -182,7 +182,7 @@
               "error": null,
               "status": "pending"
             },
-            "previewUrl": "/assets/00000000-0000-0000-0000-000000000002/preview",
+            "previewUrl": "/assets/00000000-0000-0000-0000-000000000002/preview?v=preview-v1-2cb7afd4bf3f94c9d6741cf4d3af8102538b532da30c06da3325bdcf87cf6daf",
             "rating": 0,
             "revision": 1,
             "sizeBytes": 100,
@@ -200,7 +200,7 @@
               "shutterSpeed": null,
               "whiteBalance": null
             },
-            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000002/thumbnail",
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000002/thumbnail?v=thumbnail-v1-2cb7afd4bf3f94c9d6741cf4d3af8102538b532da30c06da3325bdcf87cf6daf",
             "timelineTime": "2024-05-01T00:10:00",
             "width": null
           },
@@ -225,7 +225,7 @@
               "error": null,
               "status": "pending"
             },
-            "previewUrl": "/assets/00000000-0000-0000-0000-000000000001/preview",
+            "previewUrl": "/assets/00000000-0000-0000-0000-000000000001/preview?v=preview-v1-ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
             "rating": 0,
             "revision": 1,
             "sizeBytes": 100,
@@ -243,7 +243,7 @@
               "shutterSpeed": null,
               "whiteBalance": null
             },
-            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000001/thumbnail",
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000001/thumbnail?v=thumbnail-v1-ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
             "timelineTime": "2024-05-01T00:10:00",
             "width": null
           }
@@ -279,7 +279,7 @@
               "error": null,
               "status": "pending"
             },
-            "previewUrl": "/assets/00000000-0000-0000-0000-000000000003/preview",
+            "previewUrl": "/assets/00000000-0000-0000-0000-000000000003/preview?v=preview-v1-2a3b138efb1ca6718086548fb915439300096130e4fc1d9cd2c8ba1cab271a6f",
             "rating": 0,
             "revision": 1,
             "sizeBytes": 100,
@@ -297,7 +297,7 @@
               "shutterSpeed": null,
               "whiteBalance": null
             },
-            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000003/thumbnail",
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000003/thumbnail?v=thumbnail-v1-2a3b138efb1ca6718086548fb915439300096130e4fc1d9cd2c8ba1cab271a6f",
             "timelineTime": "2025-01-02T12:00:00",
             "width": null
           },
@@ -322,7 +322,7 @@
               "error": null,
               "status": "pending"
             },
-            "previewUrl": "/assets/00000000-0000-0000-0000-000000000002/preview",
+            "previewUrl": "/assets/00000000-0000-0000-0000-000000000002/preview?v=preview-v1-2cb7afd4bf3f94c9d6741cf4d3af8102538b532da30c06da3325bdcf87cf6daf",
             "rating": 0,
             "revision": 1,
             "sizeBytes": 100,
@@ -340,7 +340,7 @@
               "shutterSpeed": null,
               "whiteBalance": null
             },
-            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000002/thumbnail",
+            "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000002/thumbnail?v=thumbnail-v1-2cb7afd4bf3f94c9d6741cf4d3af8102538b532da30c06da3325bdcf87cf6daf",
             "timelineTime": "2024-05-01T00:10:00",
             "width": null
           }
@@ -394,6 +394,7 @@
           "error": null,
           "status": "pending"
         },
+        "previewUrl": "/assets/00000000-0000-0000-0000-000000000001/preview?v=preview-v1-ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
         "previousRevision": null,
         "primaryBlobId": "0664d2be-0cbb-5cd7-954d-1baeb7373510",
         "processing": [
@@ -426,6 +427,7 @@
           "shutterSpeed": null,
           "whiteBalance": null
         },
+        "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000001/thumbnail?v=thumbnail-v1-ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
         "userState": {
           "caption": "",
           "favorite": false,

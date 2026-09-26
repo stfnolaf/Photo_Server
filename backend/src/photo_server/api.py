@@ -50,6 +50,7 @@ from photo_server.api_schemas import (
 )
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
+from photo_server.derivative_identity import derivative_etag, derivative_version
 from photo_server.face_client import RemoteFaceAnalyzer
 from photo_server.metadata import technical_fields
 from photo_server.models import Mutation
@@ -66,7 +67,7 @@ from photo_server.uploads import (
     reconcile_ready_upload_batches,
     seal_batch,
 )
-from photo_server.worker import cache_paths, derivative_etag
+from photo_server.worker import cache_paths
 
 # In-process throttle for preview_cache.last_accessed_at updates: asset id ->
 # monotonic timestamp of the last touch. Bounded by the number of assets
@@ -387,6 +388,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         manifest = find(asset_id)
         return {
             **manifest.document(),
+            "thumbnailUrl": f"/assets/{asset_id}/thumbnail?v={derivative_version('thumbnail', manifest.primary.sha256)}",
+            "previewUrl": f"/assets/{asset_id}/preview?v={derivative_version('preview', manifest.primary.sha256)}",
             "technical": technical_fields(manifest.metadata),
             "processing": service.catalog.processing_status(str(asset_id)),
             "analysis": service.catalog.analysis_status(str(asset_id)),
@@ -560,7 +563,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content={"status": "pending"},
                 headers={"Retry-After": "2", "Cache-Control": "no-store"},
             )
-        etag = derivative_etag(manifest, f"face-thumbnail-{face_id}")
+        etag = derivative_etag(f"face-thumbnail-{face_id}", manifest.primary.sha256)
         headers = {"Cache-Control": "private, max-age=3600", "ETag": etag}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
@@ -810,7 +813,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 headers={"Retry-After": "2", "Cache-Control": "no-store"},
             )
         _record_access(service, manifest, str(asset_id))
-        etag = derivative_etag(manifest, kind)
+        etag = derivative_etag(kind, manifest.primary.sha256)
         headers = {"Cache-Control": "private, max-age=3600", "ETag": etag}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)

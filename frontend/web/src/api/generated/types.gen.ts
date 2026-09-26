@@ -471,6 +471,10 @@ export type CurrentAssetDetailOut = {
     operationId: string;
     preview: PreviewStatusOut;
     /**
+     * Previewurl
+     */
+    previewUrl: string;
+    /**
      * Previousrevision
      */
     previousRevision: number | null;
@@ -496,6 +500,10 @@ export type CurrentAssetDetailOut = {
     technical: {
         [key: string]: unknown;
     };
+    /**
+     * Thumbnailurl
+     */
+    thumbnailUrl: string;
     userState: UserStateOut;
 };
 

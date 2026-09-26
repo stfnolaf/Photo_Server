@@ -1748,7 +1748,7 @@ class Catalog:
                     'originalFilename', sample.original_filename,
                     'box', sample.bounding_box,
                     'confidence', sample.confidence,
-                    'thumbnailUrl', '/faces/' || sample.id || '/thumbnail'
+                    'thumbnailUrl', '/faces/' || sample.id || '/thumbnail?v=face-thumbnail-v1-' || sample.id
                 ) ORDER BY sample.confidence DESC) AS items
                 FROM (
                     SELECT cf.* FROM current_faces cf
@@ -1839,7 +1839,7 @@ class Catalog:
                     "originalFilename": row["original_filename"],
                     "box": row["bounding_box"],
                     "confidence": row["confidence"],
-                    "thumbnailUrl": f"/faces/{row['id']}/thumbnail",
+                    "thumbnailUrl": f"/faces/{row['id']}/thumbnail?v=face-thumbnail-v1-{row['id']}",
                 }
                 for row in rows
             ],

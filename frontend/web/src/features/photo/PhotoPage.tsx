@@ -253,7 +253,7 @@ export function PhotoPage({
       <div className="photo-stage">
         <div className="photo-stage__canvas">
           <div className="photo-stage__scaled" style={{ transform: `scale(${zoom})` }}>
-            <PreviewImage src={`/assets/${assetId}/preview`} status={detail.preview.status} alt={primary.originalFilename} eager contain onRetry={() => api.retryPreview(assetId)} onImageLoad={(width, height) => setPreviewAspectRatio(width / height)} />
+            <PreviewImage src={detail.previewUrl} status={detail.preview.status} alt={primary.originalFilename} eager contain onRetry={() => api.retryPreview(assetId)} onImageLoad={(width, height) => setPreviewAspectRatio(width / height)} />
             {detail.analysis.status === "ready" && <NamedFaceOverlays faces={detail.analysis.faces} imageAspectRatio={previewAspectRatio} />}
           </div>
         </div>

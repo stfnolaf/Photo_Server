@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from photo_server.metadata import lens_display, technical_fields
+from photo_server.derivative_identity import derivative_version
 from photo_server.models import DurableModel, Location, Manifest, UserState
 
 
@@ -183,6 +184,6 @@ def asset_summary(row) -> dict:
         "burstSize": row.get("burst_size") if row.get("burst_id") else None,
         "burstRepresentativeAssetId": row.get("burst_representative"),
         "preview": {"status": row["preview_status"] or "missing", "error": row["preview_error"]},
-        "thumbnailUrl": f"/assets/{row['id']}/thumbnail",
-        "previewUrl": f"/assets/{row['id']}/preview",
+        "thumbnailUrl": f"/assets/{row['id']}/thumbnail?v={derivative_version('thumbnail', manifest.primary.sha256)}",
+        "previewUrl": f"/assets/{row['id']}/preview?v={derivative_version('preview', manifest.primary.sha256)}",
     }

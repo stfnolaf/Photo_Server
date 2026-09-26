@@ -103,10 +103,11 @@ export function collapseBursts(photos: PhotoSummary[]): PhotoSummary[] {
     if (seen.has(burstId)) continue;
     seen.add(burstId);
     const representativeId = photo.burstRepresentativeAssetId ?? photo.assetId;
+    const representative = photos.find((candidate) => candidate.assetId === representativeId);
     result.push({
       ...photo,
-      thumbnailUrl: `/assets/${representativeId}/thumbnail`,
-      previewUrl: `/assets/${representativeId}/preview`,
+      thumbnailUrl: representative?.thumbnailUrl ?? `/assets/${representativeId}/thumbnail`,
+      previewUrl: representative?.previewUrl ?? `/assets/${representativeId}/preview`,
     });
   }
   return result;
