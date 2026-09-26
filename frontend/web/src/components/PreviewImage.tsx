@@ -42,7 +42,7 @@ class FetchPool {
 
 const derivativeFetches = new FetchPool(5);
 
-async function fetchDerivative(path: string, signal: AbortSignal): Promise<string> {
+async function waitForDerivative(path: string, signal: AbortSignal): Promise<void> {
   let attempt = 0;
   while (!signal.aborted) {
     const response = await derivativeFetches.request(() => fetch(apiUrl(path), { signal }), signal);
@@ -63,7 +63,7 @@ async function fetchDerivative(path: string, signal: AbortSignal): Promise<strin
     }
     if (response.status === 404) throw new Error("unavailable");
     if (!response.ok) throw new Error("failed");
-    return URL.createObjectURL(await response.blob());
+    return;
   }
   throw new DOMException("Aborted", "AbortError");
 }
@@ -90,7 +90,7 @@ export function PreviewImage({
   const [loadState, setLoadState] = useState<LoadState>(
     status === "unavailable" ? "unavailable" : status === "failed" ? "failed" : "idle",
   );
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [imageKey, setImageKey] = useState(0);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -106,14 +106,18 @@ export function PreviewImage({
   useEffect(() => {
     if (!active || status === "unavailable") return;
     const controller = new AbortController();
-    let url: string | null = null;
-    setObjectUrl(null);
+    if (status === "failed" && attempt === 0) {
+      setLoadState("failed");
+      return () => controller.abort();
+    }
     setLoadState("loading");
-    fetchDerivative(src, controller.signal)
-      .then((value) => {
-        url = value;
-        setObjectUrl(value);
-        setLoadState("ready");
+    if (status === "ready") {
+      setImageKey((value) => value + 1);
+      return () => controller.abort();
+    }
+    waitForDerivative(src, controller.signal)
+      .then(() => {
+        setImageKey((value) => value + 1);
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -121,13 +125,36 @@ export function PreviewImage({
       });
     return () => {
       controller.abort();
-      if (url) URL.revokeObjectURL(url);
     };
   }, [active, attempt, src, status]);
 
+  const handleImageError = () => {
+    // A ready derivative can be loaded directly, preserving the browser's
+    // decoded-image and HTTP caches. Only probe after an image error when the
+    // catalog said the derivative was not ready; a ready response that fails
+    // to decode is a real image failure, not a polling state.
+    if (status === "ready") {
+      setLoadState("failed");
+      return;
+    }
+    setAttempt((value) => value + 1);
+  };
+
   return (
     <div ref={root} className={`preview-image ${contain ? "preview-image--contain" : ""}`}>
-      {objectUrl && <img src={objectUrl} alt={alt} draggable={false} onLoad={(event) => onImageLoad?.(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} />}
+      {active && loadState !== "unavailable" && loadState !== "failed" && (
+        <img
+          key={`${src}-${imageKey}`}
+          src={apiUrl(src)}
+          alt={alt}
+          draggable={false}
+          onLoad={(event) => {
+            setLoadState("ready");
+            onImageLoad?.(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight);
+          }}
+          onError={handleImageError}
+        />
+      )}
       {loadState !== "ready" && (
         <div className="preview-image__state">
           {loadState === "loading" || loadState === "idle" ? (
