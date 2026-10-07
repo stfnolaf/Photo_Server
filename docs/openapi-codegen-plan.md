@@ -92,7 +92,7 @@ assumes them as fixed.
    converges every producer spelling to a float rendering. The one-time
    Phase 1b byte transition (the list-path jsonb-normalized confidence
    spelling 1 now emitted as 1.0) is pinned in the re-recorded
-   ``phase1b.json``.
+   ``people-browse-details.json``.
 4. **Free-form data stays free-form — `dict[str, Any]`, used judiciously.**
    The EXIF `metadata` block (content varies by camera/lens maker; there is
    no stable schema), the normalized `technical` block, and queue-job

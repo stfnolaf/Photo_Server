@@ -152,7 +152,7 @@ def chroma_histogram_distance(a: str | None, b: str | None) -> float | None:
         return None
     left = bytes.fromhex(a)
     right = bytes.fromhex(b)
-    return sum(abs(x - y) for x, y in zip(left, right)) / (2 * 255)
+    return sum(abs(x - y) for x, y in zip(left, right, strict=True)) / (2 * 255)
 
 
 def compute_fingerprint(jpeg: bytes) -> Fingerprint:

@@ -9,8 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from photo_server.metadata import lens_display, technical_fields
 from photo_server.derivative_identity import derivative_version
+from photo_server.metadata import lens_display, technical_fields
 from photo_server.models import DurableModel, Location, Manifest, UserState
 
 

@@ -2,8 +2,8 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 
-from photo_server.config import Settings
 from photo_server.api import derivative_cache_headers
+from photo_server.config import Settings
 from photo_server.storage import Storage
 
 

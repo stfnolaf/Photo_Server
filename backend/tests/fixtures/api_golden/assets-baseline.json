@@ -16,6 +16,7 @@
             }
           ],
           "captureTime": "2024-05-01T00:10:00+13:00",
+          "deletedAt": null,
           "importedAt": "2025-01-02T12:00:00Z",
           "libraryId": "11111111-1111-4111-8111-111111111111",
           "metadata": {
@@ -23,11 +24,19 @@
             "Make": "Canon",
             "Model": "Camera"
           },
+          "mutation": null,
           "operationId": "b9a2ab72-18d3-5cb9-aa40-c0ac70a2320c",
           "previousRevision": null,
           "primaryBlobId": "0664d2be-0cbb-5cd7-954d-1baeb7373510",
           "revision": 1,
-          "schemaVersion": 1
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
         },
         {
           "assetId": "00000000-0000-0000-0000-000000000002",
@@ -43,6 +52,7 @@
             }
           ],
           "captureTime": "2024-05-01T00:10:00-08:00",
+          "deletedAt": null,
           "importedAt": "2025-01-02T12:00:00Z",
           "libraryId": "11111111-1111-4111-8111-111111111111",
           "metadata": {
@@ -50,11 +60,19 @@
             "Make": "SONY",
             "Model": "Camera"
           },
+          "mutation": null,
           "operationId": "db6747c7-92f1-5cca-8f1b-f38f15fcf3e7",
           "previousRevision": null,
           "primaryBlobId": "5edfb172-f784-55fc-a571-beb3f9262939",
           "revision": 1,
-          "schemaVersion": 1
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
         },
         {
           "assetId": "00000000-0000-0000-0000-000000000003",
@@ -70,6 +88,7 @@
             }
           ],
           "captureTime": null,
+          "deletedAt": null,
           "importedAt": "2025-01-02T12:00:00Z",
           "libraryId": "11111111-1111-4111-8111-111111111111",
           "metadata": {
@@ -77,11 +96,19 @@
             "Make": "Apple",
             "Model": "Camera"
           },
+          "mutation": null,
           "operationId": "e0d13eb9-e7db-569c-974b-1671f62cc68a",
           "previousRevision": null,
           "primaryBlobId": "d8f344d9-eee0-589f-93a0-469dbb3669b5",
           "revision": 1,
-          "schemaVersion": 1
+          "schemaVersion": 2,
+          "userState": {
+            "caption": "",
+            "favorite": false,
+            "keywords": [],
+            "location": null,
+            "rating": 0
+          }
         }
       ],
       "method": "GET",
@@ -353,6 +380,7 @@
           }
         ],
         "captureTime": "2024-05-01T00:10:00+13:00",
+        "deletedAt": null,
         "importedAt": "2025-01-02T12:00:00Z",
         "libraryId": "11111111-1111-4111-8111-111111111111",
         "metadata": {
@@ -360,14 +388,22 @@
           "Make": "Canon",
           "Model": "Camera"
         },
+        "mutation": null,
         "operationId": "b9a2ab72-18d3-5cb9-aa40-c0ac70a2320c",
         "preview": {
           "error": null,
           "status": "pending"
         },
+        "previewUrl": "/assets/00000000-0000-0000-0000-000000000001/preview?v=preview-v1-ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
         "previousRevision": null,
         "primaryBlobId": "0664d2be-0cbb-5cd7-954d-1baeb7373510",
         "processing": [
+          {
+            "attempts": 0,
+            "error": null,
+            "job_type": "fingerprint-v1",
+            "status": "pending"
+          },
           {
             "attempts": 1,
             "error": null,
@@ -376,7 +412,7 @@
           }
         ],
         "revision": 1,
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "technical": {
           "aperture": null,
           "exposureCompensation": null,
@@ -391,6 +427,7 @@
           "shutterSpeed": null,
           "whiteBalance": null
         },
+        "thumbnailUrl": "/assets/00000000-0000-0000-0000-000000000001/thumbnail?v=thumbnail-v1-ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
         "userState": {
           "caption": "",
           "favorite": false,
@@ -405,6 +442,10 @@
     },
     {
       "body": {
+        "aiFaceConfigured": false,
+        "aiFaceReachable": false,
+        "aiSemanticConfigured": false,
+        "aiSemanticReachable": false,
         "analysisFailed": 0,
         "analysisPending": 3,
         "analysisRunning": 0,
@@ -416,13 +457,28 @@
         "onboardingRunning": 0,
         "postgresBackupAt": null,
         "postgresBackupKey": null,
+        "postgresBackupOverall": "unavailable",
+        "postgresBackupPrimary": {
+          "at": null,
+          "errorClass": null,
+          "key": null,
+          "status": "unavailable",
+          "verified": null
+        },
+        "postgresBackupSecondary": {
+          "at": null,
+          "errorClass": null,
+          "key": null,
+          "status": "not-configured",
+          "verified": null
+        },
         "previewFailed": 0,
         "previewPending": 3,
         "previewRunning": 0,
         "processingFailed": 0,
-        "processingPending": 0,
+        "processingPending": 3,
         "processingRunning": 0,
-        "status": "ok",
+        "status": "degraded",
         "uploadBatchesQueued": 0,
         "uploadWorkers": 4,
         "uploadsActive": 0,
@@ -482,7 +538,7 @@
   ],
   "description": "seed: three pinned synthetic assets (RAW/Canon, JPEG/SONY, HEIF/Apple with no capture time); GET /assets, GET /library/assets (full page and a limit=2 page carrying a cursor), GET /assets/{id}, GET /health, 404 unknown asset, 422 invalid BrowseQuery (limit=0)",
   "libraryId": "11111111-1111-4111-8111-111111111111",
-  "normalization": "dict keys sorted recursively; array order preserved",
+  "normalization": "recorded as emitted: dict keys sorted recursively, array order and numeric spellings preserved; comparison additionally equates integral-valued floats with integers (JSON numbers do not distinguish 1 from 1.0)",
   "schemaVersion": 1,
-  "section": "seed"
+  "section": "assets-baseline"
 }

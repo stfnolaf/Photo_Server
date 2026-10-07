@@ -57,13 +57,13 @@ from photo_server.api_schemas import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_golden"
-SEED = FIXTURES / "seed.json"
-PHASE1A = FIXTURES / "phase1a.json"
-PHASE1B = FIXTURES / "phase1b.json"
-PHASE2 = FIXTURES / "phase2_v2.json"
-PHASE3A = FIXTURES / "phase3a.json"
-PHASE3B = FIXTURES / "phase3b.json"
-PHASE4 = FIXTURES / "phase4.json"
+SEED = FIXTURES / "legacy-assets-baseline.json"
+PHASE1A = FIXTURES / "legacy-assets-details.json"
+PHASE1B = FIXTURES / "people-browse-details.json"
+PHASE2 = FIXTURES / "upload-lifecycle.json"
+PHASE3A = FIXTURES / "album-lifecycle.json"
+PHASE3B = FIXTURES / "asset-mutations-queues.json"
+PHASE4 = FIXTURES / "people-face-operations.json"
 
 
 def normalize(value):
@@ -118,13 +118,13 @@ DETAIL_ADAPTER = TypeAdapter(CurrentAssetDetailOut)
 
 
 def test_current_asset_doc_round_trips():
-    for doc in body(FIXTURES / "seed_flat.json", "/assets"):
+    for doc in body(FIXTURES / "assets-baseline.json", "/assets"):
         assert doc["schemaVersion"] == 2
         assert_round_trip(CurrentAssetDocOut, doc)
 
 
 def test_current_asset_detail_round_trips():
-    detail = body(FIXTURES / "phase1a_flat.json", asset_path(13))
+    detail = body(FIXTURES / "assets-browse-statuses.json", asset_path(13))
     assert detail["schemaVersion"] == 2
     assert_round_trip(CurrentAssetDetailOut, detail)
 
@@ -198,7 +198,7 @@ def test_nested_models_round_trip():
 
 
 def test_models_reject_forbidden_shapes():
-    current_doc = body(FIXTURES / "seed_flat.json", "/assets")[0]
+    current_doc = body(FIXTURES / "assets-baseline.json", "/assets")[0]
     summary = body(PHASE1A, "/library/assets")["items"][0]
 
     # Current documents require the complete state shape.

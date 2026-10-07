@@ -48,9 +48,9 @@ Adding sections (Phases 1a onward)
 ----------------------------------
 Append-only, by design: each phase adds a new fixture file and a new test
 function that feeds its own request list to :func:`run_sequence`. Previously
-recorded sections are never edited in place; if a later phase intentionally
-changes a wire format it re-records that section as a *new file* (e.g.
-``seed_v2.json``) so the old bytes stay reviewable in git history.
+recorded sections are never edited in place; if a later contract intentionally
+changes a wire format it records a separate compatibility fixture so the old
+bytes stay reviewable in git history.
 
 Sections whose scenario drives state changes through the API (phase 2's
 upload lifecycle) may also use two extensions of :func:`run_sequence`:
@@ -413,7 +413,7 @@ def test_seed(backend):
 
     run_sequence(
         backend,
-            "seed_flat",
+        "assets-baseline",
         [
             ("GET", "/assets"),
             ("GET", "/library/assets"),
@@ -655,7 +655,7 @@ def test_phase_1a(backend):
 
     run_sequence(
         backend,
-            "phase1a_flat",
+        "assets-browse-statuses",
         [
             ("GET", "/assets"),
             ("GET", "/assets?limit=3&offset=3"),
@@ -862,7 +862,7 @@ def test_phase_1b(backend):
     persons = seed_phase_1b(backend.service)
     run_sequence(
         backend,
-        "phase1b",
+        "people-browse-details",
         phase_1b_cases(persons),
         describe=(
             "phase1b: four pinned assets and five pinned people — Avery "
@@ -1162,7 +1162,7 @@ def test_phase_2(backend):
     """
     run_sequence(
         backend,
-        "phase2_v2",
+        "upload-lifecycle",
         phase_2_cases(backend.service),
         clock=PINNED_SEALED_A,
         describe=(
@@ -1403,7 +1403,7 @@ def test_phase_3a(backend):
     with mock.patch("photo_server.catalog.datetime", new=_PinnedNowDatetime):
         run_sequence(
             backend,
-            "phase3a",
+            "album-lifecycle",
             phase_3a_cases(seeded),
             describe=(
                 "phase3a: album CRUD and restore on two pinned albums "
@@ -1713,7 +1713,7 @@ def test_phase_3b(backend):
     with mock.patch("photo_server.catalog.datetime", new=_Phase3bPinnedNowDatetime):
         run_sequence(
             backend,
-            "phase3b",
+            "asset-mutations-queues",
             phase_3b_cases(asset_ids),
             describe=(
                 "phase3b: asset mutations and queue operations on six "
@@ -2059,7 +2059,7 @@ def test_phase_4(backend):
     with mock.patch("photo_server.catalog.uuid4", new=pinned_uuid4):
         run_sequence(
             backend,
-            "phase4",
+            "people-face-operations",
             phase_4_cases(seeded),
             describe=(
                 "phase4: face-review operations and the storage-verify "
@@ -2083,24 +2083,6 @@ def test_phase_4(backend):
                 "for the session; no workers started"
             ),
         )
-
-# ---------------------------------------------------------------------------
-# Phase 3B's additive /health wire contract gets its own append-only golden.
-# The seed and Phase 2 fixtures remain immutable historical contracts.
-
-
-def test_phase_3b_health_golden(backend):
-    """Record the four new service-visibility fields separately."""
-    run_sequence(
-        backend,
-        "phase3b_health",
-        [("GET", "/health")],
-        describe=(
-            "phase3b: GET /health with the four AI service-visibility flags; "
-            "both AI URLs are unset, so all four flags are false"
-        ),
-    )
-
 
 # ---------------------------------------------------------------------------
 # AI service split plan Phase 3B (docs/ai-service-split-plan.md): /health

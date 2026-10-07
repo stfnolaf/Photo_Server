@@ -35,7 +35,7 @@ from photo_server.api_schemas import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "api_golden"
-PHASE2 = FIXTURES / "phase2.json"
+PHASE2 = FIXTURES / "upload-lifecycle.json"
 BATCH = "787bbcfd-cf82-5f88-8254-43cc9270430a"
 
 
