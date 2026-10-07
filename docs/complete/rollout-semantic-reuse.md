@@ -1,7 +1,7 @@
 # Rollout note: burst semantic-analysis reuse
 
 This note covers rolling out the semantic-analysis reuse policy
-(`burst-reuse-v1`, see `docs/burst-semantic-analysis-reuse.md`). The policy is
+(`burst-reuse-v1`, see `docs/complete/burst-semantic-analysis-reuse.md`). The policy is
 controlled by `PHOTO_AI_SEMANTIC_REUSE_MODE` with three values:
 
 - `off`: always invoke the VLM.

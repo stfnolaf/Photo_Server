@@ -1068,7 +1068,7 @@ Phase 5 (scanner consolidation).
 ### Context manifest
 
 Read in full: `README.md` (380), `.env.example` (57),
-`docs/rollout-semantic-reuse.md` (61), `run_all_tests.sh` (287),
+`docs/complete/rollout-semantic-reuse.md` (61), `run_all_tests.sh` (287),
 `compose.yaml` (157 — for the exact env lines in the matrix).
 Read by range only: `self_hosted_photo_organizer_design.md` §27
 Distributed Compute (~1,195–1,229) and its AI mentions in §39 Suggested
@@ -1076,7 +1076,7 @@ Implementation Order (~1,660–1,690) — the 1,876-line design doc is never
 read in full.
 
 Create / modify: `README.md`, `.env.example`, the design-doc ranges,
-`docs/rollout-semantic-reuse.md`, `run_all_tests.sh`.
+`docs/complete/rollout-semantic-reuse.md`, `run_all_tests.sh`.
 Diff-only artifacts: none.
 
 ### Changes
@@ -1116,7 +1116,7 @@ Diff-only artifacts: none.
   Compute (and the AI mentions in §39) to match (bookkeeping server /
   optional intelligence services; concurrency ownership split; burst
   reuse stays semantic-only per Q6).
-- `docs/rollout-semantic-reuse.md`: note the Q6 decision — the policy
+- `docs/complete/rollout-semantic-reuse.md`: note the Q6 decision — the policy
   continues to govern the semantic stage only; the face stage runs on
   every claimed job.
 - `.env.example`: new names, empty-by-default AI URLs (comment block
