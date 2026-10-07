@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "S3 authority status v1",
+  "type": "object",
+  "required": ["schemaVersion", "authorityMode", "readiness", "projectionFreshness", "reconciliation"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "authorityMode": {"enum": ["postgres", "s3"]},
+    "readiness": {"enum": ["unknown", "ready", "not-ready", "rollback"]},
+    "projectionFreshness": {"enum": ["unknown", "fresh", "stale"]},
+    "reconciliation": {"type": "string"},
+    "lastVerifiedRecoveryCheckpoint": {"type": ["string", "null"]},
+    "failureReason": {"type": ["string", "null"]},
+    "updatedAt": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

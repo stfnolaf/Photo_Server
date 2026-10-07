@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/recovery-checkpoint-v1.json",
+  "title": "Photo Server recovery checkpoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "checkpointId", "checkpointTimestamp", "source", "schemaVersions", "toolVersion", "manifestRevisions", "objects", "postgresDump"],
+  "properties": {
+    "schemaVersion": {"const": 1}, "checkpointId": {"type": "string", "minLength": 1},
+    "checkpointTimestamp": {"type": "string"}, "source": {"type": "object", "additionalProperties": false, "required": ["bucket", "endpoint"], "properties": {"bucket": {"type": "string"}, "endpoint": {"type": "string"}}},
+    "schemaVersions": {"type": "array", "items": {"type": "integer"}}, "toolVersion": {"type": "string"},
+    "manifestRevisions": {"type": "array", "items": {"$ref": "#/$defs/object"}}, "objects": {"type": "array", "items": {"$ref": "#/$defs/object"}},
+    "postgresDump": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/object"}]}
+  },
+  "$defs": {"object": {"type": "object", "required": ["key", "sha256", "sizeBytes"], "properties": {"key": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "sizeBytes": {"type": "integer", "minimum": 0}}}}
+}

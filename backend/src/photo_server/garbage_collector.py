@@ -26,6 +26,7 @@ CANONICAL_PREFIXES = (
     "tombstones/",
     "objects/",
     "indexes/checkpoints/",
+    "indexes/recovery-checkpoints/",
     "reconciliation/",
     "incoming/",
 )
@@ -304,19 +305,20 @@ def collect_garbage(
 
         # Recovery checkpoints are roots.  Their payload is intentionally opaque,
         # but exact canonical key strings are safe to recognize.
-        for key in sorted(keys["indexes/checkpoints/"]):
-            try:
-                checkpoint = storage.get_json(key)
-                head = storage.head(key)
-                modified = _head_time(head.get("LastModified")) if head else None
-                if modified is None or (now - modified <= timedelta(days=policy.checkpoint_days)):
-                    retained_keys.add(key)
-                    root_payload = {k: value for k, value in checkpoint.items() if k not in {"lastKey", "asOf"}}
-                    for value in _strings(root_payload):
-                        if value.startswith(("objects/", "incoming/", "manifests/", "tombstones/")):
-                            referenced.setdefault(value, set()).add(key)
-            except Exception as error:
-                report.errors.append({"key": key, "reason": f"checkpoint scan failed: {error}"})
+        for checkpoint_prefix in ("indexes/checkpoints/", "indexes/recovery-checkpoints/"):
+            for key in sorted(keys[checkpoint_prefix]):
+                try:
+                    checkpoint = storage.get_json(key)
+                    head = storage.head(key)
+                    modified = _head_time(head.get("LastModified")) if head else None
+                    if modified is None or (now - modified <= timedelta(days=policy.checkpoint_days)):
+                        retained_keys.add(key)
+                        root_payload = {k: value for k, value in checkpoint.items() if k not in {"lastKey", "asOf"}}
+                        for value in _strings(root_payload):
+                            if value.startswith(("objects/", "incoming/", "manifests/", "tombstones/")):
+                                referenced.setdefault(value, set()).add(key)
+                except Exception as error:
+                    report.errors.append({"key": key, "reason": f"checkpoint scan failed: {error}"})
 
         # Verify every durable object reference before looking at candidates.
         for object_key, _roots in sorted(referenced.items()):

@@ -2,6 +2,11 @@
 
 ## Complete
 
+Phase 9 recovery checkpoint contracts and implementation are documented in
+[`in-progress/s3-authoritative-phase9.md`](in-progress/s3-authoritative-phase9.md)
+and the recovery checkpoint schemas. Checkpoint creation is resumable,
+immutable at completion, and independent of the production S3 destination.
+
 The `complete/` directory contains delivered behavior, implementation records,
 and completed session briefs:
 
@@ -54,3 +59,9 @@ the roadmap, including restore verification and storage-capacity safety.
 [`s3-authoritative-architecture-plan.md`](s3-authoritative-architecture-plan.md)
 stays at the top level as the current architecture pivot and primary active
 design document.
+# S3 authority cutover
+
+Phase 10 is documented in [s3-authoritative-phase10.md](in-progress/s3-authoritative-phase10.md).
+Use the deterministic cutover readiness report before setting
+`PHOTO_AUTHORITY_MODE=s3`; PostgreSQL remains a rebuildable projection and
+operational queue store.

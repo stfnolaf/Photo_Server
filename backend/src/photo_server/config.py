@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     postgres_backup_secondary_access_key_id: SecretStr | None = Field(default=None, repr=False)
     postgres_backup_secondary_secret_access_key: SecretStr | None = Field(default=None, repr=False)
     postgres_backup_secondary_session_token: SecretStr | None = Field(default=None, repr=False)
+    recovery_checkpoint_prefix: str = "indexes/recovery-checkpoints"
+    recovery_progress_prefix: str = "indexes/checkpoints"
+    # Canonical library state is committed to immutable S3 manifests first.
+    # Keep PostgreSQL as the compatibility default until an explicit readiness
+    # check and cutover activation have completed.
+    authority_mode: Literal["postgres", "s3"] = Field(default="postgres", validation_alias="PHOTO_AUTHORITY_MODE")
+    authority_status_key: str = "indexes/authority/status.json"
     upload_part_bytes: int = Field(
         default=8 * 1024 * 1024,
         ge=5 * 1024 * 1024,

@@ -298,6 +298,15 @@ This phase must remain opt-in and dry-run-only until restore testing is complete
 
 ### Phase 9 — Backup and recovery cutover
 
+Status: complete. `photo_server.recovery` scans and strictly validates all
+canonical manifest kinds, verifies referenced objects, copies immutable bytes
+to an independent destination with post-copy size/SHA-256 verification,
+optionally retains a verified PostgreSQL derived-index dump, supports verified
+dump restore, and rolls back partial destination copies. The disposable
+PostgreSQL/SeaweedFS acceptance passes. See
+[`s3-authoritative-phase9.md`](s3-authoritative-phase9.md) for resume, rollback,
+restore, and failure semantics.
+
 Change backup health from “PostgreSQL dump replicated” to a complete checkpoint
 consisting of:
 
@@ -351,3 +360,12 @@ for canonical manifests and object bytes.
 - Automatic restore verification is not part of the current backup session.
 - Destructive garbage collection is not part of the current backup session.
 - WAL archiving and sub-hour database recovery points remain separate concerns.
+## Phase 10 cutover
+
+Phase 10 completes the authority transition. Immutable S3 manifests, objects,
+processing artifacts, face assignments, and tombstones are canonical. The
+Phase 10 control plane verifies the complete namespace and PostgreSQL
+projection equivalence before activation, persists explicit authority status,
+and supports reconciliation plus emergency rollback without changing source
+canonical objects. See `s3-authoritative-phase10.md` and the authority/readiness
+schemas for the stable report shapes.

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Photo Server recovery checkpoint report v1",
+  "type": "object",
+  "required": ["status"],
+  "properties": {"status": {"enum": ["complete", "paused", "failed"]}, "checkpointId": {"type": "string"}, "checkpoint": {"type": ["string", "null"]}, "checked": {"type": "integer"}, "copied": {"type": "integer"}, "errors": {"type": "array"}}
+}

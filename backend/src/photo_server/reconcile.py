@@ -115,6 +115,8 @@ def _norm(value: Any) -> Any:
         return [_norm(item) for item in value]
     if hasattr(value, "isoformat"):
         return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, str) and value.endswith("+00:00"):
+        return value[:-6] + "Z"
     return value
 
 

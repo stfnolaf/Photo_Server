@@ -56,12 +56,42 @@ def main():
     gc.add_argument("--original-object-days", type=int, default=30)
     gc.add_argument("--processing-artifact-days", type=int, default=30)
     gc.add_argument("--temporary-upload-days", type=int, default=2)
+    recovery = commands.add_parser(
+        "create-recovery-checkpoint", help="Create an immutable, verified S3 recovery checkpoint"
+    )
+    recovery.add_argument("--checkpoint-id", required=True)
+    recovery.add_argument("--destination-endpoint", required=True)
+    recovery.add_argument("--destination-bucket", required=True)
+    recovery.add_argument("--no-resume", action="store_true")
+    recovery.add_argument("--stop-after", type=int)
+    recovery.add_argument("--without-postgres-dump", action="store_true")
+    verify_recovery = commands.add_parser("verify-recovery-checkpoint")
+    verify_recovery.add_argument("checkpoint_key")
+    verify_recovery.add_argument("--checkpoint-endpoint", required=True)
+    verify_recovery.add_argument("--checkpoint-bucket", required=True)
+    restore = commands.add_parser("restore-recovery-checkpoint")
+    restore.add_argument("checkpoint_key")
+    restore.add_argument("--checkpoint-endpoint", required=True)
+    restore.add_argument("--checkpoint-bucket", required=True)
+    restore.add_argument("--destination-endpoint", required=True)
+    restore.add_argument("--destination-bucket", required=True)
+    restore.add_argument("--database-url", help="Fresh PostgreSQL URL for restoring the optional derived-index dump")
     verify = commands.add_parser("verify", help="Verify PostgreSQL's referenced S3 blobs")
     verify.add_argument(
         "--full",
         action="store_true",
         help="Download and hash every blob, in addition to checking its size",
     )
+    commands.add_parser(
+        "authority-status", help="Show the persisted S3/PostgreSQL authority status"
+    )
+    readiness = commands.add_parser(
+        "cutover-readiness", help="Produce the deterministic Phase 10 cutover readiness report"
+    )
+    readiness.add_argument("--checkpoint-id", default="phase10-readiness")
+    commands.add_parser("cutover-activate", help="Activate S3 authority after a clean readiness report")
+    rollback = commands.add_parser("cutover-rollback", help="Return to PostgreSQL projection authority")
+    rollback.add_argument("--reason", default="cutover rollback requested")
     commands.add_parser("list", help="List up to 100 indexed assets")
     commands.add_parser(
         "recluster-bursts",
@@ -139,6 +169,16 @@ def main():
                 checkpoint_id=args.checkpoint_id,
                 resume=not args.no_resume,
             )
+        elif args.command in {"authority-status", "cutover-readiness", "cutover-activate", "cutover-rollback"}:
+            service = Service(settings)
+            if args.command == "authority-status":
+                result = service.authority_status()
+            elif args.command == "cutover-readiness":
+                result = service.cutover_readiness(checkpoint_id=args.checkpoint_id)
+            elif args.command == "cutover-activate":
+                result = service.activate_s3_authority()
+            else:
+                result = service.rollback_s3_authority(args.reason)
         elif args.command in {"backfill-to-s3", "backfill-s3"}:
             from photo_server.backfill import backfill_postgres_to_s3
             from photo_server.catalog import Catalog
@@ -203,6 +243,61 @@ def main():
                 stop_after=args.stop_after,
                 as_of=args.as_of,
             )
+        elif args.command in {"create-recovery-checkpoint", "verify-recovery-checkpoint", "restore-recovery-checkpoint"}:
+            from photo_server.recovery import (
+                create_recovery_checkpoint,
+                restore_recovery_checkpoint,
+                verify_recovery_checkpoint,
+            )
+            from photo_server.storage import Storage
+
+            source = Storage(settings)
+            if args.command == "verify-recovery-checkpoint":
+                checkpoint_settings = settings.model_copy(
+                    update={"s3_endpoint": args.checkpoint_endpoint, "s3_bucket": args.checkpoint_bucket}
+                )
+                result = verify_recovery_checkpoint(Storage(checkpoint_settings), checkpoint_key=args.checkpoint_key)
+            else:
+                destination_settings = settings.model_copy(
+                    update={
+                        "s3_endpoint": args.destination_endpoint,
+                        "s3_bucket": args.destination_bucket,
+                    }
+                )
+                destination = Storage(destination_settings)
+                destination.ensure_bucket()
+                if args.command == "create-recovery-checkpoint":
+                    result = create_recovery_checkpoint(
+                        source,
+                        destination,
+                        args.checkpoint_id,
+                        database_url=None if args.without_postgres_dump else settings.database_url,
+                        checkpoint_prefix=settings.recovery_checkpoint_prefix,
+                        progress_prefix=settings.recovery_progress_prefix,
+                        resume=not args.no_resume,
+                        stop_after=args.stop_after,
+                        source_endpoint=settings.s3_endpoint,
+                    )
+                else:
+                    checkpoint_settings = settings.model_copy(
+                        update={"s3_endpoint": args.checkpoint_endpoint, "s3_bucket": args.checkpoint_bucket}
+                    )
+                    checkpoint_source = Storage(checkpoint_settings)
+                    result = restore_recovery_checkpoint(checkpoint_source, destination, args.checkpoint_key)
+                    if result.get("status") == "complete" and args.database_url:
+                        import subprocess
+
+                        def restore_dump(body):
+                            subprocess.run(
+                                ["pg_restore", "--dbname", args.database_url, "--no-owner", "--no-acl"],
+                                input=body, check=True, capture_output=True,
+                            )
+
+                        from photo_server.recovery import restore_postgres_dump
+
+                        dump_result = restore_postgres_dump(checkpoint_source, args.checkpoint_key, restore_dump)
+                        if dump_result.get("status") != "complete":
+                            result = dump_result
         elif args.command == "export":
             result = export_library(settings, args.destination, args.include_trash)
         else:

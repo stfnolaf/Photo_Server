@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "S3 cutover readiness v1",
+  "type": "object",
+  "required": ["schemaVersion", "status", "authorityMode", "checkpointId", "issues", "reconciliation"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "status": {"enum": ["ready", "not-ready"]},
+    "authorityMode": {"enum": ["postgres", "s3"]},
+    "checkpointId": {"type": "string"},
+    "issues": {"type": "object"},
+    "reconciliation": {"type": "object"}
+  },
+  "additionalProperties": false
+}

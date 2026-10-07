@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from photo_server.api_schemas import (
     AlbumOut,
+    AuthorityStatusOut,
     BatchAbandonedOut,
     BrowsePageOut,
     BurstDetailOut,
@@ -33,6 +34,7 @@ from photo_server.api_schemas import (
     BurstRepresentativeOut,
     CurrentAssetDetailOut,
     CurrentAssetDocOut,
+    CutoverReadinessOut,
     FaceMoveOut,
     HealthFailureOut,
     HealthOut,
@@ -449,6 +451,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for worker_type in ("worker", "ai-worker")
             ],
         }
+
+    @app.get("/authority/status", response_model=AuthorityStatusOut, operation_id="getAuthorityStatus")
+    def authority_status():
+        return service.authority_status()
+
+    @app.get("/authority/readiness", response_model=CutoverReadinessOut, operation_id="getAuthorityReadiness")
+    def authority_readiness():
+        return service.cutover_readiness()
 
     @app.get("/metrics", include_in_schema=False)
     def prometheus_metrics(request: Request):

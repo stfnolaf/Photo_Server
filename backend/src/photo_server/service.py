@@ -26,6 +26,32 @@ class Service:
         self.scratch = settings.data_dir / "scratch"
         self.scratch.mkdir(parents=True, exist_ok=True)
 
+    def authority_status(self) -> dict:
+        """Return the persisted cutover status without requiring PostgreSQL."""
+        from photo_server.cutover import authority_status
+
+        return authority_status(self)
+
+    def cutover_readiness(self, **kwargs) -> dict:
+        from photo_server.cutover import cutover_readiness
+
+        return cutover_readiness(self, **kwargs)
+
+    def activate_s3_authority(self, readiness: dict | None = None) -> dict:
+        from photo_server.cutover import CutoverManager
+
+        return CutoverManager(self).activate(readiness)
+
+    def rollback_s3_authority(self, reason: str = "rollback requested") -> dict:
+        from photo_server.cutover import CutoverManager
+
+        return CutoverManager(self).rollback(reason)
+
+    def reconcile_authority(self, **kwargs) -> dict:
+        from photo_server.cutover import CutoverManager
+
+        return CutoverManager(self).reconcile(**kwargs)
+
     def initialize(self, recover_uploads: bool = True) -> dict:
         with self.catalog.writer():
             self.storage.ensure_bucket()
@@ -363,29 +389,36 @@ class Service:
                 # apply. A DB failure leaves content to be completed by retry.
                 for path, digest, size in files:
                     self.dual_write.publish_object(path, digest, size)
-                try:
-                    self.catalog.apply(manifest)
-                except Exception as error:
-                    self.dual_write.record_reconciliation(
-                        operation_id,
-                        {
-                            "status": "object-written-database-failed",
-                            "assetId": str(asset_id),
-                            "error": str(error),
-                        },
-                    )
-                    raise
-                try:
-                    self.dual_write.publish_manifest(self.dual_write.manifest_from_legacy(manifest))
-                except Exception as error:
-                    self.dual_write.record_reconciliation(
-                        operation_id,
-                        {
-                            "status": "database-written-manifest-failed",
-                            "assetId": str(asset_id),
-                            "error": str(error),
-                        },
-                    )
-                    raise
+                canonical = self.dual_write.manifest_from_legacy(manifest)
+                if self.settings.authority_mode == "s3":
+                    # Phase 10: canonical state must be durable before the
+                    # PostgreSQL projection is changed. A projection failure
+                    # is repaired by reconciliation or an idempotent retry.
+                    self.dual_write.publish_manifest(canonical)
+                    try:
+                        self.catalog.apply(manifest)
+                    except Exception as error:
+                        self.dual_write.record_reconciliation(
+                            operation_id,
+                            {"status": "canonical-written-projection-failed", "assetId": str(asset_id), "error": str(error)},
+                        )
+                        raise
+                else:
+                    try:
+                        self.catalog.apply(manifest)
+                    except Exception as error:
+                        self.dual_write.record_reconciliation(
+                            operation_id,
+                            {"status": "object-written-database-failed", "assetId": str(asset_id), "error": str(error)},
+                        )
+                        raise
+                    try:
+                        self.dual_write.publish_manifest(canonical)
+                    except Exception as error:
+                        self.dual_write.record_reconciliation(
+                            operation_id,
+                            {"status": "database-written-manifest-failed", "assetId": str(asset_id), "error": str(error)},
+                        )
+                        raise
                 status = "imported"
             return {"status": status, "assetId": str(manifest.asset_id), "replayed": False}
