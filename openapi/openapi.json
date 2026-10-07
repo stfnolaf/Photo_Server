@@ -506,6 +506,70 @@
         "title": "AssetDocOutList",
         "type": "array"
       },
+      "BackupDestinationOut": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "errorClass": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorclass"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "status": {
+            "enum": [
+              "success",
+              "failed",
+              "unavailable",
+              "not-configured"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "BackupDestinationOut",
+        "type": "object"
+      },
       "BatchAbandonedOut": {
         "additionalProperties": false,
         "description": "DELETE /upload-batches/{id}: the unsealed batch and its staged objects\nare gone.",
@@ -1260,6 +1324,42 @@
             ],
             "title": "Postgresbackupkey"
           },
+          "postgresBackupOverall": {
+            "anyOf": [
+              {
+                "enum": [
+                  "healthy",
+                  "degraded",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Postgresbackupoverall"
+          },
+          "postgresBackupPrimary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupDestinationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "postgresBackupSecondary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupDestinationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "previewFailed": {
             "title": "Previewfailed",
             "type": "integer"
@@ -1340,8 +1440,6 @@
           "uploadWorkers",
           "uploadsActive",
           "uploadsWaiting",
-          "postgresBackupKey",
-          "postgresBackupAt",
           "aiSemanticConfigured",
           "aiSemanticReachable",
           "aiFaceConfigured",

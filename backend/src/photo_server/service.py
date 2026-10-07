@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -117,15 +118,44 @@ class Service:
         }
 
     def backup_status(self) -> dict:
+        status_path = self.settings.postgres_backup_status_path
+        try:
+            status = json.loads(status_path.read_text())
+        except (FileNotFoundError, OSError, ValueError):
+            status = None
+        if isinstance(status, dict):
+            primary = status.get("primary", {})
+            secondary = status.get("secondary", {})
+            return {
+                "postgresBackupKey": primary.get("key"),
+                "postgresBackupAt": primary.get("at"),
+                "postgresBackupPrimary": primary,
+                "postgresBackupSecondary": secondary,
+                "postgresBackupOverall": status.get("overallStatus", "unavailable"),
+            }
         keys = list(self.storage.keys(self.settings.postgres_backup_prefix.rstrip("/") + "/"))
         if not keys:
-            return {"postgresBackupKey": None, "postgresBackupAt": None}
+            return {
+                "postgresBackupKey": None,
+                "postgresBackupAt": None,
+                "postgresBackupPrimary": {"status": "unavailable"},
+                "postgresBackupSecondary": {"status": "not-configured"},
+                "postgresBackupOverall": "unavailable",
+            }
         key = max(keys)
         head = self.storage.head(key)
         modified = head.get("LastModified") if head else None
         return {
             "postgresBackupKey": key,
             "postgresBackupAt": modified.isoformat() if modified else None,
+            "postgresBackupPrimary": {
+                "status": "success" if modified else "unavailable",
+                "key": key,
+                "at": modified.isoformat() if modified else None,
+                "verified": True,
+            },
+            "postgresBackupSecondary": {"status": "not-configured"},
+            "postgresBackupOverall": "healthy" if modified else "unavailable",
         }
 
     def queue_processing(

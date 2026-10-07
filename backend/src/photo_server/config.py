@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     worker_heartbeat_interval_seconds: int = Field(default=15, ge=5, le=300)
     worker_stale_seconds: int = Field(default=60, ge=15, le=3600)
     postgres_backup_prefix: str = "backups/postgres"
+    postgres_backup_status_path: Path = Path("/var/lib/photo-backup/status.json")
+    postgres_backup_secondary_endpoint: str = ""
+    postgres_backup_secondary_path: str = ""
+    postgres_backup_secondary_bucket: str = "postgres-backups"
+    postgres_backup_secondary_retention: int = Field(default=168, ge=1)
+    postgres_backup_secondary_required: bool = False
+    postgres_backup_secondary_anonymous: bool = False
+    postgres_backup_secondary_access_key_id: SecretStr | None = Field(default=None, repr=False)
+    postgres_backup_secondary_secret_access_key: SecretStr | None = Field(default=None, repr=False)
+    postgres_backup_secondary_session_token: SecretStr | None = Field(default=None, repr=False)
     upload_part_bytes: int = Field(
         default=8 * 1024 * 1024,
         ge=5 * 1024 * 1024,

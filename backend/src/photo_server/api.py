@@ -425,13 +425,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ai_probe_cache["semantic"] = semantic_probe.result()
                 ai_probe_cache["face"] = face_probe.result()
             ai_probe_cache["ts"] = now
+        backup = service.backup_status() if storage["status"] == "ready" else {
+            "postgresBackupKey": None, "postgresBackupAt": None,
+            "postgresBackupPrimary": {"status": "unavailable"},
+            "postgresBackupSecondary": {"status": "unavailable"},
+            "postgresBackupOverall": "unavailable",
+        }
         return {
-            "status": "degraded" if storage["status"] != "ready" else "ok",
+            "status": "degraded" if storage["status"] != "ready" or backup.get("postgresBackupOverall", "healthy") != "healthy" else "ok",
             "libraryId": str(service.library_id),
             **service.catalog.counts(),
             **service.catalog.queue_counts(),
             **upload_gate.status(),
-            **(service.backup_status() if storage["status"] == "ready" else {"postgresBackupKey": None, "postgresBackupAt": None}),
+            **backup,
             "aiSemanticConfigured": bool(service.settings.ai_base_url),
             "aiSemanticReachable": ai_probe_cache["semantic"],
             "aiFaceConfigured": bool(service.settings.face_service_url),

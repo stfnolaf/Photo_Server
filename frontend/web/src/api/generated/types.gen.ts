@@ -266,6 +266,32 @@ export type AnalysisStatusOut = {
 export type AssetDocOutList = Array<CurrentAssetDocOut>;
 
 /**
+ * BackupDestinationOut
+ */
+export type BackupDestinationOut = {
+    /**
+     * At
+     */
+    at?: string | null;
+    /**
+     * Errorclass
+     */
+    errorClass?: string | null;
+    /**
+     * Key
+     */
+    key?: string | null;
+    /**
+     * Status
+     */
+    status: 'success' | 'failed' | 'unavailable' | 'not-configured';
+    /**
+     * Verified
+     */
+    verified?: boolean | null;
+};
+
+/**
  * BatchAbandonedOut
  *
  * DELETE /upload-batches/{id}: the unsealed batch and its staged objects
@@ -762,11 +788,17 @@ export type HealthOut = {
     /**
      * Postgresbackupat
      */
-    postgresBackupAt: string | null;
+    postgresBackupAt?: string | null;
     /**
      * Postgresbackupkey
      */
-    postgresBackupKey: string | null;
+    postgresBackupKey?: string | null;
+    /**
+     * Postgresbackupoverall
+     */
+    postgresBackupOverall?: 'healthy' | 'degraded' | 'unavailable' | null;
+    postgresBackupPrimary?: BackupDestinationOut | null;
+    postgresBackupSecondary?: BackupDestinationOut | null;
     /**
      * Previewfailed
      */

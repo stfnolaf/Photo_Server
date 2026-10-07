@@ -539,6 +539,14 @@ class WorkerHeartbeatOut(ResponseModel):
     age_seconds: StrictFloat | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
+class BackupDestinationOut(ResponseModel):
+    status: Literal["success", "failed", "unavailable", "not-configured"]
+    key: StrictStr | None = None
+    at: StrictStr | None = None
+    verified: StrictBool | None = None
+    error_class: StrictStr | None = None
+
+
 class HealthOut(QueueCountsOut):
     """GET /health: the endpoint's merged shape — fixed "ok", the library id,
     asset/blob counts, every queue count, the upload-gate statistics, and the
@@ -552,8 +560,11 @@ class HealthOut(QueueCountsOut):
     upload_workers: StrictInt
     uploads_active: StrictInt
     uploads_waiting: StrictInt
-    postgres_backup_key: StrictStr | None
-    postgres_backup_at: StrictStr | None
+    postgres_backup_key: StrictStr | None = None
+    postgres_backup_at: StrictStr | None = None
+    postgres_backup_primary: BackupDestinationOut | None = Field(default=None, exclude_if=lambda value: value is None)
+    postgres_backup_secondary: BackupDestinationOut | None = Field(default=None, exclude_if=lambda value: value is None)
+    postgres_backup_overall: Literal["healthy", "degraded", "unavailable"] | None = Field(default=None, exclude_if=lambda value: value is None)
     # Phase 3B of the AI service split plan (docs/ai-service-split-plan.md):
     # service visibility. ``Configured`` is a config check on the API
     # process's own settings (empty URL = not configured); ``Reachable`` is a
