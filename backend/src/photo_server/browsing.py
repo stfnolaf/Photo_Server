@@ -114,6 +114,8 @@ class UserStatePatch(OperationRequest):
     caption: str | None = Field(default=None, max_length=10000)
     keywords: list[str] | None = Field(default=None, max_length=200)
     location: Location | None = None
+    metadata: dict | None = None
+    capture_time: str | None = None
 
     def changes(self):
         return self.model_dump(

@@ -1,4 +1,4 @@
-"""PostgreSQL-authoritative library mutations.
+"""Mutation entry points and projection compatibility.
 
 S3 contains immutable media blobs. Structured library state is committed in one
 PostgreSQL transaction and is protected by PostgreSQL backups; it is not mirrored
@@ -37,5 +37,30 @@ def mutation_result(snapshot: Manifest | Album) -> dict:
 
 
 def mutate(service, operation_id, mutation: Mutation) -> dict:
-    """Commit a mutation and its idempotency record atomically in PostgreSQL."""
+    """Publish the immutable revision, then apply the PostgreSQL projection."""
+    previous = service.catalog.operation(operation_id)
+    if previous is not None:
+        if previous["request"] != mutation.document():
+            from photo_server.config import LibraryError
+
+            raise LibraryError("Operation ID was reused with a different request")
+        return previous["result"]
+    from photo_server.authoritative import AuthoritativeMutationCoordinator
+
+    AuthoritativeMutationCoordinator(service).publish(operation_id, mutation)
     return service.catalog.commit_mutation(operation_id, mutation)
+
+
+def mutate_face(service, operation_id, request: dict) -> dict:
+    """Publish person/face durable state before applying the projection."""
+    previous = service.catalog.operation(operation_id)
+    if previous is not None:
+        if previous["request"] != request:
+            from photo_server.config import LibraryError
+
+            raise LibraryError("Operation ID was reused with a different request")
+        return previous["result"]
+    from photo_server.authoritative import AuthoritativeMutationCoordinator
+
+    AuthoritativeMutationCoordinator(service).publish_face_operation(operation_id, request)
+    return service.catalog.commit_face_operation(operation_id, request)

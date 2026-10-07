@@ -100,6 +100,20 @@ class Storage:
         if not self.put(key, data, "application/json") and self.get_json(key) != value:
             raise LibraryError(f"Immutable object conflicts with this operation: {key}")
 
+    def put_json_mutable(self, key: str, value: dict):
+        """Write operational metadata that is intentionally updated in place.
+
+        Canonical manifests and content-addressed objects always use ``put``;
+        scan checkpoints are the explicit exception because they represent
+        progress, not library state.
+        """
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=canonical_json(value),
+            ContentType="application/json",
+        )
+
     def get_json(self, key: str) -> dict:
         with closing(self.client.get_object(Bucket=self.bucket, Key=key)["Body"]) as body:
             data = body.read(8 * CHUNK + 1)
@@ -107,11 +121,18 @@ class Storage:
             raise LibraryError(f"Metadata object exceeds 8 MB: {key}")
         return json.loads(data)
 
+    def read_bytes(self, key: str, limit: int | None = None) -> bytes:
+        with closing(self.client.get_object(Bucket=self.bucket, Key=key)["Body"]) as body:
+            data = body.read() if limit is None else body.read(limit + 1)
+        if limit is not None and len(data) > limit:
+            raise LibraryError(f"Object exceeds configured read limit: {key}")
+        return data
+
     def keys(self, prefix: str):
         for page in self.client.get_paginator("list_objects_v2").paginate(
             Bucket=self.bucket, Prefix=prefix
         ):
-            for entry in page.get("Contents", []):
+            for entry in page.get("Contents") or []:
                 yield entry["Key"]
 
     def delete(self, key: str):

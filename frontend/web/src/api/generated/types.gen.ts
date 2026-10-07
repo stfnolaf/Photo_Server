@@ -1723,6 +1723,10 @@ export type UserStatePatch = {
      */
     caption?: string | null;
     /**
+     * Capturetime
+     */
+    captureTime?: string | null;
+    /**
      * Expectedrevision
      */
     expectedRevision?: number | null;
@@ -1735,6 +1739,12 @@ export type UserStatePatch = {
      */
     keywords?: Array<string> | null;
     location?: Location | null;
+    /**
+     * Metadata
+     */
+    metadata?: {
+        [key: string]: unknown;
+    } | null;
     /**
      * Operationid
      */

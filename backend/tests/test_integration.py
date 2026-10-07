@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 
 from photo_server.config import Settings
 from photo_server.export import export_library
+from photo_server.rebuild import compare_projections, rebuild_from_s3
 from photo_server.service import Service
 from photo_server.storage import Storage
 from photo_server.worker import cache_paths, run_once
@@ -81,6 +82,23 @@ def photo(root, name="sample.JPG", color="red"):
     path = root / name
     Image.new("RGB", (80, 60), color).save(path, format="JPEG")
     return path
+
+
+def test_rebuild_from_phase3_fixture_matches_original_projection(backend):
+    original = backend.service
+    source = photo(backend.root)
+    result = original.import_batch([source.name], uuid4())
+    assert result["results"][0]["status"] == "imported", result
+    rebuilt = backend.fresh_catalog()
+    report = rebuild_from_s3(
+        original.storage,
+        rebuilt.catalog,
+        checkpoint_id=f"integration-{uuid4().hex}",
+        resume=False,
+    )
+    assert report["status"] == "complete", report
+    comparison = compare_projections(original.catalog, rebuilt.catalog)
+    assert comparison["match"], comparison
 
 
 def test_storage_refuses_overwrite(backend):

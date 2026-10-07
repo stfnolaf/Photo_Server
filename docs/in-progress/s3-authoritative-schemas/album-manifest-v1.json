@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/album-manifest-v1.json",
+  "title": "Photo album manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "libraryId", "albumId", "revision", "parentRevision", "operationId", "createdAt", "name", "description", "assetIds", "deletedAt"],
+  "properties": {
+    "schemaVersion": {"const": 1}, "libraryId": {"type": "string", "format": "uuid"}, "albumId": {"type": "string", "format": "uuid"},
+    "revision": {"type": "integer", "minimum": 1}, "parentRevision": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+    "operationId": {"type": "string", "format": "uuid"}, "createdAt": {"type": "string", "format": "date-time"},
+    "name": {"type": "string", "minLength": 1}, "description": {"type": "string"},
+    "assetIds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uuid"}},
+    "deletedAt": {"anyOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]}
+  }
+}

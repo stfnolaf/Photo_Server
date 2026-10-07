@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Photo Server garbage-collection report v1",
+  "type": "object",
+  "required": ["status", "mode", "deletionEnabled", "candidates", "protected", "unresolvedReferences", "safetyWarnings", "errors"],
+  "properties": {
+    "status": {"enum": ["complete", "paused", "failed"]},
+    "mode": {"const": "dry-run"},
+    "deletionEnabled": {"const": false},
+    "asOf": {"type": "string"},
+    "scanned": {"type": "integer", "minimum": 0},
+    "candidateCount": {"type": "integer", "minimum": 0},
+    "candidateBytes": {"type": "integer", "minimum": 0},
+    "candidates": {"type": "array", "items": {"$ref": "#/$defs/object"}},
+    "protected": {"type": "array", "items": {"type": "object"}},
+    "bytesByCategory": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "unresolvedReferences": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
+    "safetyWarnings": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
+    "errors": {"type": "array", "items": {"$ref": "#/$defs/issue"}},
+    "checkpoint": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "issue": {"type": "object", "required": ["key", "reason"], "properties": {"key": {"type": "string"}, "reason": {"type": "string"}}},
+    "object": {"type": "object", "required": ["key", "category", "sizeBytes", "reason", "referencing", "retentionAgeSeconds", "policy"], "properties": {"key": {"type": "string"}, "category": {"type": "string"}, "sizeBytes": {"type": "integer", "minimum": 0}, "reason": {"type": "string"}, "referencing": {"type": "array", "items": {"type": "string"}}, "retentionAgeSeconds": {"type": "integer"}, "policy": {"type": "string"}}}
+  }
+}

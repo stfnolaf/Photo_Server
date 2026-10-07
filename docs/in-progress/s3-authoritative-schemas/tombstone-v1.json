@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/tombstone-v1.json",
+  "title": "Photo library tombstone v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "libraryId", "entityType", "entityId", "revision", "parentRevision", "operationId", "deletedAt", "createdAt"],
+  "properties": {
+    "schemaVersion": {"const": 1}, "libraryId": {"type": "string", "format": "uuid"},
+    "entityType": {"enum": ["asset", "album", "person"]}, "entityId": {"type": "string", "format": "uuid"},
+    "revision": {"type": "integer", "minimum": 1}, "parentRevision": {"type": "integer", "minimum": 1},
+    "operationId": {"type": "string", "format": "uuid"}, "deletedAt": {"type": "string", "format": "date-time"},
+    "createdAt": {"type": "string", "format": "date-time"}
+  }
+}

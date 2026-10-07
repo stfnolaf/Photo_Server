@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/reconciliation-report-v1.json",
+  "title": "Photo reconciliation report v1",
+  "type": "object",
+  "required": ["status", "dryRun", "checkpoint", "scanned", "matched", "missing", "divergent", "orphaned", "unresolved", "conflicting", "malformed", "skipped", "repaired", "failed"],
+  "properties": {
+    "status": {"enum": ["complete", "paused", "failed"]},
+    "dryRun": {"type": "boolean"},
+    "applyRequested": {"type": "boolean"},
+    "checkpoint": {"type": ["string", "null"]},
+    "scanned": {"type": "integer", "minimum": 0},
+    "matched": {"type": "integer", "minimum": 0},
+    "missing": {"type": "array"},
+    "divergent": {"type": "array"},
+    "orphaned": {"type": "array"},
+    "unresolved": {"type": "array"},
+    "conflicting": {"type": "array"},
+    "malformed": {"type": "array"},
+    "skipped": {"type": "integer", "minimum": 0},
+    "repaired": {"type": "integer", "minimum": 0},
+    "failed": {"type": "array"}
+  }
+}

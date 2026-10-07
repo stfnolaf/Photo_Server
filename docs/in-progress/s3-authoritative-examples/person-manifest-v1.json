@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "libraryId": "00000000-0000-4000-8000-000000000001",
+  "personId": "00000000-0000-4000-8000-000000000501",
+  "revision": 1,
+  "parentRevision": null,
+  "operationId": "00000000-0000-4000-8000-000000000502",
+  "createdAt": "2026-10-06T19:05:00Z",
+  "displayName": "Avery",
+  "faceIds": ["00000000-0000-4000-8000-000000000503"],
+  "deletedAt": null
+}

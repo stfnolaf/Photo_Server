@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/processing-artifact-v1.json",
+  "title": "Photo processing artifact manifest v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "assetId", "artifactId", "processingType", "inputSha256", "implementationVersion", "resultObject", "createdAt"],
+  "properties": {
+    "schemaVersion": {"const": 1}, "assetId": {"type": "string", "format": "uuid"}, "artifactId": {"type": "string", "format": "uuid"},
+    "processingType": {"type": "string", "minLength": 1}, "modelName": {"type": "string"}, "modelVersion": {"type": "string"},
+    "pipelineVersion": {"type": "string", "minLength": 1}, "inputSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "implementationVersion": {"type": "string", "minLength": 1}, "createdAt": {"type": "string", "format": "date-time"},
+    "resultObject": {"type": "object", "additionalProperties": false, "required": ["objectKey", "sha256", "sizeBytes", "mimeType"], "properties": {
+      "objectKey": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "sizeBytes": {"type": "integer", "minimum": 1}, "mimeType": {"type": "string", "minLength": 1}
+    }}
+  }
+}

@@ -2888,6 +2888,17 @@
             ],
             "title": "Caption"
           },
+          "captureTime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capturetime"
+          },
           "expectedRevision": {
             "anyOf": [
               {
@@ -2935,6 +2946,18 @@
                 "type": "null"
               }
             ]
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
           },
           "operationId": {
             "format": "uuid",

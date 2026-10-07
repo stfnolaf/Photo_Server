@@ -66,7 +66,7 @@ from photo_server.metadata import technical_fields
 from photo_server.metrics import Metrics, safe_metrics
 from photo_server.models import Mutation
 from photo_server.service import Service
-from photo_server.state import mutate
+from photo_server.state import mutate, mutate_face
 from photo_server.uploads import (
     UploadGate,
     abandon_batch,
@@ -662,7 +662,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.patch("/people/{person_id}", response_model=PersonRenameOut, operation_id="renamePerson")
     def rename_person(person_id: UUID, body: PersonNameRequest):
-        return service.catalog.commit_face_operation(
+        return mutate_face(
+            service,
             body.operation_id,
             {
                 "action": "person.rename",
@@ -677,7 +678,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_id="mergePerson",
     )
     def merge_person(person_id: UUID, body: PersonMergeRequest):
-        return service.catalog.commit_face_operation(
+        return mutate_face(
+            service,
             body.operation_id,
             {
                 "action": "person.merge",
@@ -691,7 +693,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         face_ids = [str(face_id) for face_id in body.face_ids]
         if len(set(face_ids)) != len(face_ids):
             raise HTTPException(422, "Face IDs must be unique")
-        return service.catalog.commit_face_operation(
+        return mutate_face(
+            service,
             body.operation_id,
             {
                 "action": "faces.move",

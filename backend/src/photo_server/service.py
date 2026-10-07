@@ -9,6 +9,7 @@ from uuid import UUID, uuid4, uuid5
 
 from photo_server.catalog import Catalog
 from photo_server.config import LibraryError, Settings
+from photo_server.dual_write import DualWritePublisher
 from photo_server.models import Blob, Manifest
 from photo_server.processing import STAGE_JOBS, extract_metadata
 from photo_server.selection import plan_import, role
@@ -19,6 +20,7 @@ class Service:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.storage = Storage(settings)
+        self.dual_write = DualWritePublisher(self.storage)
         self.catalog = Catalog(settings.database_url, settings)
         self.library_id: UUID | None = None
         self.scratch = settings.data_dir / "scratch"
@@ -228,15 +230,31 @@ class Service:
 
     def import_batch(self, paths: list[str], operation_id: UUID) -> dict:
         plan = self.plan(paths)
+        batch_inputs = []
+        for entry in plan["assets"]:
+            for relative in [entry["path"], *entry["sidecars"]]:
+                with self.stage(relative) as (_path, digest, size):
+                    batch_inputs.append({"name": relative, "sha256": digest, "size": size})
+        batch_error = None
+        try:
+            self.dual_write.assert_operation_input(operation_id, "batch", batch_inputs)
+        except Exception as error:
+            # Preserve the existing import API's per-entry failure response.
+            batch_error = error
         with self.catalog.writer():
             results = []
-            for entry in plan["assets"]:
-                try:
-                    result = self._import_asset(entry, operation_id)
-                    results.append({"path": entry["path"], **result})
-                except Exception as error:
-                    results.append({"path": entry["path"], "status": "failed", "error": str(error)})
-                    break
+            if batch_error is not None:
+                results.append(
+                    {"path": plan["assets"][0]["path"], "status": "failed", "error": str(batch_error)}
+                )
+            else:
+                for entry in plan["assets"]:
+                    try:
+                        result = self._import_asset(entry, operation_id)
+                        results.append({"path": entry["path"], **result})
+                    except Exception as error:
+                        results.append({"path": entry["path"], "status": "failed", "error": str(error)})
+                        break
             completed = {entry["path"] for entry in results}
             results.extend(
                 {"path": entry["path"], "status": "not_attempted"}
@@ -270,6 +288,7 @@ class Service:
             fingerprints = [
                 {"name": path.name, "sha256": digest, "size": size} for path, digest, size in files
             ]
+            self.dual_write.assert_operation_input(operation_id, entry["path"], fingerprints)
             manifest = self.catalog.get(str(asset_id))
             if manifest:
                 stored = [
@@ -278,6 +297,25 @@ class Service:
                 ]
                 if stored != fingerprints:
                     raise LibraryError("Operation ID was reused with changed file content")
+                # A previous attempt may have committed PostgreSQL and failed
+                # during canonical-manifest publication. Re-run the complete
+                # immutable publication on every idempotent retry.
+                for path, digest, size in files:
+                    self.dual_write.publish_object(path, digest, size)
+                try:
+                    self.dual_write.publish_manifest(
+                        self.dual_write.manifest_from_legacy(manifest)
+                    )
+                except Exception as error:
+                    self.dual_write.record_reconciliation(
+                        operation_id,
+                        {
+                            "status": "database-written-manifest-failed",
+                            "assetId": str(asset_id),
+                            "error": str(error),
+                        },
+                    )
+                    raise
                 return {
                     "status": "imported",
                     "assetId": str(manifest.asset_id),
@@ -321,6 +359,33 @@ class Service:
                     capture_time=info.get("captureTime"),
                     metadata=info,
                 )
-                self.catalog.apply(manifest)
+                # Publish canonical bytes before the unchanged PostgreSQL
+                # apply. A DB failure leaves content to be completed by retry.
+                for path, digest, size in files:
+                    self.dual_write.publish_object(path, digest, size)
+                try:
+                    self.catalog.apply(manifest)
+                except Exception as error:
+                    self.dual_write.record_reconciliation(
+                        operation_id,
+                        {
+                            "status": "object-written-database-failed",
+                            "assetId": str(asset_id),
+                            "error": str(error),
+                        },
+                    )
+                    raise
+                try:
+                    self.dual_write.publish_manifest(self.dual_write.manifest_from_legacy(manifest))
+                except Exception as error:
+                    self.dual_write.record_reconciliation(
+                        operation_id,
+                        {
+                            "status": "database-written-manifest-failed",
+                            "assetId": str(asset_id),
+                            "error": str(error),
+                        },
+                    )
+                    raise
                 status = "imported"
             return {"status": status, "assetId": str(manifest.asset_id), "replayed": False}

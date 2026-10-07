@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/person-manifest-v1.json",
+  "title": "Photo person manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "libraryId", "personId", "revision", "parentRevision", "operationId", "createdAt", "displayName", "faceIds", "deletedAt"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "libraryId": {"type": "string", "format": "uuid"},
+    "personId": {"type": "string", "format": "uuid"},
+    "revision": {"type": "integer", "minimum": 1},
+    "parentRevision": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+    "operationId": {"type": "string", "format": "uuid"},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "displayName": {"type": "string"},
+    "faceIds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uuid"}},
+    "deletedAt": {"anyOf": [{"type": "null"}, {"type": "string", "format": "date-time"}]}
+  }
+}

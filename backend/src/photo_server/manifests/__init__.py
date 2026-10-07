@@ -1,0 +1,56 @@
+"""Pure, strict codec for the Phase 1 S3-authoritative manifest contract."""
+
+from .codec import (
+    ManifestCodecError,
+    canonical_json,
+    canonicalize,
+    decode,
+    decode_album_manifest,
+    decode_asset_manifest,
+    decode_face_manifest,
+    decode_person_manifest,
+    decode_processing_artifact,
+    decode_tombstone,
+    encode,
+    sha256,
+)
+from .models import (
+    AlbumManifest,
+    AssetManifest,
+    BlobReference,
+    FaceManifest,
+    Location,
+    PersonManifest,
+    ProcessingArtifact,
+    ProcessingReference,
+    Tombstone,
+    UserState,
+)
+from .validation import validate_history, validate_revision
+
+__all__ = [
+    "AlbumManifest",
+    "AssetManifest",
+    "BlobReference",
+    "Location",
+    "ManifestCodecError",
+    "ProcessingArtifact",
+    "ProcessingReference",
+    "PersonManifest",
+    "FaceManifest",
+    "Tombstone",
+    "UserState",
+    "canonical_json",
+    "canonicalize",
+    "decode",
+    "decode_album_manifest",
+    "decode_asset_manifest",
+    "decode_processing_artifact",
+    "decode_person_manifest",
+    "decode_face_manifest",
+    "decode_tombstone",
+    "encode",
+    "sha256",
+    "validate_history",
+    "validate_revision",
+]

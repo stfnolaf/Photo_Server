@@ -23,7 +23,26 @@ default to `on` remains an operational threshold decision.
 
 ## In progress
 
-There are currently no local implementation documents in this bucket.
+The S3-authoritative Phase 1 contract is documented in
+[`s3-authoritative-phase1.md`](in-progress/s3-authoritative-phase1.md), with
+versioned schemas and examples alongside it.
+
+Phase 6 reconciliation is documented in
+[`s3-authoritative-phase6.md`](in-progress/s3-authoritative-phase6.md). It is
+maintenance-only: PostgreSQL remains authoritative for live reads and writes,
+and no authority cutover occurs. The disposable reconciliation integration
+suite is the required Phase 6 exit gate.
+
+Phase 7 S3-first mutations are documented in
+[`s3-authoritative-phase7.md`](in-progress/s3-authoritative-phase7.md).
+Phase 7 is complete: the mutation integration suite is the required exit gate;
+PostgreSQL remains authoritative for live reads and S3 is authoritative for
+immutable mutation history and recovery.
+
+Phase 8 object retention and dry-run garbage-collection policy is documented in
+[`s3-authoritative-phase8.md`](in-progress/s3-authoritative-phase8.md). It is
+opt-in and fail-closed; destructive deletion is disabled until restore testing
+is complete.
 
 ## Planned
 

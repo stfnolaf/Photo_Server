@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import time as day_time
 from threading import RLock
 from time import time
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from sqlalchemy import (
     BigInteger,
@@ -651,9 +651,16 @@ class Catalog:
             if kind == "asset":
                 changes = {}
                 if action == "patch":
+                    user_changes = {
+                        key: value for key, value in mutation.changes.items()
+                        if key not in {"metadata", "captureTime"}
+                    }
                     changes["user_state"] = UserState.model_validate(
-                        {**current.user_state.document(), **mutation.changes}
+                        {**current.user_state.document(), **user_changes}
                     )
+                    if "metadata" in mutation.changes:
+                        changes["metadata"] = mutation.changes["metadata"]
+                        changes["capture_time"] = mutation.changes.get("captureTime")
                 elif action == "metadata":
                     changes["metadata"] = mutation.changes["metadata"]
                     changes["capture_time"] = mutation.changes.get("captureTime")
@@ -786,6 +793,56 @@ class Catalog:
             values = list(connection.scalars(select(albums.c.state).order_by(albums.c.id)))
         return [Album.model_validate(value) for value in values]
 
+    def all_people(self) -> list[dict]:
+        """Return person names and face assignments for rebuild comparison."""
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(people.c.id, people.c.display_name, people.c.created_at)
+                .order_by(people.c.id)
+            ).mappings().all()
+            assignments = connection.execute(
+                select(faces.c.person_id, faces.c.id).order_by(faces.c.person_id, faces.c.id)
+            ).mappings().all()
+        by_person: dict[str, list[str]] = {}
+        for row in assignments:
+            by_person.setdefault(row["person_id"], []).append(row["id"])
+        return [
+            {
+                "personId": row["id"],
+                "displayName": row["display_name"],
+                "createdAt": row["created_at"].astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "faceIds": by_person.get(row["id"], []),
+            }
+            for row in rows
+        ]
+
+    def apply_person(self, person, face_ids: tuple[UUID, ...] = ()):
+        """Project a person snapshot and its canonical assignments.
+
+        Face detection rows are durable-derived and may be restored separately;
+        assignments are applied only to rows already present, so an incomplete
+        processing restore cannot create a fictitious face.
+        """
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(people)
+                .values(
+                    id=str(person.person_id),
+                    display_name=person.display_name,
+                    created_at=datetime.fromisoformat(person.created_at.replace("Z", "+00:00")),
+                )
+                .on_conflict_do_update(
+                    index_elements=[people.c.id],
+                    set_={"display_name": person.display_name},
+                )
+            )
+            if face_ids:
+                connection.execute(
+                    faces.update()
+                    .where(faces.c.id.in_([str(face_id) for face_id in face_ids]))
+                    .values(person_id=str(person.person_id))
+                )
+
     def _apply_album(self, connection, album: Album):
         current = connection.scalar(
             select(albums.c.state).where(albums.c.id == str(album.album_id)).with_for_update()
@@ -822,6 +879,11 @@ class Catalog:
                     for position, asset_id in enumerate(album.asset_ids)
                 ],
             )
+
+    def apply_album(self, album: Album):
+        """Project one album snapshot; used by the offline S3 rebuild."""
+        with self.engine.begin() as connection:
+            self._apply_album(connection, album)
 
     def claim_job(self) -> str | None:
         with self.engine.begin() as connection:
@@ -1946,7 +2008,12 @@ class Catalog:
                 target_id = request.get("targetPersonId")
                 created = target_id is None
                 if target_id is None:
-                    target_id = str(uuid4())
+                    # Deterministic identity lets the S3-first coordinator
+                    # publish the target person before PostgreSQL projection.
+                    library_value = connection.scalar(
+                        select(library.c.library_id).where(library.c.singleton == 1)
+                    )
+                    target_id = str(uuid5(UUID(library_value), f"face-operation:{operation_id}"))
                     connection.execute(
                         insert(people).values(
                             id=target_id,

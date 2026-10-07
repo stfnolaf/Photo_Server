@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photo-server.local/schemas/asset-manifest-v1.json",
+  "title": "Photo asset manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "libraryId", "assetId", "revision", "parentRevision", "operationId", "createdAt", "importedAt", "blobs", "primaryBlobId", "extractedMetadata", "userState", "deletedAt", "processing"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "libraryId": {"$ref": "#/$defs/uuid"},
+    "assetId": {"$ref": "#/$defs/uuid"},
+    "revision": {"type": "integer", "minimum": 1},
+    "parentRevision": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+    "operationId": {"$ref": "#/$defs/uuid"},
+    "createdAt": {"$ref": "#/$defs/timestamp"},
+    "importedAt": {"$ref": "#/$defs/timestamp"},
+    "captureTime": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+    "blobs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/blob"}},
+    "primaryBlobId": {"$ref": "#/$defs/uuid"},
+    "extractedMetadata": {"type": "object", "additionalProperties": true},
+    "userState": {"$ref": "#/$defs/userState"},
+    "deletedAt": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+    "processing": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/processingRef"}}
+  },
+  "$defs": {
+    "uuid": {"type": "string", "format": "uuid"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["blobId", "role", "objectKey", "originalFilename", "sha256", "sizeBytes", "mimeType"],
+      "properties": {
+        "blobId": {"$ref": "#/$defs/uuid"},
+        "role": {"enum": ["ORIGINAL_RAW", "ORIGINAL_JPEG", "ORIGINAL_HEIF", "SIDECAR"]},
+        "objectKey": {"type": "string", "minLength": 1},
+        "originalFilename": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "sizeBytes": {"type": "integer", "minimum": 1},
+        "mimeType": {"type": "string", "minLength": 1}
+      }
+    },
+    "userState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rating", "favorite", "caption", "keywords", "location"],
+      "properties": {
+        "rating": {"type": "integer", "minimum": 0, "maximum": 5},
+        "favorite": {"type": "boolean"},
+        "caption": {"type": "string"},
+        "keywords": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "location": {"anyOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["name", "latitude", "longitude"], "properties": {"name": {"type": "string"}, "latitude": {"type": "number", "minimum": -90, "maximum": 90}, "longitude": {"type": "number", "minimum": -180, "maximum": 180}}}]}
+      }
+    },
+    "processingRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["artifactKey", "artifactSha256", "inputSha256", "processingType", "implementationVersion"],
+      "properties": {
+        "artifactKey": {"type": "string", "minLength": 1},
+        "artifactSha256": {"$ref": "#/$defs/sha256"},
+        "inputSha256": {"$ref": "#/$defs/sha256"},
+        "processingType": {"type": "string", "minLength": 1},
+        "implementationVersion": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
