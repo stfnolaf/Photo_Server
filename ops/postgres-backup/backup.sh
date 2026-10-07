@@ -17,17 +17,23 @@ secondary_endpoint="${PHOTO_POSTGRES_BACKUP_SECONDARY_ENDPOINT:-}"
 secondary_path="${PHOTO_POSTGRES_BACKUP_SECONDARY_PATH:-}"
 secondary_required="${PHOTO_POSTGRES_BACKUP_SECONDARY_REQUIRED:-false}"
 
+if [[ -n "$secondary_endpoint" && -n "$secondary_path" ]]; then
+    echo "Configure only one secondary backup destination: endpoint or path" >&2
+    exit 2
+fi
+
 s3() {
     if [[ "${PHOTO_S3_ANONYMOUS:-true}" == true ]]; then
-        aws --endpoint-url "$PHOTO_S3_ENDPOINT" --no-sign-request "$@"
-    else aws --endpoint-url "$PHOTO_S3_ENDPOINT" "$@"; fi
+        aws --endpoint-url "$PHOTO_S3_ENDPOINT" --no-sign-request "$@" 2>/dev/null
+    else aws --endpoint-url "$PHOTO_S3_ENDPOINT" "$@" 2>/dev/null; fi
 }
 secondary_s3() {
-    local -a args=(--endpoint-url "$secondary_endpoint")
+    local -a args=(--endpoint-url "$secondary_endpoint") env_args=()
     [[ "${PHOTO_POSTGRES_BACKUP_SECONDARY_ANONYMOUS:-false}" == true ]] && args+=(--no-sign-request)
-    AWS_ACCESS_KEY_ID="${PHOTO_POSTGRES_BACKUP_SECONDARY_ACCESS_KEY_ID:-}" \
-    AWS_SECRET_ACCESS_KEY="${PHOTO_POSTGRES_BACKUP_SECONDARY_SECRET_ACCESS_KEY:-}" \
-    AWS_SESSION_TOKEN="${PHOTO_POSTGRES_BACKUP_SECONDARY_SESSION_TOKEN:-}" aws "${args[@]}" "$@"
+    [[ -n "${PHOTO_POSTGRES_BACKUP_SECONDARY_ACCESS_KEY_ID:-}" ]] && env_args+=("AWS_ACCESS_KEY_ID=$PHOTO_POSTGRES_BACKUP_SECONDARY_ACCESS_KEY_ID")
+    [[ -n "${PHOTO_POSTGRES_BACKUP_SECONDARY_SECRET_ACCESS_KEY:-}" ]] && env_args+=("AWS_SECRET_ACCESS_KEY=$PHOTO_POSTGRES_BACKUP_SECONDARY_SECRET_ACCESS_KEY")
+    [[ -n "${PHOTO_POSTGRES_BACKUP_SECONDARY_SESSION_TOKEN:-}" ]] && env_args+=("AWS_SESSION_TOKEN=$PHOTO_POSTGRES_BACKUP_SECONDARY_SESSION_TOKEN")
+    env "${env_args[@]}" aws "${args[@]}" "$@" 2>/dev/null
 }
 write_status() {
     local overall="$1" primary="$2" secondary="$3" dir tmp
@@ -53,26 +59,32 @@ prune_files() {
 }
 primary_upload() {
     local file="$1" key="$2" digest="$3" expected
-    if ! s3 s3api head-bucket --bucket "$PHOTO_S3_BUCKET" >/dev/null 2>&1; then s3 s3api create-bucket --bucket "$PHOTO_S3_BUCKET" >/dev/null; fi
-    s3 s3api put-object --bucket "$PHOTO_S3_BUCKET" --key "$key" --body "$file" --content-type application/vnd.postgresql.dump --metadata "sha256=$digest,database=$PGDATABASE" >/dev/null
-    expected="$(s3 s3api head-object --bucket "$PHOTO_S3_BUCKET" --key "$key" --query 'Metadata.sha256' --output text)"
-    [[ "$expected" == "$digest" ]] || return 42
-    prune_s3 "$PHOTO_S3_BUCKET" "$retention" s3
+    backup_error_class=UploadError
+    if ! s3 s3api head-bucket --bucket "$PHOTO_S3_BUCKET" >/dev/null; then
+        s3 s3api create-bucket --bucket "$PHOTO_S3_BUCKET" >/dev/null || return
+    fi
+    s3 s3api put-object --bucket "$PHOTO_S3_BUCKET" --key "$key" --body "$file" --content-type application/vnd.postgresql.dump --metadata "sha256=$digest,database=$PGDATABASE" >/dev/null || return
+    expected="$(s3 s3api head-object --bucket "$PHOTO_S3_BUCKET" --key "$key" --query 'Metadata.sha256' --output text)" || return
+    if [[ "$expected" != "$digest" ]]; then backup_error_class=ChecksumMismatch; return 42; fi
+    prune_s3 "$PHOTO_S3_BUCKET" "$retention" s3 || return
 }
 secondary_upload() {
     local file="$1" key="$2" digest="$3" expected bucket destination
+    backup_error_class=UploadError
     if [[ -n "$secondary_endpoint" ]]; then
         bucket="${PHOTO_POSTGRES_BACKUP_SECONDARY_BUCKET:-postgres-backups}"
-        if ! secondary_s3 s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then secondary_s3 s3api create-bucket --bucket "$bucket" >/dev/null; fi
-        secondary_s3 s3api put-object --bucket "$bucket" --key "$key" --body "$file" --content-type application/vnd.postgresql.dump --metadata "sha256=$digest,database=$PGDATABASE" >/dev/null
-        expected="$(secondary_s3 s3api head-object --bucket "$bucket" --key "$key" --query 'Metadata.sha256' --output text)"
-        [[ "$expected" == "$digest" ]] || return 42
-        prune_s3 "$bucket" "$secondary_retention" secondary_s3
+        if ! secondary_s3 s3api head-bucket --bucket "$bucket" >/dev/null; then
+            secondary_s3 s3api create-bucket --bucket "$bucket" >/dev/null || return
+        fi
+        secondary_s3 s3api put-object --bucket "$bucket" --key "$key" --body "$file" --content-type application/vnd.postgresql.dump --metadata "sha256=$digest,database=$PGDATABASE" >/dev/null || return
+        expected="$(secondary_s3 s3api head-object --bucket "$bucket" --key "$key" --query 'Metadata.sha256' --output text)" || return
+        if [[ "$expected" != "$digest" ]]; then backup_error_class=ChecksumMismatch; return 42; fi
+        prune_s3 "$bucket" "$secondary_retention" secondary_s3 || return
     elif [[ -n "$secondary_path" ]]; then
         destination="$secondary_path/$key"; mkdir -p "$(dirname "$destination")"; cp -- "$file" "$destination"
         printf '%s  %s\n' "$digest" "$(basename "$destination")" >"$destination.sha256"
-        [[ "$(sha256sum "$destination" | awk '{print $1}')" == "$digest" ]] || return 42
-        prune_files "$secondary_path" "$secondary_retention"
+        if [[ "$(sha256sum "$destination" | awk '{print $1}')" != "$digest" ]]; then backup_error_class=ChecksumMismatch; return 42; fi
+        prune_files "$secondary_path" "$secondary_retention" || return
     else return 44; fi
 }
 backup_once() {
@@ -83,10 +95,10 @@ backup_once() {
     pg_dump --host "$PGHOST" --port "${PGPORT:-5432}" --username "$PGUSER" --dbname "$PGDATABASE" --format custom --compress 6 --no-owner --no-acl --file "$file"
     digest="$(sha256sum "$file" | awk '{print $1}')"; size="$(stat --format='%s' "$file")"
     primary='{"status":"failed","errorClass":"UploadError"}'; secondary='{"status":"not-configured"}'
-    if primary_upload "$file" "$key" "$digest"; then primary="{\"status\":\"success\",\"key\":\"$key\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"verified\":true}"; fi
+    if primary_upload "$file" "$key" "$digest"; then primary="{\"status\":\"success\",\"key\":\"$key\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"verified\":true}"; else primary="{\"status\":\"failed\",\"errorClass\":\"$backup_error_class\"}"; fi
     if [[ -n "$secondary_endpoint$secondary_path" ]]; then
         secondary='{"status":"failed","errorClass":"UploadError"}'
-        if secondary_upload "$file" "$key" "$digest"; then secondary="{\"status\":\"success\",\"key\":\"$key\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"verified\":true}"; fi
+        if secondary_upload "$file" "$key" "$digest"; then secondary="{\"status\":\"success\",\"key\":\"$key\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"verified\":true}"; else secondary="{\"status\":\"failed\",\"errorClass\":\"$backup_error_class\"}"; fi
     fi
     if [[ "$primary" == *'"status":"success"'* ]] && { [[ "$secondary" == *'"status":"success"'* ]] || { [[ "$secondary" == *'"status":"not-configured"'* ]] && [[ "$secondary_required" != true ]]; }; }; then overall=healthy; else overall=degraded; fi
     write_status "$overall" "$primary" "$secondary"

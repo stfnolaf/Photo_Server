@@ -173,6 +173,14 @@ class Settings(BaseSettings):
             raise ValueError("PHOTO_SESSION_COOKIE_NAME must be a simple cookie name")
         return self
 
+    @model_validator(mode="after")
+    def validate_backup_destinations(self):
+        if self.postgres_backup_secondary_endpoint and self.postgres_backup_secondary_path:
+            raise ValueError(
+                "Configure only one secondary backup destination: endpoint or path"
+            )
+        return self
+
 
 class LibraryError(Exception):
     """An operation failed without changing source files."""

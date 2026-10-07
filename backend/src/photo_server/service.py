@@ -124,22 +124,54 @@ class Service:
         except (FileNotFoundError, OSError, ValueError):
             status = None
         if isinstance(status, dict):
-            primary = status.get("primary", {})
-            secondary = status.get("secondary", {})
-            return {
-                "postgresBackupKey": primary.get("key"),
-                "postgresBackupAt": primary.get("at"),
-                "postgresBackupPrimary": primary,
-                "postgresBackupSecondary": secondary,
-                "postgresBackupOverall": status.get("overallStatus", "unavailable"),
-            }
+            primary = self._backup_destination_status(status.get("primary"))
+            secondary = self._backup_destination_status(status.get("secondary"))
+            overall = status.get("overallStatus")
+            if primary is not None and secondary is not None and overall in {
+                "healthy", "degraded", "unavailable"
+            }:
+                return {
+                    "postgresBackupKey": primary.get("key"),
+                    "postgresBackupAt": primary.get("at"),
+                    "postgresBackupPrimary": primary,
+                    "postgresBackupSecondary": secondary,
+                    "postgresBackupOverall": overall,
+                }
+
+        return self._backup_status_from_primary_storage()
+
+    @staticmethod
+    def _backup_destination_status(value: object) -> dict | None:
+        if not isinstance(value, dict) or value.get("status") not in {
+            "success", "failed", "unavailable", "not-configured"
+        }:
+            return None
+        result = {"status": value["status"]}
+        for field in ("key", "at", "errorClass"):
+            if field in value:
+                if not isinstance(value[field], str):
+                    return None
+                result[field] = value[field]
+        if "verified" in value:
+            if not isinstance(value["verified"], bool):
+                return None
+            result["verified"] = value["verified"]
+        return result
+
+    def _backup_status_from_primary_storage(self) -> dict:
+        secondary_configured = bool(
+            self.settings.postgres_backup_secondary_endpoint
+            or self.settings.postgres_backup_secondary_path
+        )
         keys = list(self.storage.keys(self.settings.postgres_backup_prefix.rstrip("/") + "/"))
         if not keys:
             return {
                 "postgresBackupKey": None,
                 "postgresBackupAt": None,
                 "postgresBackupPrimary": {"status": "unavailable"},
-                "postgresBackupSecondary": {"status": "not-configured"},
+                "postgresBackupSecondary": {
+                    "status": "unavailable" if secondary_configured else "not-configured"
+                },
                 "postgresBackupOverall": "unavailable",
             }
         key = max(keys)
@@ -154,8 +186,14 @@ class Service:
                 "at": modified.isoformat() if modified else None,
                 "verified": True,
             },
-            "postgresBackupSecondary": {"status": "not-configured"},
-            "postgresBackupOverall": "healthy" if modified else "unavailable",
+            "postgresBackupSecondary": {
+                "status": "unavailable" if secondary_configured else "not-configured"
+            },
+            "postgresBackupOverall": (
+                "healthy"
+                if modified and not (secondary_configured and self.settings.postgres_backup_secondary_required)
+                else "degraded" if modified else "unavailable"
+            ),
         }
 
     def queue_processing(
