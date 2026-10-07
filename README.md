@@ -120,6 +120,8 @@ The relevant queue settings are:
 | `PHOTO_CACHE_EVICTION_INTERVAL` | 300 | Seconds between worker cache-eviction passes |
 | `PHOTO_CACHE_EVICT_TARGET_RATIO` | 0.9 | When over budget, evict until the cache is at most budget × ratio |
 | `PHOTO_PUBLIC_DERIVATIVE_CACHE` | false | Opt into one-year public browser/CDN caching for immutable previews; unsafe for private libraries |
+| `PHOTO_METRICS_ENABLED` | false | Enable the loopback-only Prometheus text endpoint at `/metrics` |
+| `PHOTO_METRICS_LOOPBACK_ONLY` | true | Restrict `/metrics` to loopback clients when enabled |
 | `PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS` | 3600 | Seconds between full PostgreSQL backups |
 | `PHOTO_POSTGRES_BACKUP_RETENTION` | 168 | Number of backups retained in S3 |
 | `PHOTO_POSTGRES_BACKUP_PREFIX` | `backups/postgres` | Backup object-key prefix |
@@ -127,6 +129,12 @@ The relevant queue settings are:
 Python builds the database URL from the PostgreSQL settings, including proper password encoding. Compose supplies the internal database host/port; host-side administration commands use `PHOTO_POSTGRES_HOST` and `PHOTO_POSTGRES_PORT`. `PHOTO_DATABASE_URL` can override the assembled URL.
 
 The bundled web frontend reaches the API through its same-origin proxy, so it does not need a CORS entry. Set `PHOTO_CORS_ORIGINS` for other browser frontends that call port 8000 directly.
+
+### Operational metrics
+
+Set `PHOTO_METRICS_ENABLED=true` and inspect `http://127.0.0.1:8000/metrics`, or point a local Prometheus scraper at that URL. Metrics are disabled by default and use only bounded labels such as queue, status, preview kind, AI stage, and provider; asset IDs, filenames, URLs, and operation IDs are never labels. Keep `PHOTO_METRICS_LOOPBACK_ONLY=true` unless an already-protected internal network is providing access.
+
+The endpoint reports upload batches and bytes, queue state, job outcomes/retries/durations, preview hits/misses/bytes/evictions/regeneration time, AI stage timing/provider failures, and backup age/failures. Queue and cache gauges are refreshed from the existing accounting queries at scrape time. Worker counters are process-local in this session, so a multi-process deployment should scrape each worker or add a future multiprocess collector before treating counters as fleet totals.
 
 For authenticated S3, set `PHOTO_S3_ANONYMOUS=false` and provide AWS credentials in `.env` or through the standard AWS credential chain. Session tokens are supported.
 

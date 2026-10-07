@@ -16,6 +16,7 @@ from PIL import Image, ImageOps
 from photo_server.app_logging import log_event
 from photo_server.derivative_identity import PREVIEW_RENDERER_VERSION
 from photo_server.heartbeat import write_heartbeat
+from photo_server.metrics import Metrics, safe_metrics
 from photo_server.models import Manifest
 from photo_server.processing import run_stage
 from photo_server.service import Service
@@ -32,6 +33,7 @@ pillow_heif.register_heif_opener()
 # particular, a newly-created cache directory has no preview_cache row until
 # generation completes, so the orphan sweep must not inspect it mid-write.
 _PREVIEW_CACHE_LOCK = threading.RLock()
+_metrics = Metrics()
 def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
     directory = (
         service.settings.data_dir
@@ -120,8 +122,17 @@ def generate(service: Service, manifest: Manifest) -> bool:
     the lock closes the separate race where the orphan sweep removes the
     directory before the cache row is recorded.
     """
-    with _PREVIEW_CACHE_LOCK:
-        return _generate(service, manifest)
+    started = time.perf_counter()
+    try:
+        with _PREVIEW_CACHE_LOCK:
+            return _generate(service, manifest)
+    finally:
+        safe_metrics(
+            _metrics,
+            "observe",
+            "photo_preview_regeneration_duration_seconds",
+            time.perf_counter() - started,
+        )
 
 
 def rebuild_cache_index(service: Service) -> dict:
@@ -238,6 +249,8 @@ def evict_previews(service: Service) -> dict:
         print(json.dumps({"status": "preview_orphan_removed", "assetId": asset_id}), flush=True)
     freed = sum(entry["bytes"] for entry in evicted)
     remaining = service.catalog.preview_cache_total_bytes()
+    safe_metrics(_metrics, "inc", "photo_preview_cache_evictions", len(evicted))
+    safe_metrics(_metrics, "inc", "photo_preview_cache_evicted_bytes", freed)
     print(
         json.dumps(
             {
@@ -361,6 +374,20 @@ def _worker_loop(service: Service, mode: str):
             fields = {key: value for key, value in result.items() if key != "error"}
             fields["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
             log_event("worker_job_completed", **fields)
+            queue = str(result.get("jobType", mode)).replace("analysis-stage", "analysis")
+            status = str(result.get("status", "ready"))
+            safe_metrics(_metrics, "inc", "photo_jobs", labels={"queue": queue, "status": status})
+            safe_metrics(
+                _metrics,
+                "observe",
+                "photo_job_duration_seconds",
+                time.perf_counter() - started,
+                {"queue": queue},
+            )
+            if status == "failed":
+                safe_metrics(_metrics, "inc", "photo_job_failures", labels={"queue": queue})
+            elif status == "requeued":
+                safe_metrics(_metrics, "inc", "photo_job_retries", labels={"queue": queue})
         else:
             time.sleep(2)
 

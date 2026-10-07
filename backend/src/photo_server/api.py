@@ -60,6 +60,7 @@ from photo_server.derivative_identity import derivative_etag, derivative_version
 from photo_server.face_client import RemoteFaceAnalyzer
 from photo_server.heartbeat import read_heartbeat
 from photo_server.metadata import technical_fields
+from photo_server.metrics import Metrics, safe_metrics
 from photo_server.models import Mutation
 from photo_server.service import Service
 from photo_server.state import mutate
@@ -81,6 +82,33 @@ from photo_server.worker import cache_paths
 # served per process lifetime; a per-request DB UPDATE would be wasteful.
 _preview_touches: dict[str, float] = {}
 _PREVIEW_TOUCH_COOLDOWN = 30.0
+
+
+def _metric_queue_snapshot(service: Service) -> dict[str, dict[str, int]]:
+    """Translate the existing queue query into bounded Prometheus labels."""
+    values = service.catalog.queue_counts()
+    return {
+        "onboarding": {
+            "pending": int(values.get("onboardingPending", 0) or 0),
+            "running": int(values.get("onboardingRunning", 0) or 0),
+            "failed": int(values.get("onboardingFailed", 0) or 0),
+        },
+        "processing": {
+            "pending": int(values.get("processingPending", 0) or 0),
+            "running": int(values.get("processingRunning", 0) or 0),
+            "failed": int(values.get("processingFailed", 0) or 0),
+        },
+        "preview": {
+            "pending": int(values.get("previewPending", 0) or 0),
+            "running": int(values.get("previewRunning", 0) or 0),
+            "failed": int(values.get("previewFailed", 0) or 0),
+        },
+        "analysis": {
+            "pending": int(values.get("analysisPending", 0) or 0),
+            "running": int(values.get("analysisRunning", 0) or 0),
+            "failed": int(values.get("analysisFailed", 0) or 0),
+        },
+    }
 
 
 def derivative_cache_headers(settings: Settings) -> dict[str, str]:
@@ -216,6 +244,7 @@ def _record_access(service: Service, manifest, asset_id: str) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     service = Service(settings or Settings())
     upload_gate = UploadGate(service.settings.upload_workers)
+    metrics = Metrics()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -235,6 +264,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         maintenance_task = asyncio.create_task(maintenance())
         app.state.service = service
         app.state.upload_gate = upload_gate
+        app.state.metrics = metrics
         try:
             yield
         finally:
@@ -249,6 +279,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # worker gate keeps the same shape on its own instance).
     ai_probe_cache = {"ts": 0.0, "semantic": False, "face": False}
     app.state.ai_probe_cache = ai_probe_cache
+    app.state.metrics = metrics
     origins = [
         origin.strip() for origin in service.settings.cors_origins.split(",") if origin.strip()
     ]
@@ -335,6 +366,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
         }
 
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics(request: Request):
+        """Opt-in Prometheus text endpoint with bounded, non-private labels."""
+        if not service.settings.metrics_enabled:
+            raise HTTPException(404, "Metrics are disabled")
+        if service.settings.metrics_loopback_only and request.client and request.client.host not in {
+            "127.0.0.1", "::1", "localhost", "testclient"
+        }:
+            raise HTTPException(404, "Metrics are loopback-only")
+        try:
+            for queue, values in _metric_queue_snapshot(service).items():
+                for status, value in values.items():
+                    safe_metrics(metrics, "set", "photo_queue_jobs", value, {"queue": queue, "status": status})
+            try:
+                oldest = service.catalog.queue_oldest_ages()
+            except Exception:
+                oldest = {queue: -1 for queue in _metric_queue_snapshot(service)}
+            for queue, value in oldest.items():
+                safe_metrics(metrics, "set", "photo_queue_oldest_job_age_seconds", value, {"queue": queue})
+            safe_metrics(metrics, "set", "photo_preview_cache_bytes", service.catalog.preview_cache_total_bytes())
+            try:
+                backup = service.backup_status()
+            except Exception:
+                safe_metrics(metrics, "inc", "photo_backup_failures")
+                backup = {}
+            backup_at = backup.get("postgresBackupAt")
+            if backup_at:
+                from datetime import UTC, datetime
+
+                safe_metrics(metrics, "set", "photo_backup_age_seconds", max(0, (datetime.now(UTC) - datetime.fromisoformat(backup_at)).total_seconds()))
+            else:
+                safe_metrics(metrics, "set", "photo_backup_age_seconds", -1)
+        except Exception:
+            # Scraping must never make the API or its primary database path fail.
+            safe_metrics(metrics, "inc", "photo_metrics_collection_failures")
+        return Response(content=metrics.render(), media_type="text/plain; version=0.0.4")
+
     @app.post(
         "/upload-batches",
         status_code=201,
@@ -342,13 +410,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_id="createUploadBatch",
     )
     def start_upload_batch(body: UploadBatchRequest):
-        return create_batch(
+        result = create_batch(
             service,
             [file.model_dump(by_alias=True, exclude_none=True) for file in body.files],
             body.batch_id,
             body.album_id,
             body.album_name,
         )
+        safe_metrics(metrics, "inc", "photo_upload_batches")
+        return result
 
     @app.get(
         "/upload-batches",
@@ -385,7 +455,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content_length = int(header) if header is not None else None
         except ValueError as error:
             raise HTTPException(400, "Invalid Content-Length header") from error
-        return await receive_file(
+        result = await receive_file(
             service,
             upload_gate,
             batch_id,
@@ -393,6 +463,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.stream(),
             content_length,
         )
+        if not result.get("replayed"):
+            safe_metrics(metrics, "inc", "photo_uploaded_bytes", float(content_length or 0))
+        return result
 
     @app.post(
         "/upload-batches/{batch_id}/seal",
@@ -605,6 +678,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Photograph not found")
         path = cache_paths(service, manifest)["preview"]
         if not path.exists():
+            safe_metrics(metrics, "inc", "photo_preview_cache_misses", labels={"kind": "face_thumbnail"})
             status = service.catalog.preview_status(str(manifest.asset_id))
             if status["status"] == "unavailable":
                 raise HTTPException(
@@ -628,6 +702,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "CDN-Cache-Control": "no-store",
                 },
             )
+        safe_metrics(metrics, "inc", "photo_preview_cache_hits", labels={"kind": "face_thumbnail"})
         etag = derivative_etag(f"face-thumbnail-{face_id}", manifest.primary.sha256)
         headers = {**derivative_cache_headers(service.settings), "ETag": etag}
         if request.headers.get("if-none-match") == etag:
@@ -860,6 +935,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         manifest = find(asset_id)
         path = cache_paths(service, manifest)[kind]
         if not path.exists():
+            safe_metrics(metrics, "inc", "photo_preview_cache_misses", labels={"kind": kind})
             status = service.catalog.preview_status(str(asset_id))
             if status["status"] == "unavailable":
                 raise HTTPException(
@@ -883,6 +959,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "CDN-Cache-Control": "no-store",
                 },
             )
+        safe_metrics(metrics, "inc", "photo_preview_cache_hits", labels={"kind": kind})
         _record_access(service, manifest, str(asset_id))
         etag = derivative_etag(kind, manifest.primary.sha256)
         headers = {**derivative_cache_headers(service.settings), "ETag": etag}

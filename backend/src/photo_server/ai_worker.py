@@ -58,6 +58,7 @@ from photo_server.browsing import camera_time
 from photo_server.face_client import ADAFACE_IDENTITY, FaceServiceUnavailable, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION, compute_fingerprint
 from photo_server.heartbeat import write_heartbeat
+from photo_server.metrics import Metrics, safe_metrics
 from photo_server.reuse import (
     REUSE_POLICY_VERSION,
     UNKNOWN_DIGEST,
@@ -78,6 +79,7 @@ _HEARTBEAT_SECONDS = 60.0  # at most one slow heartbeat per minute
 _BACKOFF_INITIAL_SECONDS = 10.0  # unhealthy: 10 s doubling...
 _BACKOFF_MAX_SECONDS = 120.0  # ...to 120 s
 _NO_JOBS_SLEEP_SECONDS = 2.0  # ready but no backlog: today's idle cadence
+_metrics = Metrics()
 
 
 class _StopRunning(Exception):
@@ -505,13 +507,18 @@ class AIWorker:
         ``{"status": "idle"}``; an unconfigured worker reports
         ``{"status": "idle", "reason": "ai-not-configured"}``.
         """
+        started = time.perf_counter()
         state, _ = self._gate()
         if state == "face-only":
             job = self._claim_face_stage()
-            return self._execute_face_stage(job) if job is not None else None
+            result = self._execute_face_stage(job) if job is not None else None
+            self._record_metrics(result, started)
+            return result
         if state == "vlm-only":
             job = self.service.catalog.claim_ai_semantic_stage()
-            return self._execute_semantic_stage(job) if job is not None else None
+            result = self._execute_semantic_stage(job) if job is not None else None
+            self._record_metrics(result, started)
+            return result
         if state != "ready":
             return {
                 "status": "idle",
@@ -520,7 +527,41 @@ class AIWorker:
         job = self._claim()
         if job is None:
             return None
-        return self._execute(job)
+        result = self._execute(job)
+        self._record_metrics(result, started)
+        return result
+
+    @staticmethod
+    def _record_metrics(result: dict | None, started: float) -> None:
+        if not result:
+            return
+        durations = (result.get("counters") or {}).get("stageDurationsMs", {})
+        if durations:
+            for stage, duration_ms in durations.items():
+                safe_metrics(
+                    _metrics,
+                    "observe",
+                    "photo_ai_stage_duration_seconds",
+                    float(duration_ms) / 1000,
+                    {"stage": str(stage)},
+                )
+        elif "stage" in result:
+            stage = str(result["stage"])
+            safe_metrics(
+                _metrics,
+                "observe",
+                "photo_ai_stage_duration_seconds",
+                time.perf_counter() - started,
+                {"stage": stage},
+            )
+        if result.get("status") in {"failed", "requeued"} and "stage" in result:
+            stage = str(result["stage"])
+            safe_metrics(
+                _metrics,
+                "inc",
+                "photo_ai_provider_failures",
+                labels={"provider": "face" if stage == "face" else "vlm"},
+            )
 
     def run_staged_once(self, prefer_face: bool = True) -> dict | None:
         """Run one pass through the durable stage/publish scheduler.
@@ -529,13 +570,18 @@ class AIWorker:
         tests and older callers; the CLI one-shot mode uses this method so it
         cannot re-enter the old combined parent-job path.
         """
+        started = time.perf_counter()
         state, _ = self._gate()
         if state == "face-only":
             job = self._claim_face_stage()
-            return self._execute_face_stage(job) if job is not None else None
+            result = self._execute_face_stage(job) if job is not None else None
+            self._record_metrics(result, started)
+            return result
         if state == "vlm-only":
             job = self.service.catalog.claim_ai_semantic_stage()
-            return self._execute_semantic_stage(job) if job is not None else None
+            result = self._execute_semantic_stage(job) if job is not None else None
+            self._record_metrics(result, started)
+            return result
         if state != "ready":
             return {
                 "status": "idle",
@@ -543,7 +589,9 @@ class AIWorker:
             }
         publish_job = self.service.catalog.claim_ai_publish_job()
         if publish_job is not None:
-            return self._publish_staged_analysis(publish_job)
+            result = self._publish_staged_analysis(publish_job)
+            self._record_metrics(result, started)
+            return result
         claimers = [
             (self._claim_face_stage, self._execute_face_stage),
             (self.service.catalog.claim_ai_semantic_stage, self._execute_semantic_stage),
@@ -553,7 +601,9 @@ class AIWorker:
         for claim, execute in claimers:
             job = claim()
             if job is not None:
-                return execute(job)
+                result = execute(job)
+                self._record_metrics(result, started)
+                return result
         return None
 
     def _execute(self, job: dict) -> dict:

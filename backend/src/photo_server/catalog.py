@@ -101,6 +101,7 @@ jobs = Table(
     Column("error", Text),
     Column("lease_until", BigInteger),
     Column("force_full", Boolean, nullable=False, server_default="false"),
+    Column("queued_at", DateTime(timezone=True), server_default=text("now()")),
 )
 
 AI_STAGE_LEASE_SECONDS = 600
@@ -115,6 +116,7 @@ ai_stage_jobs = Table(
     Column("attempts", Integer, nullable=False, default=0),
     Column("error", Text),
     Column("lease_until", BigInteger),
+    Column("queued_at", DateTime(timezone=True), server_default=text("now()")),
 )
 upload_batches = Table(
     "upload_batches",
@@ -156,6 +158,7 @@ onboarding_jobs = Table(
     Column("lease_until", BigInteger),
     Column("result", JSONB),
     Column("error", Text),
+    Column("queued_at", DateTime(timezone=True), server_default=text("now()")),
 )
 analysis_runs = Table(
     "analysis_runs",
@@ -950,7 +953,7 @@ class Catalog:
                                 connection.execute(
                                     ai_stage_jobs.update()
                                     .where(ai_stage_jobs.c.asset_id == asset_id)
-                                    .values(status="pending", error=None, lease_until=None)
+                                    .values(status="pending", error=None, lease_until=None, queued_at=func.now())
                                 )
                         already_queued += 1
                         continue
@@ -973,6 +976,7 @@ class Catalog:
                                 "error": None,
                                 "lease_until": None,
                                 "force_full": force_full,
+                                "queued_at": func.now(),
                             },
                             where=jobs.c.status != "running",
                         )
@@ -981,7 +985,7 @@ class Catalog:
                         connection.execute(
                             ai_stage_jobs.update()
                             .where(ai_stage_jobs.c.asset_id == asset_id)
-                            .values(status="pending", error=None, lease_until=None)
+                            .values(status="pending", error=None, lease_until=None, queued_at=func.now())
                         )
                     queued += 1
         return {
@@ -1475,7 +1479,12 @@ class Catalog:
                     ai_stage_jobs.c.asset_id == asset_id,
                     ai_stage_jobs.c.stage == stage,
                 )
-                .values(status=status, error=error, lease_until=None)
+                .values(
+                    status=status,
+                    error=error,
+                    lease_until=None,
+                    queued_at=func.now() if status == "pending" else ai_stage_jobs.c.queued_at,
+                )
             )
             if status == "failed":
                 connection.execute(
@@ -1489,7 +1498,12 @@ class Catalog:
             connection.execute(
                 jobs.update()
                 .where(jobs.c.asset_id == asset_id, jobs.c.job_type == "ai-v1")
-                .values(status=status, error=error, lease_until=None)
+                .values(
+                    status=status,
+                    error=error,
+                    lease_until=None,
+                    queued_at=func.now() if status == "pending" else jobs.c.queued_at,
+                )
             )
 
     def queue_ai(
@@ -1987,7 +2001,7 @@ class Catalog:
                 .values(asset_id=asset_id, job_type="preview-v1", status="pending", attempts=0)
                 .on_conflict_do_update(
                     index_elements=[jobs.c.asset_id, jobs.c.job_type],
-                    set_={"status": "pending", "error": None},
+                    set_={"status": "pending", "error": None, "queued_at": func.now()},
                     where=jobs.c.status != "running",
                 )
             )
@@ -2737,7 +2751,7 @@ class Catalog:
             connection.execute(
                 onboarding_jobs.update()
                 .where(onboarding_jobs.c.id.in_(failed_ids))
-                .values(status="pending", error=None)
+                .values(status="pending", error=None, queued_at=func.now())
             )
             connection.execute(
                 upload_files.update()
@@ -2833,4 +2847,24 @@ class Catalog:
                     .select_from(jobs)
                     .where(jobs.c.job_type == "ai-v1", jobs.c.status == "failed")
                 ),
+            }
+
+    def queue_oldest_ages(self) -> dict[str, float]:
+        """Return oldest pending age per queue using persisted enqueue times."""
+        from photo_server.processing import PROCESSING_JOB_TYPES
+
+        with self.engine.connect() as connection:
+            def age(table, *conditions):
+                value = connection.scalar(
+                    select(func.extract("epoch", func.now() - func.min(table.c.queued_at)))
+                    .select_from(table)
+                    .where(table.c.status == "pending", *conditions)
+                )
+                return max(0.0, float(value or 0)) if value is not None else -1.0
+
+            return {
+                "onboarding": age(onboarding_jobs),
+                "processing": age(jobs, jobs.c.job_type.in_(PROCESSING_JOB_TYPES)),
+                "preview": age(jobs, jobs.c.job_type == "preview-v1"),
+                "analysis": age(jobs, jobs.c.job_type == "ai-v1"),
             }

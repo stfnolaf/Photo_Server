@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # anyone who can obtain a derivative URL eligible to receive the cached
     # image from a shared CDN.
     public_derivative_cache: bool = False
+    # Metrics are opt-in because the endpoint includes library operational
+    # information. When enabled, expose /metrics only to loopback clients.
+    metrics_enabled: bool = False
+    metrics_loopback_only: bool = True
 
     @model_validator(mode="after")
     def configure_database(self):
