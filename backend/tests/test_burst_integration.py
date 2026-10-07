@@ -235,6 +235,8 @@ def test_burst_rollout(backend, monkeypatch, reuse_mode):
             "vlmTimeAvoided",
             "rejectionsByGate",
             "stageFailures",
+            "stageDurationsMs",
+            "inputMetrics",
         }
         assert counters["forcedFull"] == 0
         assert counters["wouldHaveReused"] == 0
@@ -329,7 +331,7 @@ def test_face_stage_failure_reports_stage_counters(backend, monkeypatch):
     assert result["counters"]["semanticComputed"] == 0
     assert result["counters"]["semanticReused"] == 0
     assert result["counters"]["rejectionsByGate"] == {}
-    assert calls[0] == 0  # the VLM was never invoked
+    assert calls[0] == 1  # independent face and semantic stages run in parallel
 
     # The failed job is not retried: the next claim is a different asset, and
     # the pipeline can still complete its remaining frames.

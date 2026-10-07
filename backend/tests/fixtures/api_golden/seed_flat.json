@@ -467,7 +467,25 @@
         "uploadBatchesQueued": 0,
         "uploadWorkers": 4,
         "uploadsActive": 0,
-        "uploadsWaiting": 0
+        "uploadsWaiting": 0,
+        "database": {
+          "status": "ready",
+          "errorClass": null
+        },
+        "storage": {
+          "status": "ready",
+          "errorClass": null
+        },
+        "workers": [
+          {
+            "status": "not-configured",
+            "workerType": "worker"
+          },
+          {
+            "status": "not-configured",
+            "workerType": "ai-worker"
+          }
+        ]
       },
       "method": "GET",
       "path": "/health",

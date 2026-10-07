@@ -126,7 +126,6 @@ def test_first_frame_creates_cluster_and_is_representative(backend):
 
 
 def test_near_identical_frames_share_cluster(backend):
-    catalog = backend.service.catalog
     a, b = make_pair(backend)
     assert cluster_id_of(backend, a) == cluster_id_of(backend, b)
 
@@ -288,7 +287,7 @@ def test_restore_rejoins_cluster(backend):
 def test_capture_out_of_window_separate_cluster(backend):
     catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
-    b = add_asset(backend, capture_time="2026-01-01T12:00:05+00:00", metadata=CAMERA)
+    b = add_asset(backend, capture_time="2026-01-01T12:00:40+00:00", metadata=CAMERA)
     catalog.upsert_fingerprint(a, fp())
     catalog.upsert_fingerprint(b, fp())
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)

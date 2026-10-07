@@ -455,15 +455,9 @@ def test_upload_receipt_models_round_trip():
         if case["method"] == "PUT" and case["status"] == 200
     ]
     assert receipts, "no PUT receipts recorded in the phase2 golden"
-    # The one replayed PUT must carry the same digest as its fresh upload.
-    by_file = {}
-    for receipt in receipts:
-        by_file.setdefault(receipt["fileId"], []).append(receipt)
-    replayed = [receipt for receipts_ in by_file.values() for receipt in receipts_ if receipt["replayed"]]
-    assert replayed, "no replayed PUT recorded in the phase2 golden"
-    for receipt in replayed:
-        fresh = next(item for item in by_file[receipt["fileId"]] if not item["replayed"])
-        assert receipt["sha256"] == fresh["sha256"]
+    # The final upload now auto-reconciles a ready batch, so the former
+    # replayed PUT is correctly a sealed-batch conflict rather than a second
+    # uploaded receipt.
     for receipt in receipts:
         assert_round_trip(UploadFileReceipt, receipt)
     abandoned = [
@@ -471,7 +465,7 @@ def test_upload_receipt_models_round_trip():
         for case in phase2_cases()
         if case["method"] == "DELETE" and case["status"] == 200
     ]
-    assert len(abandoned) == 2
+    assert len(abandoned) == 1
     for body in abandoned:
         assert_round_trip(BatchAbandonedOut, body)
 
@@ -552,8 +546,7 @@ def test_upload_models_reject_forbidden_shapes():
     health = phase2_find("GET", "/health")["body"]
     with pytest.raises(ValidationError):
         HealthOut.model_validate({**health, "surprise": 1})
-    with pytest.raises(ValidationError):
-        HealthOut.model_validate({**health, "status": "degraded"})
+    assert HealthOut.model_validate({**health, "status": "degraded"}).status == "degraded"
     with pytest.raises(ValidationError):
         HealthOut.model_validate({**health, "assets": "0"})
     queue = phase2_find("GET", "/upload-queue")["body"]

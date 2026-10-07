@@ -250,7 +250,7 @@ def test_api_upload_queue_onboarding_restart_and_preview(backend):
     assert backend.service.catalog.counts() == {"assets": 1, "blobs": 1}
 
 
-def test_unsealed_uploads_can_be_discarded_or_expire(backend):
+def test_completed_uploads_reconcile_and_incomplete_uploads_can_expire(backend):
     from sqlalchemy import text
 
     from photo_server.api import create_app
@@ -258,12 +258,13 @@ def test_unsealed_uploads_can_be_discarded_or_expire(backend):
 
     source = photo(backend.root)
 
-    def start_and_upload(client, batch_id):
+    def start_and_upload(client, batch_id, paths=None):
+        paths = paths or [source.name]
         response = client.post(
             "/upload-batches",
             json={
                 "batchId": str(batch_id),
-                "files": [{"path": source.name, "sizeBytes": source.stat().st_size}],
+                "files": [{"path": path, "sizeBytes": source.stat().st_size} for path in paths],
             },
         )
         upload = response.json()["files"][0]
@@ -274,15 +275,15 @@ def test_unsealed_uploads_can_be_discarded_or_expire(backend):
         discarded = uuid4()
         start_and_upload(client, discarded)
         assert client.get("/upload-batches").json()[0]["batchId"] == str(discarded)
+        # The final upload closes the browser-shutdown race by reconciling a
+        # ready batch before the separate seal request arrives.
         response = client.delete(f"/upload-batches/{discarded}")
-        assert response.status_code == 200
-        assert response.json()["status"] == "deleted"
-        assert backend.service.catalog.upload_batch(discarded) is None
-        assert client.get("/upload-batches").json() == []
-        assert list(backend.service.storage.keys(f"incoming/{discarded}/")) == []
+        assert response.status_code == 409
+        assert response.json()["detail"] == "A sealed upload batch cannot be discarded"
+        assert backend.service.catalog.upload_batch(discarded) is not None
 
         expired = uuid4()
-        start_and_upload(client, expired)
+        start_and_upload(client, expired, ["expired-one.JPG", "expired-two.JPG"])
         with backend.service.catalog.engine.begin() as connection:
             connection.execute(
                 text("UPDATE upload_batches SET updated_at = 0 WHERE id = :id"),

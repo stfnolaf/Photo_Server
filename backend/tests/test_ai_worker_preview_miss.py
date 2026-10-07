@@ -580,23 +580,22 @@ def test_gate_blocks_claim_then_claims_after_recovery(backend, monkeypatch):
         asset_id = add_plain_asset(backend, "gate-down.JPG")
         make_preview(backend, asset_id)
 
-        # Down at the gate: no claim, the job row is untouched.
-        assert worker.run_once() == {"status": "idle", "reason": "face-service-unavailable"}
-        assert ai_job_row(backend, asset_id) == {
-            "status": "pending",
-            "attempts": 0,
-            "error": None,
-        }
-        assert calls[0] == 0
+        # The staged dispatcher can drain the healthy semantic stage while
+        # face-service is unavailable; the face stage remains pending.
+        result = worker.run_once()
+        assert result["jobType"] == "analysis-stage"
+        assert result["stage"] == "semantic"
+        assert result["status"] == "ready"
+        assert calls[0] == 1
 
         # The service recovers; reset the 30 s probe cache and run again.
         stub.health_status = 200
         worker._probe_cache = None
         result = worker.run_once()
-        assert result["status"] == "ready", result
-        assert result["assetId"] == asset_id
-        assert result["counters"]["stageFailures"]["face"] == 0
+        assert result["jobType"] == "analysis"
+        assert result["status"] == "ready"
         assert calls[0] == 1
+        assert result["assetId"] == asset_id
     finally:
         stub.stop()
 
@@ -637,7 +636,7 @@ def test_face_outage_mid_job_requeues_then_completes(backend, monkeypatch):
         assert result["stage"] == "face"
         assert "503" in result["error"]
         assert result["counters"]["stageFailures"]["face"] == 1
-        assert calls[0] == 0  # the VLM was never invoked
+        assert calls[0] == 1  # face and semantic stages run independently
         assert ai_job_row(backend, asset_id) == {
             "status": "pending",
             "attempts": 1,
@@ -652,7 +651,7 @@ def test_face_outage_mid_job_requeues_then_completes(backend, monkeypatch):
         assert result["status"] == "ready", result
         assert result["assetId"] == asset_id
         assert result["semanticOrigin"] == "computed"
-        assert calls[0] == 1
+        assert calls[0] == 2
         assert ai_job_row(backend, asset_id)["status"] == "ready"
     finally:
         stub.stop()
@@ -728,10 +727,8 @@ def test_dispatcher_idles_when_unconfigured(backend, monkeypatch, capsys):
     assert "AI services not configured; 1 analysis jobs waiting" in out
 
 
-def test_dispatcher_backoff_doubles_when_unhealthy(backend, monkeypatch, capsys):
-    """Configured, but the face-service stays 503 at the gate: the
-    dispatcher claims nothing and sleeps a 10 s backoff that doubles (10,
-    20, 40, ... capped at 120 s), transition-logged once."""
+def test_dispatcher_drains_healthy_stage_when_face_service_is_unhealthy(backend, monkeypatch, capsys):
+    """A face outage leaves the independent semantic stage available."""
     stub = _FaceServiceStub(health_status=503)
     try:
         backend.service.settings = backend.service.settings.model_copy(
@@ -765,7 +762,7 @@ def test_dispatcher_backoff_doubles_when_unhealthy(backend, monkeypatch, capsys)
         thread.join(timeout=30)
         assert not thread.is_alive()
 
-        assert sleeps == [10, 20, 40]
+        assert sleeps == []
         assert ai_job_row(backend, asset_id) == {
             "status": "pending",
             "attempts": 0,
@@ -773,6 +770,6 @@ def test_dispatcher_backoff_doubles_when_unhealthy(backend, monkeypatch, capsys)
         }
         out = capsys.readouterr().out
         assert out.count('"state-transition"') == 1
-        assert '"state": "face-service-unavailable"' in out
+        assert '"state": "vlm-only"' in out
     finally:
         stub.stop()

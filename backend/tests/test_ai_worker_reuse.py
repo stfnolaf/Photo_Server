@@ -273,7 +273,9 @@ def test_retry_is_idempotent(backend, monkeypatch):
     requeue_ai(backend, source_id)
     retry = worker.run_once()
     assert retry["status"] == "ready"
-    assert calls[0] == 2
+    # The durable semantic stage is reused on a normal retry; force_full is
+    # the explicit opt-in for recomputation.
+    assert calls[0] == 1
     retry_run = current_run(backend, source_id)
     assert retry_run["id"] != first["runId"]
     assert retry_run["semantic_origin"] == "computed"

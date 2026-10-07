@@ -270,14 +270,11 @@
     },
     {
       "body": {
-        "fileId": "db50bddc-5f58-5353-a260-415f354b5545",
-        "replayed": true,
-        "sha256": "7f938929c9cb1966e142a11830aaf8592d47b57b3f4a76df8e6af3992d1b9196",
-        "status": "uploaded"
+        "detail": "This batch is already sealed"
       },
       "method": "PUT",
       "path": "/upload-batches/787bbcfd-cf82-5f88-8254-43cc9270430a/files/db50bddc-5f58-5353-a260-415f354b5545",
-      "status": 200
+      "status": 409
     },
     {
       "body": {
@@ -802,22 +799,45 @@
     },
     {
       "body": {
-        "batchId": "89a16601-da32-5049-8fb5-a6be6e64102e",
-        "filesDeleted": 1,
-        "multipartUploadsAborted": 0,
-        "status": "deleted"
+        "detail": "A sealed upload batch cannot be discarded"
       },
       "method": "DELETE",
       "path": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e",
-      "status": 200
+      "status": 409
     },
     {
       "body": {
-        "detail": "Upload batch not found"
+        "batchId": "89a16601-da32-5049-8fb5-a6be6e64102e",
+        "createdAt": 1735689620,
+        "files": [
+          {
+            "assetId": null,
+            "error": null,
+            "fileId": "3af96319-1a08-5829-be32-ff7f519d66e3",
+            "mimeType": "image/jpeg",
+            "path": "c/one.jpg",
+            "reason": null,
+            "required": true,
+            "sizeBytes": 100,
+            "status": "queued",
+            "uploadUrl": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e/files/3af96319-1a08-5829-be32-ff7f519d66e3"
+          }
+        ],
+        "jobs": [
+          {
+            "attempts": 0,
+            "error": null,
+            "jobId": "f785e9ed-0b0c-5b1a-9683-b1f71ce90413",
+            "result": null,
+            "status": "pending"
+          }
+        ],
+        "sealedAt": 1735689610,
+        "status": "queued"
       },
       "method": "GET",
       "path": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e",
-      "status": 409
+      "status": 200
     },
     {
       "body": {
@@ -1165,6 +1185,35 @@
           ],
           "sealedAt": 1735689655,
           "status": "queued"
+        },
+        {
+          "batchId": "89a16601-da32-5049-8fb5-a6be6e64102e",
+          "createdAt": 1735689620,
+          "files": [
+            {
+              "assetId": null,
+              "error": null,
+              "fileId": "3af96319-1a08-5829-be32-ff7f519d66e3",
+              "mimeType": "image/jpeg",
+              "path": "c/one.jpg",
+              "reason": null,
+              "required": true,
+              "sizeBytes": 100,
+              "status": "queued",
+              "uploadUrl": "/upload-batches/89a16601-da32-5049-8fb5-a6be6e64102e/files/3af96319-1a08-5829-be32-ff7f519d66e3"
+            }
+          ],
+          "jobs": [
+            {
+              "attempts": 0,
+              "error": null,
+              "jobId": "f785e9ed-0b0c-5b1a-9683-b1f71ce90413",
+              "result": null,
+              "status": "pending"
+            }
+          ],
+          "sealedAt": 1735689610,
+          "status": "queued"
         }
       ],
       "method": "GET",
@@ -1177,7 +1226,7 @@
         "analysisPending": 0,
         "analysisRunning": 0,
         "onboardingFailed": 0,
-        "onboardingPending": 3,
+        "onboardingPending": 4,
         "onboardingRunning": 0,
         "previewFailed": 0,
         "previewPending": 0,
@@ -1185,7 +1234,7 @@
         "processingFailed": 0,
         "processingPending": 0,
         "processingRunning": 0,
-        "uploadBatchesQueued": 2,
+        "uploadBatchesQueued": 3,
         "uploadWorkers": 4,
         "uploadsActive": 0,
         "uploadsWaiting": 0
@@ -1196,14 +1245,22 @@
     },
     {
       "body": {
+        "aiFaceConfigured": false,
+        "aiFaceReachable": false,
+        "aiSemanticConfigured": false,
+        "aiSemanticReachable": false,
         "analysisFailed": 0,
         "analysisPending": 0,
         "analysisRunning": 0,
         "assets": 0,
         "blobs": 0,
+        "database": {
+          "errorClass": null,
+          "status": "ready"
+        },
         "libraryId": "11111111-1111-4111-8111-111111111111",
         "onboardingFailed": 0,
-        "onboardingPending": 3,
+        "onboardingPending": 4,
         "onboardingRunning": 0,
         "postgresBackupAt": null,
         "postgresBackupKey": null,
@@ -1214,10 +1271,24 @@
         "processingPending": 0,
         "processingRunning": 0,
         "status": "ok",
-        "uploadBatchesQueued": 2,
+        "storage": {
+          "errorClass": null,
+          "status": "ready"
+        },
+        "uploadBatchesQueued": 3,
         "uploadWorkers": 4,
         "uploadsActive": 0,
-        "uploadsWaiting": 0
+        "uploadsWaiting": 0,
+        "workers": [
+          {
+            "status": "not-configured",
+            "workerType": "worker"
+          },
+          {
+            "status": "not-configured",
+            "workerType": "ai-worker"
+          }
+        ]
       },
       "method": "GET",
       "path": "/health",
