@@ -997,6 +997,36 @@
         "title": "CurrentAssetDocOut",
         "type": "object"
       },
+      "DependencyOut": {
+        "additionalProperties": false,
+        "properties": {
+          "errorClass": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorclass"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "degraded",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "DependencyOut",
+        "type": "object"
+      },
       "FaceMoveOut": {
         "additionalProperties": false,
         "description": "POST /faces/move: the ``faces.move`` result. ``personId`` is the\ntarget person \u2014 the client's ``targetPersonId`` when one was sent, or\nthe newly created group otherwise (signalled by ``createdPerson``).\nNote the wire dict does not echo the request's ``targetPersonId``; the\nclient reads the destination back from ``personId``.\n``movedFaces`` counts the reassigned face rows.",
@@ -1125,6 +1155,29 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthFailureOut": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DependencyOut"
+          },
+          "status": {
+            "const": "unavailable",
+            "title": "Status",
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DependencyOut"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "storage"
+        ],
+        "title": "HealthFailureOut",
+        "type": "object"
+      },
       "HealthOut": {
         "additionalProperties": false,
         "description": "GET /health: the endpoint's merged shape \u2014 fixed \"ok\", the library id,\nasset/blob counts, every queue count, the upload-gate statistics, and the\nlatest PostgreSQL backup marker in the media bucket (null until the first\nbackup).",
@@ -1164,6 +1217,9 @@
           "blobs": {
             "title": "Blobs",
             "type": "integer"
+          },
+          "database": {
+            "$ref": "#/components/schemas/DependencyOut"
           },
           "libraryId": {
             "format": "uuid",
@@ -1229,9 +1285,15 @@
             "type": "integer"
           },
           "status": {
-            "const": "ok",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
             "title": "Status",
             "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DependencyOut"
           },
           "uploadBatchesQueued": {
             "title": "Uploadbatchesqueued",
@@ -1248,6 +1310,13 @@
           "uploadsWaiting": {
             "title": "Uploadswaiting",
             "type": "integer"
+          },
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerHeartbeatOut"
+            },
+            "title": "Workers",
+            "type": "array"
           }
         },
         "required": [
@@ -1276,9 +1345,27 @@
           "aiSemanticConfigured",
           "aiSemanticReachable",
           "aiFaceConfigured",
-          "aiFaceReachable"
+          "aiFaceReachable",
+          "database",
+          "storage",
+          "workers"
         ],
         "title": "HealthOut",
+        "type": "object"
+      },
+      "LivenessOut": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LivenessOut",
         "type": "object"
       },
       "Location": {
@@ -2109,6 +2196,52 @@
         "title": "QueueResultOut",
         "type": "object"
       },
+      "ReadinessFailureOut": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DependencyOut"
+          },
+          "status": {
+            "const": "not_ready",
+            "title": "Status",
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DependencyOut"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "storage"
+        ],
+        "title": "ReadinessFailureOut",
+        "type": "object"
+      },
+      "ReadinessOut": {
+        "additionalProperties": false,
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DependencyOut"
+          },
+          "status": {
+            "const": "ready",
+            "title": "Status",
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DependencyOut"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "storage"
+        ],
+        "title": "ReadinessOut",
+        "type": "object"
+      },
       "UploadBatchOut": {
         "additionalProperties": false,
         "description": "describe_batch(): the batch header (epoch-second createdAt, nullable\nsealedAt) plus its file and onboarding-job rows.",
@@ -2796,6 +2929,47 @@
           "errors"
         ],
         "title": "VerifyOut",
+        "type": "object"
+      },
+      "WorkerHeartbeatOut": {
+        "additionalProperties": false,
+        "properties": {
+          "ageSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ageseconds"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "stale",
+              "not-configured"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "workerType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workertype"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WorkerHeartbeatOut",
         "type": "object"
       }
     }
@@ -4007,6 +4181,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthFailureOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Health"
@@ -4205,6 +4389,24 @@
           }
         },
         "summary": "Browse Assets"
+      }
+    },
+    "/livez": {
+      "get": {
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Livez"
       }
     },
     "/maintenance/recluster-bursts": {
@@ -4526,6 +4728,34 @@
           }
         },
         "summary": "Queue Processing"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessFailureOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Readyz"
       }
     },
     "/upload-batches": {

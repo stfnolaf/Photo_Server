@@ -568,6 +568,20 @@ export type CurrentAssetDocOut = {
 };
 
 /**
+ * DependencyOut
+ */
+export type DependencyOut = {
+    /**
+     * Errorclass
+     */
+    errorClass?: string | null;
+    /**
+     * Status
+     */
+    status: 'ready' | 'degraded' | 'unavailable';
+};
+
+/**
  * FaceMoveOut
  *
  * POST /faces/move: the ``faces.move`` result. ``personId`` is the
@@ -672,6 +686,18 @@ export type HttpValidationError = {
 };
 
 /**
+ * HealthFailureOut
+ */
+export type HealthFailureOut = {
+    database: DependencyOut;
+    /**
+     * Status
+     */
+    status: 'unavailable';
+    storage: DependencyOut;
+};
+
+/**
  * HealthOut
  *
  * GET /health: the endpoint's merged shape — fixed "ok", the library id,
@@ -716,6 +742,7 @@ export type HealthOut = {
      * Blobs
      */
     blobs: number;
+    database: DependencyOut;
     /**
      * Libraryid
      */
@@ -767,7 +794,8 @@ export type HealthOut = {
     /**
      * Status
      */
-    status: 'ok';
+    status: 'ok' | 'degraded';
+    storage: DependencyOut;
     /**
      * Uploadbatchesqueued
      */
@@ -784,6 +812,20 @@ export type HealthOut = {
      * Uploadswaiting
      */
     uploadsWaiting: number;
+    /**
+     * Workers
+     */
+    workers: Array<WorkerHeartbeatOut>;
+};
+
+/**
+ * LivenessOut
+ */
+export type LivenessOut = {
+    /**
+     * Status
+     */
+    status: 'ok';
 };
 
 /**
@@ -1307,6 +1349,30 @@ export type QueueResultOut = {
 };
 
 /**
+ * ReadinessFailureOut
+ */
+export type ReadinessFailureOut = {
+    database: DependencyOut;
+    /**
+     * Status
+     */
+    status: 'not_ready';
+    storage: DependencyOut;
+};
+
+/**
+ * ReadinessOut
+ */
+export type ReadinessOut = {
+    database: DependencyOut;
+    /**
+     * Status
+     */
+    status: 'ready';
+    storage: DependencyOut;
+};
+
+/**
  * UploadBatchOut
  *
  * describe_batch(): the batch header (epoch-second createdAt, nullable
@@ -1699,6 +1765,24 @@ export type VerifyOut = {
      * Verification
      */
     verification: 'sha256' | 'size';
+};
+
+/**
+ * WorkerHeartbeatOut
+ */
+export type WorkerHeartbeatOut = {
+    /**
+     * Ageseconds
+     */
+    ageSeconds?: number | null;
+    /**
+     * Status
+     */
+    status: 'running' | 'stale' | 'not-configured';
+    /**
+     * Workertype
+     */
+    workerType?: string | null;
 };
 
 export type ListAlbumsData = {
@@ -2404,6 +2488,15 @@ export type GetHealthData = {
     url: '/health';
 };
 
+export type GetHealthErrors = {
+    /**
+     * Service Unavailable
+     */
+    503: HealthFailureOut;
+};
+
+export type GetHealthError = GetHealthErrors[keyof GetHealthErrors];
+
 export type GetHealthResponses = {
     /**
      * Successful Response
@@ -2482,6 +2575,22 @@ export type BrowseAssetsResponses = {
 };
 
 export type BrowseAssetsResponse = BrowseAssetsResponses[keyof BrowseAssetsResponses];
+
+export type GetLivenessData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/livez';
+};
+
+export type GetLivenessResponses = {
+    /**
+     * Successful Response
+     */
+    200: LivenessOut;
+};
+
+export type GetLivenessResponse = GetLivenessResponses[keyof GetLivenessResponses];
 
 export type ReclusterBurstsData = {
     body?: never;
@@ -2690,6 +2799,31 @@ export type QueueProcessingResponses = {
 };
 
 export type QueueProcessingResponse = QueueProcessingResponses[keyof QueueProcessingResponses];
+
+export type GetReadinessData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/readyz';
+};
+
+export type GetReadinessErrors = {
+    /**
+     * Service Unavailable
+     */
+    503: ReadinessFailureOut;
+};
+
+export type GetReadinessError = GetReadinessErrors[keyof GetReadinessErrors];
+
+export type GetReadinessResponses = {
+    /**
+     * Successful Response
+     */
+    200: ReadinessOut;
+};
+
+export type GetReadinessResponse = GetReadinessResponses[keyof GetReadinessResponses];
 
 export type ListUploadBatchesData = {
     body?: never;

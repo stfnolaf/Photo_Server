@@ -37,6 +37,8 @@ class Settings(BaseSettings):
         default=60, ge=10, le=86400, validation_alias="PHOTO_UPLOAD_CLEANUP_INTERVAL"
     )
     worker_threads: int = Field(default=4, ge=1, le=32)
+    worker_heartbeat_interval_seconds: int = Field(default=15, ge=5, le=300)
+    worker_stale_seconds: int = Field(default=60, ge=15, le=3600)
     postgres_backup_prefix: str = "backups/postgres"
     upload_part_bytes: int = Field(
         default=8 * 1024 * 1024,

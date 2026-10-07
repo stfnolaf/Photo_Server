@@ -528,13 +528,24 @@ class UploadQueueStatusOut(QueueCountsOut):
     uploads_waiting: StrictInt
 
 
+class DependencyOut(ResponseModel):
+    status: Literal["ready", "degraded", "unavailable"]
+    error_class: StrictStr | None = None
+
+
+class WorkerHeartbeatOut(ResponseModel):
+    status: Literal["running", "stale", "not-configured"]
+    worker_type: StrictStr | None = None
+    age_seconds: StrictFloat | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class HealthOut(QueueCountsOut):
     """GET /health: the endpoint's merged shape — fixed "ok", the library id,
     asset/blob counts, every queue count, the upload-gate statistics, and the
     latest PostgreSQL backup marker in the media bucket (null until the first
     backup)."""
 
-    status: Literal["ok"]
+    status: Literal["ok", "degraded"]
     library_id: UUID
     assets: StrictInt
     blobs: StrictInt
@@ -556,6 +567,31 @@ class HealthOut(QueueCountsOut):
     ai_semantic_reachable: StrictBool
     ai_face_configured: StrictBool
     ai_face_reachable: StrictBool
+    database: DependencyOut
+    storage: DependencyOut
+    workers: list[WorkerHeartbeatOut]
+
+
+class HealthFailureOut(ResponseModel):
+    status: Literal["unavailable"]
+    database: DependencyOut
+    storage: DependencyOut
+
+
+class ReadinessOut(ResponseModel):
+    status: Literal["ready"]
+    database: DependencyOut
+    storage: DependencyOut
+
+
+class ReadinessFailureOut(ResponseModel):
+    status: Literal["not_ready"]
+    database: DependencyOut
+    storage: DependencyOut
+
+
+class LivenessOut(ResponseModel):
+    status: Literal["ok"]
 
 
 # ---------------------------------------------------------------------------

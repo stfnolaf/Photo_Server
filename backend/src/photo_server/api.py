@@ -21,6 +21,7 @@ from fastapi.responses import (
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
+from sqlalchemy import text
 
 from photo_server.api_schemas import (
     AlbumOut,
@@ -33,7 +34,9 @@ from photo_server.api_schemas import (
     CurrentAssetDetailOut,
     CurrentAssetDocOut,
     FaceMoveOut,
+    HealthFailureOut,
     HealthOut,
+    LivenessOut,
     MutationResultOut,
     Pending202Out,
     PeoplePageOut,
@@ -42,16 +45,20 @@ from photo_server.api_schemas import (
     PersonRenameOut,
     PreviewStatusOut,
     QueueResultOut,
+    ReadinessFailureOut,
+    ReadinessOut,
     UploadBatchOut,
     UploadBatchRequest,
     UploadFileReceipt,
     UploadQueueStatusOut,
     VerifyOut,
 )
+from photo_server.app_logging import log_event
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
 from photo_server.derivative_identity import derivative_etag, derivative_version
 from photo_server.face_client import RemoteFaceAnalyzer
+from photo_server.heartbeat import read_heartbeat
 from photo_server.metadata import technical_fields
 from photo_server.models import Mutation
 from photo_server.service import Service
@@ -221,9 +228,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     await asyncio.to_thread(reconcile_ready_upload_batches, service)
                     await asyncio.to_thread(cleanup_abandoned_batches, service)
-                except Exception:
+                except Exception as error:
                     # Cleanup is best-effort and must never take down the API.
-                    pass
+                    log_event("maintenance_failed", stage="maintenance", error_class=type(error).__name__)
 
         maintenance_task = asyncio.create_task(maintenance())
         app.state.service = service
@@ -265,9 +272,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def root():
         return RedirectResponse("/docs")
 
-    @app.get("/health", response_model=HealthOut, operation_id="getHealth")
+    def dependency_status() -> tuple[dict, dict]:
+        database = {"status": "ready", "error_class": None}
+        storage = {"status": "ready", "error_class": None}
+        try:
+            with service.catalog.engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except Exception as error:
+            database = {"status": "unavailable", "error_class": type(error).__name__}
+        try:
+            service.storage.client.head_bucket(Bucket=service.storage.bucket)
+        except Exception as error:
+            storage = {"status": "unavailable", "error_class": type(error).__name__}
+        return database, storage
+
+    @app.get("/livez", response_model=LivenessOut, operation_id="getLiveness")
+    def livez():
+        return {"status": "ok"}
+
+    @app.get("/readyz", response_model=ReadinessOut, responses={503: {"model": ReadinessFailureOut}}, operation_id="getReadiness")
+    def readyz():
+        database, storage = dependency_status()
+        if database["status"] != "ready" or storage["status"] != "ready":
+            log_event("readiness_failed", database=database, storage=storage)
+            return JSONResponse(status_code=503, content={"status": "not_ready", "database": {"status": database["status"], "errorClass": database["error_class"]}, "storage": {"status": storage["status"], "errorClass": storage["error_class"]}})
+        return {"status": "ready", "database": database, "storage": storage}
+
+    @app.get("/health", response_model=HealthOut, responses={503: {"model": HealthFailureOut}}, operation_id="getHealth")
     def health():
-        service.storage.client.head_bucket(Bucket=service.storage.bucket)
+        database, storage = dependency_status()
+        if database["status"] != "ready":
+            log_event("health_unavailable", database=database, storage=storage)
+            return JSONResponse(status_code=503, content={"status": "unavailable", "database": {"status": database["status"], "errorClass": database["error_class"]}, "storage": {"status": storage["status"], "errorClass": storage["error_class"]}})
         # Phase 3B: probe both AI services at most once every 30 s (Q4); the
         # probes never raise — a failure makes the reachable flag false.
         now = time.monotonic()
@@ -281,16 +317,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ai_probe_cache["face"] = face_probe.result()
             ai_probe_cache["ts"] = now
         return {
-            "status": "ok",
+            "status": "degraded" if storage["status"] != "ready" else "ok",
             "libraryId": str(service.library_id),
             **service.catalog.counts(),
             **service.catalog.queue_counts(),
             **upload_gate.status(),
-            **service.backup_status(),
+            **(service.backup_status() if storage["status"] == "ready" else {"postgresBackupKey": None, "postgresBackupAt": None}),
             "aiSemanticConfigured": bool(service.settings.ai_base_url),
             "aiSemanticReachable": ai_probe_cache["semantic"],
             "aiFaceConfigured": bool(service.settings.face_service_url),
             "aiFaceReachable": ai_probe_cache["face"],
+            "database": database,
+            "storage": storage,
+            "workers": [
+                {"workerType": worker_type, **read_heartbeat(service.settings.data_dir, worker_type, service.settings.worker_stale_seconds)}
+                for worker_type in ("worker", "ai-worker")
+            ],
         }
 
     @app.post(

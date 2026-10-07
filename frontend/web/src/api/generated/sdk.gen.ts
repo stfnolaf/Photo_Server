@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AbandonUploadBatchData, AbandonUploadBatchErrors, AbandonUploadBatchResponses, BrowseAssetsData, BrowseAssetsErrors, BrowseAssetsResponses, CreateAlbumData, CreateAlbumErrors, CreateAlbumResponses, CreateUploadBatchData, CreateUploadBatchErrors, CreateUploadBatchResponses, DownloadOriginalData, DownloadOriginalErrors, DownloadOriginalResponses, GetAlbumData, GetAlbumErrors, GetAlbumResponses, GetAssetDetailData, GetAssetDetailErrors, GetAssetDetailResponses, GetAssetPreviewData, GetAssetPreviewErrors, GetAssetPreviewResponses, GetAssetThumbnailData, GetAssetThumbnailErrors, GetAssetThumbnailResponses, GetBurstData, GetBurstErrors, GetBurstResponses, GetFaceThumbnailData, GetFaceThumbnailErrors, GetFaceThumbnailResponses, GetHealthData, GetHealthResponses, GetPersonData, GetPersonErrors, GetPersonResponses, GetUploadBatchData, GetUploadBatchErrors, GetUploadBatchResponses, GetUploadQueueData, GetUploadQueueResponses, ListAlbumsData, ListAlbumsErrors, ListAlbumsResponses, ListAssetsData, ListAssetsErrors, ListAssetsResponses, ListPeopleData, ListPeopleErrors, ListPeopleResponses, ListUploadBatchesData, ListUploadBatchesErrors, ListUploadBatchesResponses, MergePersonData, MergePersonErrors, MergePersonResponses, MoveFacesData, MoveFacesErrors, MoveFacesResponses, PatchAssetMetadataData, PatchAssetMetadataErrors, PatchAssetMetadataResponses, PatchAssetUserStateData, PatchAssetUserStateErrors, PatchAssetUserStateResponses, QueueAnalysisData, QueueAnalysisErrors, QueueAnalysisResponses, QueueProcessingData, QueueProcessingErrors, QueueProcessingResponses, ReclusterBurstsData, ReclusterBurstsResponses, RemoveBurstMemberData, RemoveBurstMemberErrors, RemoveBurstMemberResponses, RenamePersonData, RenamePersonErrors, RenamePersonResponses, RestoreAlbumData, RestoreAlbumErrors, RestoreAlbumResponses, RestoreAssetData, RestoreAssetErrors, RestoreAssetResponses, RetryAnalysisData, RetryAnalysisErrors, RetryAnalysisResponses, RetryPreviewData, RetryPreviewErrors, RetryPreviewResponses, RetryUploadBatchData, RetryUploadBatchErrors, RetryUploadBatchResponses, SealUploadBatchData, SealUploadBatchErrors, SealUploadBatchResponses, SetBurstRepresentativeData, SetBurstRepresentativeErrors, SetBurstRepresentativeResponses, TrashAlbumData, TrashAlbumErrors, TrashAlbumResponses, TrashAssetData, TrashAssetErrors, TrashAssetResponses, UpdateAlbumData, UpdateAlbumErrors, UpdateAlbumResponses, UploadFileData, UploadFileErrors, UploadFileResponses, VerifyStorageData, VerifyStorageErrors, VerifyStorageResponses } from './types.gen';
+import type { AbandonUploadBatchData, AbandonUploadBatchErrors, AbandonUploadBatchResponses, BrowseAssetsData, BrowseAssetsErrors, BrowseAssetsResponses, CreateAlbumData, CreateAlbumErrors, CreateAlbumResponses, CreateUploadBatchData, CreateUploadBatchErrors, CreateUploadBatchResponses, DownloadOriginalData, DownloadOriginalErrors, DownloadOriginalResponses, GetAlbumData, GetAlbumErrors, GetAlbumResponses, GetAssetDetailData, GetAssetDetailErrors, GetAssetDetailResponses, GetAssetPreviewData, GetAssetPreviewErrors, GetAssetPreviewResponses, GetAssetThumbnailData, GetAssetThumbnailErrors, GetAssetThumbnailResponses, GetBurstData, GetBurstErrors, GetBurstResponses, GetFaceThumbnailData, GetFaceThumbnailErrors, GetFaceThumbnailResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetLivenessData, GetLivenessResponses, GetPersonData, GetPersonErrors, GetPersonResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetUploadBatchData, GetUploadBatchErrors, GetUploadBatchResponses, GetUploadQueueData, GetUploadQueueResponses, ListAlbumsData, ListAlbumsErrors, ListAlbumsResponses, ListAssetsData, ListAssetsErrors, ListAssetsResponses, ListPeopleData, ListPeopleErrors, ListPeopleResponses, ListUploadBatchesData, ListUploadBatchesErrors, ListUploadBatchesResponses, MergePersonData, MergePersonErrors, MergePersonResponses, MoveFacesData, MoveFacesErrors, MoveFacesResponses, PatchAssetMetadataData, PatchAssetMetadataErrors, PatchAssetMetadataResponses, PatchAssetUserStateData, PatchAssetUserStateErrors, PatchAssetUserStateResponses, QueueAnalysisData, QueueAnalysisErrors, QueueAnalysisResponses, QueueProcessingData, QueueProcessingErrors, QueueProcessingResponses, ReclusterBurstsData, ReclusterBurstsResponses, RemoveBurstMemberData, RemoveBurstMemberErrors, RemoveBurstMemberResponses, RenamePersonData, RenamePersonErrors, RenamePersonResponses, RestoreAlbumData, RestoreAlbumErrors, RestoreAlbumResponses, RestoreAssetData, RestoreAssetErrors, RestoreAssetResponses, RetryAnalysisData, RetryAnalysisErrors, RetryAnalysisResponses, RetryPreviewData, RetryPreviewErrors, RetryPreviewResponses, RetryUploadBatchData, RetryUploadBatchErrors, RetryUploadBatchResponses, SealUploadBatchData, SealUploadBatchErrors, SealUploadBatchResponses, SetBurstRepresentativeData, SetBurstRepresentativeErrors, SetBurstRepresentativeResponses, TrashAlbumData, TrashAlbumErrors, TrashAlbumResponses, TrashAssetData, TrashAssetErrors, TrashAssetResponses, UpdateAlbumData, UpdateAlbumErrors, UpdateAlbumResponses, UploadFileData, UploadFileErrors, UploadFileResponses, VerifyStorageData, VerifyStorageErrors, VerifyStorageResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -225,12 +225,17 @@ export const getFaceThumbnail = <ThrowOnError extends boolean = false>(options: 
 /**
  * Health
  */
-export const getHealth = <ThrowOnError extends boolean = false>(options?: Options<GetHealthData, ThrowOnError>): RequestResult<GetHealthResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetHealthResponses, unknown, ThrowOnError>({ url: '/health', ...options });
+export const getHealth = <ThrowOnError extends boolean = false>(options?: Options<GetHealthData, ThrowOnError>): RequestResult<GetHealthResponses, GetHealthErrors, ThrowOnError> => (options?.client ?? client).get<GetHealthResponses, GetHealthErrors, ThrowOnError>({ url: '/health', ...options });
 
 /**
  * Browse Assets
  */
 export const browseAssets = <ThrowOnError extends boolean = false>(options?: Options<BrowseAssetsData, ThrowOnError>): RequestResult<BrowseAssetsResponses, BrowseAssetsErrors, ThrowOnError> => (options?.client ?? client).get<BrowseAssetsResponses, BrowseAssetsErrors, ThrowOnError>({ url: '/library/assets', ...options });
+
+/**
+ * Livez
+ */
+export const getLiveness = <ThrowOnError extends boolean = false>(options?: Options<GetLivenessData, ThrowOnError>): RequestResult<GetLivenessResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetLivenessResponses, unknown, ThrowOnError>({ url: '/livez', ...options });
 
 /**
  * Recluster Bursts
@@ -287,6 +292,11 @@ export const queueProcessing = <ThrowOnError extends boolean = false>(options: O
         ...options.headers
     }
 });
+
+/**
+ * Readyz
+ */
+export const getReadiness = <ThrowOnError extends boolean = false>(options?: Options<GetReadinessData, ThrowOnError>): RequestResult<GetReadinessResponses, GetReadinessErrors, ThrowOnError> => (options?.client ?? client).get<GetReadinessResponses, GetReadinessErrors, ThrowOnError>({ url: '/readyz', ...options });
 
 /**
  * Get Active Upload Batches

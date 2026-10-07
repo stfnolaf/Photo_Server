@@ -41,6 +41,7 @@ from uuid import uuid4
 import httpx
 from pydantic import ValidationError
 
+from photo_server.ai_pipeline import independent
 from photo_server.analysis import (
     ANALYSIS_TYPE,
     PIPELINE_VERSION,
@@ -52,10 +53,11 @@ from photo_server.analysis import (
     resolve_model_digest,
     searchable_text,
 )
+from photo_server.app_logging import log_event
 from photo_server.browsing import camera_time
-from photo_server.ai_pipeline import independent
 from photo_server.face_client import ADAFACE_IDENTITY, FaceServiceUnavailable, RemoteFaceAnalyzer
 from photo_server.fingerprints import BURST_HASH_VERSION, compute_fingerprint
+from photo_server.heartbeat import write_heartbeat
 from photo_server.reuse import (
     REUSE_POLICY_VERSION,
     UNKNOWN_DIGEST,
@@ -703,11 +705,19 @@ class AIWorker:
                 with ThreadPoolExecutor(max_workers=2, thread_name_prefix="photo-ai-stage") as pool:
                     face_future = pool.submit(run_face_stage)
                     semantic_future = pool.submit(run_semantic_stage)
-                    faces, face_elapsed = face_future.result()
+                    try:
+                        faces, face_elapsed = face_future.result()
+                    except Exception:
+                        stage = "face"
+                        raise
                     # Make the face result durable as soon as that stage
                     # returns. Semantic inference may still be running.
                     self._persist_face_stage(asset_id, manifest.primary.sha256, faces)
-                    (semantic, model_digest, metrics), semantic_elapsed = semantic_future.result()
+                    try:
+                        (semantic, model_digest, metrics), semantic_elapsed = semantic_future.result()
+                    except Exception:
+                        stage = "semantic"
+                        raise
                 self._persist_semantic_stage(
                     asset_id, manifest.primary.sha256, semantic, model_digest, metrics
                 )
@@ -1076,6 +1086,7 @@ def _log_state_transition(previous: str | None, state: str, detail: str) -> None
     print(
         json.dumps(
             {
+                "event": "ai_worker_state_transition",
                 "status": "state-transition",
                 "previous": previous,
                 "state": state,
@@ -1083,8 +1094,16 @@ def _log_state_transition(previous: str | None, state: str, detail: str) -> None
                 "message": message,
             }
         ),
-        flush=True,
+    flush=True,
     )
+
+
+def _print_ai_result(result: dict) -> None:
+    """Emit a structured result without copying exception text to logs."""
+    safe = {key: value for key, value in result.items() if key != "error"}
+    if "error" in result:
+        safe["errorClass"] = result.get("errorClass", "RuntimeError")
+    print(json.dumps({"event": "ai_worker_job_completed", **safe}), flush=True)
 
 
 def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
@@ -1107,8 +1126,12 @@ def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
     last_state: str | None = None
     backoff = _BACKOFF_INITIAL_SECONDS
     last_heartbeat = 0.0
+    last_worker_heartbeat = 0.0
     try:
         while True:
+            if time.monotonic() - last_worker_heartbeat >= service.settings.worker_heartbeat_interval_seconds:
+                write_heartbeat(service.settings.data_dir, "ai-worker")
+                last_worker_heartbeat = time.monotonic()
             state, detail = worker._gate()
             if state == "face-only":
                 if state != last_state:
@@ -1120,7 +1143,7 @@ def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
                 if job is None:
                     time.sleep(_NO_JOBS_SLEEP_SECONDS)
                     continue
-                print(json.dumps(worker._execute_face_stage(job)), flush=True)
+                _print_ai_result(worker._execute_face_stage(job))
                 continue
 
             if state == "vlm-only":
@@ -1133,7 +1156,7 @@ def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
                 if job is None:
                     time.sleep(_NO_JOBS_SLEEP_SECONDS)
                     continue
-                print(json.dumps(worker._execute_semantic_stage(job)), flush=True)
+                _print_ai_result(worker._execute_semantic_stage(job))
                 continue
 
             if state != "ready":
@@ -1150,17 +1173,15 @@ def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
                         message = f"AI services unavailable ({detail})"
                     if pending is not None:
                         message = f"{message}; {pending} analysis jobs waiting"
-                    print(
-                        json.dumps(
-                            {
-                                "status": "heartbeat",
-                                "state": state,
-                                "pendingAnalysis": pending,
-                                "message": message,
-                            }
-                        ),
-                        flush=True,
-                    )
+                    heartbeat = {
+                        "event": "ai_worker_heartbeat",
+                        "status": "heartbeat",
+                        "state": state,
+                        "pendingAnalysis": pending,
+                        "message": message,
+                    }
+                    log_event("ai_worker_heartbeat", state=state, pending_analysis=pending)
+                    print(json.dumps(heartbeat), flush=True)
                     last_heartbeat = now
                 time.sleep(_IDLE_SLEEP_SECONDS if state == "not-configured" else backoff)
                 if state != "not-configured":
@@ -1175,7 +1196,7 @@ def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
             publish_job = worker.service.catalog.claim_ai_publish_job()
             if publish_job is not None:
                 result = worker._publish_staged_analysis(publish_job)
-                print(json.dumps(result), flush=True)
+                _print_ai_result(result)
                 continue
 
             stage_claimers = (
@@ -1193,7 +1214,7 @@ def _run_dispatcher(service: Service, prefer_face: bool = True) -> None:
             if claimed is None:
                 time.sleep(_NO_JOBS_SLEEP_SECONDS)
                 continue
-            print(json.dumps(claimed), flush=True)
+            _print_ai_result(claimed)
     except _StopRunning:
         pass
 

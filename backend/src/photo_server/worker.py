@@ -13,8 +13,10 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import pillow_heif
 from PIL import Image, ImageOps
 
-from photo_server.models import Manifest
+from photo_server.app_logging import log_event
 from photo_server.derivative_identity import PREVIEW_RENDERER_VERSION
+from photo_server.heartbeat import write_heartbeat
+from photo_server.models import Manifest
 from photo_server.processing import run_stage
 from photo_server.service import Service
 from photo_server.uploads import (
@@ -343,15 +345,22 @@ def run_once(service: Service, mode: str = "all") -> dict | None:
 
 
 def _worker_loop(service: Service, mode: str):
+    last_heartbeat = 0.0
     while True:
+        if time.monotonic() - last_heartbeat >= service.settings.worker_heartbeat_interval_seconds:
+            write_heartbeat(service.settings.data_dir, "worker", mode=mode)
+            last_heartbeat = time.monotonic()
         try:
+            started = time.perf_counter()
             result = run_once(service, mode)
         except Exception as error:
-            print(json.dumps({"status": "worker_error", "error": str(error)}), flush=True)
+            log_event("worker_failed", stage=mode, error_class=type(error).__name__)
             time.sleep(2)
             continue
         if result:
-            print(json.dumps(result), flush=True)
+            fields = {key: value for key, value in result.items() if key != "error"}
+            fields["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
+            log_event("worker_job_completed", **fields)
         else:
             time.sleep(2)
 
@@ -366,7 +375,7 @@ def _cleanup_loop(service: Service):
             if result["batchesDeleted"]:
                 print(json.dumps({"status": "upload_cleanup", **result}), flush=True)
         except Exception as error:
-            print(json.dumps({"status": "upload_cleanup_error", "error": str(error)}), flush=True)
+            log_event("maintenance_failed", stage="upload-cleanup", error_class=type(error).__name__)
         time.sleep(service.settings.upload_cleanup_interval_seconds)
 
 
@@ -378,7 +387,7 @@ def _eviction_loop(service: Service):
         try:
             evict_previews(service)
         except Exception as error:
-            print(json.dumps({"status": "preview_eviction_error", "error": str(error)}), flush=True)
+            log_event("maintenance_failed", stage="preview-eviction", error_class=type(error).__name__)
 
 
 def run(service: Service, mode: str = "all"):
