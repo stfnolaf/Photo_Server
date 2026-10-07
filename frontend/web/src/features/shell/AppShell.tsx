@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, CircleHelp, PanelLeftClose, PanelLeftOpen, RotateCw } from "lucide-react";
+import { ChevronLeft, CircleHelp, LogOut, PanelLeftClose, PanelLeftOpen, RotateCw } from "lucide-react";
 import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { Album, Health, LibraryFilters, PhotoSummary } from "../../api/types";
@@ -8,6 +8,7 @@ import { Button } from "../../components/Button";
 import { useToast } from "../../components/Toast";
 import { writeFilters } from "../../domain/library";
 import { useLayoutStore } from "../../state/layout";
+import { api } from "../../api/client";
 import { UploadQueue } from "../uploads/UploadQueue";
 import { Sidebar } from "./Sidebar";
 
@@ -82,6 +83,7 @@ export function AppShell({
           <span className="library-count" title={`${health.blobs} stored files`}>{health.assets.toLocaleString()} originals</span>
           <UploadQueue albums={albums} />
           <button className="icon-button refresh-button" type="button" onClick={refresh} aria-label="Refresh library"><RotateCw size={16} /></button>
+          <button className="icon-button" type="button" onClick={async () => { await api.logout(); await queryClient.invalidateQueries({ queryKey: ["session"] }); }} aria-label="Sign out"><LogOut size={16} /></button>
           <a className="icon-button" href="/docs" target="_blank" rel="noreferrer" aria-label="Open API documentation"><CircleHelp size={17} /></a>
         </div>
       </header>

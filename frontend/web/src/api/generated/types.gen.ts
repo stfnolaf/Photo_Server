@@ -871,6 +871,16 @@ export type LocationOut = {
 };
 
 /**
+ * LoginRequest
+ */
+export type LoginRequest = {
+    /**
+     * Password
+     */
+    password: string;
+};
+
+/**
  * MutationOut
  *
  * The last mutation applied to a v2 manifest or album document
@@ -1370,6 +1380,16 @@ export type ReadinessOut = {
      */
     status: 'ready';
     storage: DependencyOut;
+};
+
+/**
+ * SessionOut
+ */
+export type SessionOut = {
+    /**
+     * Authenticated
+     */
+    authenticated: boolean;
 };
 
 /**
@@ -2421,6 +2441,63 @@ export type PatchAssetUserStateResponses = {
 };
 
 export type PatchAssetUserStateResponse = PatchAssetUserStateResponses[keyof PatchAssetUserStateResponses];
+
+export type LoginData = {
+    body: LoginRequest;
+    path?: never;
+    query?: never;
+    url: '/auth/login';
+};
+
+export type LoginErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type LoginError = LoginErrors[keyof LoginErrors];
+
+export type LoginResponses = {
+    /**
+     * Successful Response
+     */
+    200: SessionOut;
+};
+
+export type LoginResponse = LoginResponses[keyof LoginResponses];
+
+export type LogoutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/auth/logout';
+};
+
+export type LogoutResponses = {
+    /**
+     * Successful Response
+     */
+    200: SessionOut;
+};
+
+export type LogoutResponse = LogoutResponses[keyof LogoutResponses];
+
+export type GetCurrentSessionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/auth/session';
+};
+
+export type GetCurrentSessionResponses = {
+    /**
+     * Successful Response
+     */
+    200: SessionOut;
+};
+
+export type GetCurrentSessionResponse = GetCurrentSessionResponses[keyof GetCurrentSessionResponses];
 
 export type MoveFacesData = {
     body: FaceMoveRequest;

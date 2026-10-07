@@ -37,6 +37,7 @@ from photo_server.api_schemas import (
     HealthFailureOut,
     HealthOut,
     LivenessOut,
+    LoginRequest,
     MutationResultOut,
     Pending202Out,
     PeoplePageOut,
@@ -47,6 +48,7 @@ from photo_server.api_schemas import (
     QueueResultOut,
     ReadinessFailureOut,
     ReadinessOut,
+    SessionOut,
     UploadBatchOut,
     UploadBatchRequest,
     UploadFileReceipt,
@@ -54,6 +56,7 @@ from photo_server.api_schemas import (
     VerifyOut,
 )
 from photo_server.app_logging import log_event
+from photo_server.auth import auth_scheme, issue_session, origin_allowed, verify_password
 from photo_server.browsing import AlbumPatch, BrowseQuery, OperationRequest, UserStatePatch
 from photo_server.config import LibraryError, Settings
 from photo_server.derivative_identity import derivative_etag, derivative_version
@@ -272,7 +275,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.gather(maintenance_task, return_exceptions=True)
             service.catalog.engine.dispose()
 
-    app = FastAPI(title="Photo Server", version="0.6.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Photo Server",
+        version="0.6.0",
+        description=(
+            "Single-user photo library API. When authentication is enabled, "
+            "`/livez` is public; all library, health, operational, docs, and "
+            "asset routes require the signed browser session cookie or the "
+            "configured bearer token."
+        ),
+        lifespan=lifespan,
+    )
     # Phase 3B: the AI-service probe cache (Q4): the monotonic timestamp of
     # the last probe plus the two reachable results. A dict so the health
     # handler updates it in place; on app.state as the test/ops seam (the
@@ -288,8 +301,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             CORSMiddleware,
             allow_origins=origins,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-            allow_headers=["Content-Type", "Content-Length"],
+            allow_headers=["Authorization", "Content-Type", "Content-Length", "X-CSRF-Token"],
+            allow_credentials=True,
         )
+
+    public_paths = {"/livez", "/auth/login", "/auth/session", "/auth/logout"}
+
+    @app.middleware("http")
+    async def protect_requests(request: Request, call_next):
+        if not service.settings.auth_enabled or request.method == "OPTIONS":
+            return await call_next(request)
+        path = request.url.path
+        if path in public_paths:
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not origin_allowed(request, origins):
+                return JSONResponse(status_code=403, content={"detail": "Unsafe cross-origin request"})
+            return await call_next(request)
+        scheme = auth_scheme(
+            request,
+            service.settings.session_secret.get_secret_value(),
+            service.settings.session_cookie_name,
+            service.settings.api_token.get_secret_value(),
+        )
+        if scheme == "none":
+            return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+        if scheme == "cookie" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            if not origin_allowed(request, origins):
+                return JSONResponse(status_code=403, content={"detail": "Unsafe cross-origin request"})
+        request.state.auth_scheme = scheme
+        return await call_next(request)
 
     @app.exception_handler(LibraryError)
     async def library_error(request: Request, error: LibraryError):
@@ -302,6 +341,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def root():
         return RedirectResponse("/docs")
+
+    @app.post("/auth/login", response_model=SessionOut, operation_id="login")
+    def login(body: LoginRequest, request: Request, response: Response):
+        # Keep the failure shape and timing independent of private resources.
+        valid = verify_password(body.password, service.settings.password_hash)
+        if not valid:
+            log_event("authentication_failed", reason="invalid_credentials")
+            raise HTTPException(401, "Invalid credentials")
+        token = issue_session(
+            service.settings.session_secret.get_secret_value(),
+            service.settings.session_ttl_seconds,
+        )
+        response.set_cookie(
+            service.settings.session_cookie_name,
+            token,
+            max_age=service.settings.session_ttl_seconds,
+            httponly=True,
+            secure=service.settings.session_cookie_secure,
+            samesite=service.settings.session_cookie_samesite,
+            path="/",
+        )
+        return {"authenticated": True}
+
+    @app.get("/auth/session", response_model=SessionOut, operation_id="getCurrentSession")
+    def current_session(request: Request):
+        authenticated = not service.settings.auth_enabled
+        if service.settings.auth_enabled:
+            authenticated = auth_scheme(
+                request,
+                service.settings.session_secret.get_secret_value(),
+                service.settings.session_cookie_name,
+                service.settings.api_token.get_secret_value(),
+            ) != "none"
+        return {"authenticated": authenticated}
+
+    @app.post("/auth/logout", response_model=SessionOut, operation_id="logout")
+    def logout(response: Response):
+        response.delete_cookie(service.settings.session_cookie_name, path="/")
+        return {"authenticated": False}
 
     def dependency_status() -> tuple[dict, dict]:
         database = {"status": "ready", "error_class": None}
@@ -1047,6 +1125,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def openapi() -> dict:
         spec = copy.deepcopy(_base_openapi())
+        security_schemes = spec.setdefault("components", {}).setdefault("securitySchemes", {})
+        security_schemes["bearerToken"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "Static PHOTO_API_TOKEN for CLI and automation.",
+        }
+        security_schemes["sessionCookie"] = {
+            "type": "apiKey",
+            "in": "cookie",
+            "name": service.settings.session_cookie_name,
+            "description": "HTTP-only signed browser session cookie.",
+        }
+        for path, path_item in spec.get("paths", {}).items():
+            if path in {"/livez", "/auth/login", "/auth/session", "/auth/logout"}:
+                continue
+            for operation in path_item.values():
+                if isinstance(operation, dict) and "responses" in operation:
+                    operation["security"] = [{"bearerToken": []}, {"sessionCookie": []}]
         for path, media_type in _binary_200_media.items():
             content = spec["paths"][path]["get"]["responses"]["200"]["content"]
             content.pop("application/json", None)

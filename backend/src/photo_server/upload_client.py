@@ -20,6 +20,7 @@ the pre-Phase-6 CLI for the same server output).
 import argparse
 import json
 import mimetypes
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -112,6 +113,7 @@ def upload(
     wait: bool,
     album_id: UUID | None = None,
     album_name: str | None = None,
+    api_token: str | None = None,
 ) -> tuple[UploadBatchOut, dict]:
     """Upload ``inputs`` under ``root`` to ``server`` as batch ``batch_id``.
 
@@ -140,7 +142,8 @@ def upload(
     )
     declaration_payload = declaration.model_dump(mode="json", by_alias=True, exclude_none=True)
     timeout = httpx.Timeout(connect=10, read=300, write=300, pool=300)
-    with httpx.Client(base_url=server.rstrip("/"), timeout=timeout) as client:
+    headers = {"Authorization": f"Bearer {api_token}"} if api_token else {}
+    with httpx.Client(base_url=server.rstrip("/"), timeout=timeout, headers=headers) as client:
         batch, _ = _batch_response(client.post("/upload-batches", json=declaration_payload))
         required = [
             file
@@ -193,6 +196,11 @@ def main():
     parser.add_argument("--parallel", type=int, default=8, choices=range(1, 33))
     parser.add_argument("--batch-id", type=UUID, default=uuid4())
     parser.add_argument("--wait", action="store_true", help="Wait for background onboarding")
+    parser.add_argument(
+        "--api-token",
+        default=os.environ.get("PHOTO_API_TOKEN"),
+        help="Bearer token for an authenticated server (defaults to PHOTO_API_TOKEN)",
+    )
     album = parser.add_mutually_exclusive_group()
     album.add_argument("--album-id", type=UUID, help="Add the upload to an existing album")
     album.add_argument("--new-album", metavar="NAME", help="Create an album and add the upload to it")
@@ -209,6 +217,7 @@ def main():
             args.wait,
             args.album_id,
             args.new_album,
+            args.api_token,
         )
         print(json.dumps(raw, indent=2))
         if result.status == "failed":

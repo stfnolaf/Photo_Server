@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AbandonUploadBatchData, AbandonUploadBatchErrors, AbandonUploadBatchResponses, BrowseAssetsData, BrowseAssetsErrors, BrowseAssetsResponses, CreateAlbumData, CreateAlbumErrors, CreateAlbumResponses, CreateUploadBatchData, CreateUploadBatchErrors, CreateUploadBatchResponses, DownloadOriginalData, DownloadOriginalErrors, DownloadOriginalResponses, GetAlbumData, GetAlbumErrors, GetAlbumResponses, GetAssetDetailData, GetAssetDetailErrors, GetAssetDetailResponses, GetAssetPreviewData, GetAssetPreviewErrors, GetAssetPreviewResponses, GetAssetThumbnailData, GetAssetThumbnailErrors, GetAssetThumbnailResponses, GetBurstData, GetBurstErrors, GetBurstResponses, GetFaceThumbnailData, GetFaceThumbnailErrors, GetFaceThumbnailResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetLivenessData, GetLivenessResponses, GetPersonData, GetPersonErrors, GetPersonResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetUploadBatchData, GetUploadBatchErrors, GetUploadBatchResponses, GetUploadQueueData, GetUploadQueueResponses, ListAlbumsData, ListAlbumsErrors, ListAlbumsResponses, ListAssetsData, ListAssetsErrors, ListAssetsResponses, ListPeopleData, ListPeopleErrors, ListPeopleResponses, ListUploadBatchesData, ListUploadBatchesErrors, ListUploadBatchesResponses, MergePersonData, MergePersonErrors, MergePersonResponses, MoveFacesData, MoveFacesErrors, MoveFacesResponses, PatchAssetMetadataData, PatchAssetMetadataErrors, PatchAssetMetadataResponses, PatchAssetUserStateData, PatchAssetUserStateErrors, PatchAssetUserStateResponses, QueueAnalysisData, QueueAnalysisErrors, QueueAnalysisResponses, QueueProcessingData, QueueProcessingErrors, QueueProcessingResponses, ReclusterBurstsData, ReclusterBurstsResponses, RemoveBurstMemberData, RemoveBurstMemberErrors, RemoveBurstMemberResponses, RenamePersonData, RenamePersonErrors, RenamePersonResponses, RestoreAlbumData, RestoreAlbumErrors, RestoreAlbumResponses, RestoreAssetData, RestoreAssetErrors, RestoreAssetResponses, RetryAnalysisData, RetryAnalysisErrors, RetryAnalysisResponses, RetryPreviewData, RetryPreviewErrors, RetryPreviewResponses, RetryUploadBatchData, RetryUploadBatchErrors, RetryUploadBatchResponses, SealUploadBatchData, SealUploadBatchErrors, SealUploadBatchResponses, SetBurstRepresentativeData, SetBurstRepresentativeErrors, SetBurstRepresentativeResponses, TrashAlbumData, TrashAlbumErrors, TrashAlbumResponses, TrashAssetData, TrashAssetErrors, TrashAssetResponses, UpdateAlbumData, UpdateAlbumErrors, UpdateAlbumResponses, UploadFileData, UploadFileErrors, UploadFileResponses, VerifyStorageData, VerifyStorageErrors, VerifyStorageResponses } from './types.gen';
+import type { AbandonUploadBatchData, AbandonUploadBatchErrors, AbandonUploadBatchResponses, BrowseAssetsData, BrowseAssetsErrors, BrowseAssetsResponses, CreateAlbumData, CreateAlbumErrors, CreateAlbumResponses, CreateUploadBatchData, CreateUploadBatchErrors, CreateUploadBatchResponses, DownloadOriginalData, DownloadOriginalErrors, DownloadOriginalResponses, GetAlbumData, GetAlbumErrors, GetAlbumResponses, GetAssetDetailData, GetAssetDetailErrors, GetAssetDetailResponses, GetAssetPreviewData, GetAssetPreviewErrors, GetAssetPreviewResponses, GetAssetThumbnailData, GetAssetThumbnailErrors, GetAssetThumbnailResponses, GetBurstData, GetBurstErrors, GetBurstResponses, GetCurrentSessionData, GetCurrentSessionResponses, GetFaceThumbnailData, GetFaceThumbnailErrors, GetFaceThumbnailResponses, GetHealthData, GetHealthErrors, GetHealthResponses, GetLivenessData, GetLivenessResponses, GetPersonData, GetPersonErrors, GetPersonResponses, GetReadinessData, GetReadinessErrors, GetReadinessResponses, GetUploadBatchData, GetUploadBatchErrors, GetUploadBatchResponses, GetUploadQueueData, GetUploadQueueResponses, ListAlbumsData, ListAlbumsErrors, ListAlbumsResponses, ListAssetsData, ListAssetsErrors, ListAssetsResponses, ListPeopleData, ListPeopleErrors, ListPeopleResponses, ListUploadBatchesData, ListUploadBatchesErrors, ListUploadBatchesResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutResponses, MergePersonData, MergePersonErrors, MergePersonResponses, MoveFacesData, MoveFacesErrors, MoveFacesResponses, PatchAssetMetadataData, PatchAssetMetadataErrors, PatchAssetMetadataResponses, PatchAssetUserStateData, PatchAssetUserStateErrors, PatchAssetUserStateResponses, QueueAnalysisData, QueueAnalysisErrors, QueueAnalysisResponses, QueueProcessingData, QueueProcessingErrors, QueueProcessingResponses, ReclusterBurstsData, ReclusterBurstsResponses, RemoveBurstMemberData, RemoveBurstMemberErrors, RemoveBurstMemberResponses, RenamePersonData, RenamePersonErrors, RenamePersonResponses, RestoreAlbumData, RestoreAlbumErrors, RestoreAlbumResponses, RestoreAssetData, RestoreAssetErrors, RestoreAssetResponses, RetryAnalysisData, RetryAnalysisErrors, RetryAnalysisResponses, RetryPreviewData, RetryPreviewErrors, RetryPreviewResponses, RetryUploadBatchData, RetryUploadBatchErrors, RetryUploadBatchResponses, SealUploadBatchData, SealUploadBatchErrors, SealUploadBatchResponses, SetBurstRepresentativeData, SetBurstRepresentativeErrors, SetBurstRepresentativeResponses, TrashAlbumData, TrashAlbumErrors, TrashAlbumResponses, TrashAssetData, TrashAssetErrors, TrashAssetResponses, UpdateAlbumData, UpdateAlbumErrors, UpdateAlbumResponses, UploadFileData, UploadFileErrors, UploadFileResponses, VerifyStorageData, VerifyStorageErrors, VerifyStorageResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -21,12 +21,25 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 /**
  * List Albums
  */
-export const listAlbums = <ThrowOnError extends boolean = false>(options?: Options<ListAlbumsData, ThrowOnError>): RequestResult<ListAlbumsResponses, ListAlbumsErrors, ThrowOnError> => (options?.client ?? client).get<ListAlbumsResponses, ListAlbumsErrors, ThrowOnError>({ url: '/albums', ...options });
+export const listAlbums = <ThrowOnError extends boolean = false>(options?: Options<ListAlbumsData, ThrowOnError>): RequestResult<ListAlbumsResponses, ListAlbumsErrors, ThrowOnError> => (options?.client ?? client).get<ListAlbumsResponses, ListAlbumsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/albums',
+    ...options
+});
 
 /**
  * Create Album
  */
 export const createAlbum = <ThrowOnError extends boolean = false>(options: Options<CreateAlbumData, ThrowOnError>): RequestResult<CreateAlbumResponses, CreateAlbumErrors, ThrowOnError> => (options.client ?? client).post<CreateAlbumResponses, CreateAlbumErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/albums',
     ...options,
     headers: {
@@ -44,6 +57,11 @@ export const createAlbum = <ThrowOnError extends boolean = false>(options: Optio
  * explicitly; a bodyless DELETE is rejected as 422.
  */
 export const trashAlbum = <ThrowOnError extends boolean = false>(options: Options<TrashAlbumData, ThrowOnError>): RequestResult<TrashAlbumResponses, TrashAlbumErrors, ThrowOnError> => (options.client ?? client).delete<TrashAlbumResponses, TrashAlbumErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/albums/{album_id}',
     ...options,
     headers: {
@@ -55,12 +73,25 @@ export const trashAlbum = <ThrowOnError extends boolean = false>(options: Option
 /**
  * Get Album
  */
-export const getAlbum = <ThrowOnError extends boolean = false>(options: Options<GetAlbumData, ThrowOnError>): RequestResult<GetAlbumResponses, GetAlbumErrors, ThrowOnError> => (options.client ?? client).get<GetAlbumResponses, GetAlbumErrors, ThrowOnError>({ url: '/albums/{album_id}', ...options });
+export const getAlbum = <ThrowOnError extends boolean = false>(options: Options<GetAlbumData, ThrowOnError>): RequestResult<GetAlbumResponses, GetAlbumErrors, ThrowOnError> => (options.client ?? client).get<GetAlbumResponses, GetAlbumErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/albums/{album_id}',
+    ...options
+});
 
 /**
  * Update Album
  */
 export const updateAlbum = <ThrowOnError extends boolean = false>(options: Options<UpdateAlbumData, ThrowOnError>): RequestResult<UpdateAlbumResponses, UpdateAlbumErrors, ThrowOnError> => (options.client ?? client).patch<UpdateAlbumResponses, UpdateAlbumErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/albums/{album_id}',
     ...options,
     headers: {
@@ -73,6 +104,11 @@ export const updateAlbum = <ThrowOnError extends boolean = false>(options: Optio
  * Restore Album
  */
 export const restoreAlbum = <ThrowOnError extends boolean = false>(options: Options<RestoreAlbumData, ThrowOnError>): RequestResult<RestoreAlbumResponses, RestoreAlbumErrors, ThrowOnError> => (options.client ?? client).post<RestoreAlbumResponses, RestoreAlbumErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/albums/{album_id}/restore',
     ...options,
     headers: {
@@ -85,6 +121,11 @@ export const restoreAlbum = <ThrowOnError extends boolean = false>(options: Opti
  * Queue Analysis
  */
 export const queueAnalysis = <ThrowOnError extends boolean = false>(options: Options<QueueAnalysisData, ThrowOnError>): RequestResult<QueueAnalysisResponses, QueueAnalysisErrors, ThrowOnError> => (options.client ?? client).post<QueueAnalysisResponses, QueueAnalysisErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/analysis',
     ...options,
     headers: {
@@ -96,12 +137,25 @@ export const queueAnalysis = <ThrowOnError extends boolean = false>(options: Opt
 /**
  * List Assets
  */
-export const listAssets = <ThrowOnError extends boolean = false>(options?: Options<ListAssetsData, ThrowOnError>): RequestResult<ListAssetsResponses, ListAssetsErrors, ThrowOnError> => (options?.client ?? client).get<ListAssetsResponses, ListAssetsErrors, ThrowOnError>({ url: '/assets', ...options });
+export const listAssets = <ThrowOnError extends boolean = false>(options?: Options<ListAssetsData, ThrowOnError>): RequestResult<ListAssetsResponses, ListAssetsErrors, ThrowOnError> => (options?.client ?? client).get<ListAssetsResponses, ListAssetsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets',
+    ...options
+});
 
 /**
  * Trash Asset
  */
 export const trashAsset = <ThrowOnError extends boolean = false>(options: Options<TrashAssetData, ThrowOnError>): RequestResult<TrashAssetResponses, TrashAssetErrors, ThrowOnError> => (options.client ?? client).delete<TrashAssetResponses, TrashAssetErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/assets/{asset_id}',
     ...options,
     headers: {
@@ -113,22 +167,51 @@ export const trashAsset = <ThrowOnError extends boolean = false>(options: Option
 /**
  * Get Asset
  */
-export const getAssetDetail = <ThrowOnError extends boolean = false>(options: Options<GetAssetDetailData, ThrowOnError>): RequestResult<GetAssetDetailResponses, GetAssetDetailErrors, ThrowOnError> => (options.client ?? client).get<GetAssetDetailResponses, GetAssetDetailErrors, ThrowOnError>({ url: '/assets/{asset_id}', ...options });
+export const getAssetDetail = <ThrowOnError extends boolean = false>(options: Options<GetAssetDetailData, ThrowOnError>): RequestResult<GetAssetDetailResponses, GetAssetDetailErrors, ThrowOnError> => (options.client ?? client).get<GetAssetDetailResponses, GetAssetDetailErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}',
+    ...options
+});
 
 /**
  * Retry Analysis
  */
-export const retryAnalysis = <ThrowOnError extends boolean = false>(options: Options<RetryAnalysisData, ThrowOnError>): RequestResult<RetryAnalysisResponses, RetryAnalysisErrors, ThrowOnError> => (options.client ?? client).post<RetryAnalysisResponses, RetryAnalysisErrors, ThrowOnError>({ url: '/assets/{asset_id}/analysis/retry', ...options });
+export const retryAnalysis = <ThrowOnError extends boolean = false>(options: Options<RetryAnalysisData, ThrowOnError>): RequestResult<RetryAnalysisResponses, RetryAnalysisErrors, ThrowOnError> => (options.client ?? client).post<RetryAnalysisResponses, RetryAnalysisErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}/analysis/retry',
+    ...options
+});
 
 /**
  * Get Asset Burst
  */
-export const getBurst = <ThrowOnError extends boolean = false>(options: Options<GetBurstData, ThrowOnError>): RequestResult<GetBurstResponses, GetBurstErrors, ThrowOnError> => (options.client ?? client).get<GetBurstResponses, GetBurstErrors, ThrowOnError>({ url: '/assets/{asset_id}/burst', ...options });
+export const getBurst = <ThrowOnError extends boolean = false>(options: Options<GetBurstData, ThrowOnError>): RequestResult<GetBurstResponses, GetBurstErrors, ThrowOnError> => (options.client ?? client).get<GetBurstResponses, GetBurstErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}/burst',
+    ...options
+});
 
 /**
  * Remove Burst Member
  */
 export const removeBurstMember = <ThrowOnError extends boolean = false>(options: Options<RemoveBurstMemberData, ThrowOnError>): RequestResult<RemoveBurstMemberResponses, RemoveBurstMemberErrors, ThrowOnError> => (options.client ?? client).post<RemoveBurstMemberResponses, RemoveBurstMemberErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/assets/{asset_id}/burst/remove',
     ...options,
     headers: {
@@ -141,6 +224,11 @@ export const removeBurstMember = <ThrowOnError extends boolean = false>(options:
  * Set Burst Representative
  */
 export const setBurstRepresentative = <ThrowOnError extends boolean = false>(options: Options<SetBurstRepresentativeData, ThrowOnError>): RequestResult<SetBurstRepresentativeResponses, SetBurstRepresentativeErrors, ThrowOnError> => (options.client ?? client).post<SetBurstRepresentativeResponses, SetBurstRepresentativeErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/assets/{asset_id}/burst/representative',
     ...options,
     headers: {
@@ -153,6 +241,11 @@ export const setBurstRepresentative = <ThrowOnError extends boolean = false>(opt
  * Update User State
  */
 export const patchAssetMetadata = <ThrowOnError extends boolean = false>(options: Options<PatchAssetMetadataData, ThrowOnError>): RequestResult<PatchAssetMetadataResponses, PatchAssetMetadataErrors, ThrowOnError> => (options.client ?? client).patch<PatchAssetMetadataResponses, PatchAssetMetadataErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/assets/{asset_id}/metadata',
     ...options,
     headers: {
@@ -164,22 +257,51 @@ export const patchAssetMetadata = <ThrowOnError extends boolean = false>(options
 /**
  * Original
  */
-export const downloadOriginal = <ThrowOnError extends boolean = false>(options: Options<DownloadOriginalData, ThrowOnError>): RequestResult<DownloadOriginalResponses, DownloadOriginalErrors, ThrowOnError> => (options.client ?? client).get<DownloadOriginalResponses, DownloadOriginalErrors, ThrowOnError>({ url: '/assets/{asset_id}/original', ...options });
+export const downloadOriginal = <ThrowOnError extends boolean = false>(options: Options<DownloadOriginalData, ThrowOnError>): RequestResult<DownloadOriginalResponses, DownloadOriginalErrors, ThrowOnError> => (options.client ?? client).get<DownloadOriginalResponses, DownloadOriginalErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}/original',
+    ...options
+});
 
 /**
  * Preview
  */
-export const getAssetPreview = <ThrowOnError extends boolean = false>(options: Options<GetAssetPreviewData, ThrowOnError>): RequestResult<GetAssetPreviewResponses, GetAssetPreviewErrors, ThrowOnError> => (options.client ?? client).get<GetAssetPreviewResponses, GetAssetPreviewErrors, ThrowOnError>({ url: '/assets/{asset_id}/preview', ...options });
+export const getAssetPreview = <ThrowOnError extends boolean = false>(options: Options<GetAssetPreviewData, ThrowOnError>): RequestResult<GetAssetPreviewResponses, GetAssetPreviewErrors, ThrowOnError> => (options.client ?? client).get<GetAssetPreviewResponses, GetAssetPreviewErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}/preview',
+    ...options
+});
 
 /**
  * Retry Preview
  */
-export const retryPreview = <ThrowOnError extends boolean = false>(options: Options<RetryPreviewData, ThrowOnError>): RequestResult<RetryPreviewResponses, RetryPreviewErrors, ThrowOnError> => (options.client ?? client).post<RetryPreviewResponses, RetryPreviewErrors, ThrowOnError>({ url: '/assets/{asset_id}/preview/retry', ...options });
+export const retryPreview = <ThrowOnError extends boolean = false>(options: Options<RetryPreviewData, ThrowOnError>): RequestResult<RetryPreviewResponses, RetryPreviewErrors, ThrowOnError> => (options.client ?? client).post<RetryPreviewResponses, RetryPreviewErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}/preview/retry',
+    ...options
+});
 
 /**
  * Restore Asset
  */
 export const restoreAsset = <ThrowOnError extends boolean = false>(options: Options<RestoreAssetData, ThrowOnError>): RequestResult<RestoreAssetResponses, RestoreAssetErrors, ThrowOnError> => (options.client ?? client).post<RestoreAssetResponses, RestoreAssetErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/assets/{asset_id}/restore',
     ...options,
     headers: {
@@ -191,12 +313,25 @@ export const restoreAsset = <ThrowOnError extends boolean = false>(options: Opti
 /**
  * Thumbnail
  */
-export const getAssetThumbnail = <ThrowOnError extends boolean = false>(options: Options<GetAssetThumbnailData, ThrowOnError>): RequestResult<GetAssetThumbnailResponses, GetAssetThumbnailErrors, ThrowOnError> => (options.client ?? client).get<GetAssetThumbnailResponses, GetAssetThumbnailErrors, ThrowOnError>({ url: '/assets/{asset_id}/thumbnail', ...options });
+export const getAssetThumbnail = <ThrowOnError extends boolean = false>(options: Options<GetAssetThumbnailData, ThrowOnError>): RequestResult<GetAssetThumbnailResponses, GetAssetThumbnailErrors, ThrowOnError> => (options.client ?? client).get<GetAssetThumbnailResponses, GetAssetThumbnailErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/assets/{asset_id}/thumbnail',
+    ...options
+});
 
 /**
  * Update User State
  */
 export const patchAssetUserState = <ThrowOnError extends boolean = false>(options: Options<PatchAssetUserStateData, ThrowOnError>): RequestResult<PatchAssetUserStateResponses, PatchAssetUserStateErrors, ThrowOnError> => (options.client ?? client).patch<PatchAssetUserStateResponses, PatchAssetUserStateErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/assets/{asset_id}/user-state',
     ...options,
     headers: {
@@ -206,9 +341,36 @@ export const patchAssetUserState = <ThrowOnError extends boolean = false>(option
 });
 
 /**
+ * Login
+ */
+export const login = <ThrowOnError extends boolean = false>(options: Options<LoginData, ThrowOnError>): RequestResult<LoginResponses, LoginErrors, ThrowOnError> => (options.client ?? client).post<LoginResponses, LoginErrors, ThrowOnError>({
+    url: '/auth/login',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Logout
+ */
+export const logout = <ThrowOnError extends boolean = false>(options?: Options<LogoutData, ThrowOnError>): RequestResult<LogoutResponses, unknown, ThrowOnError> => (options?.client ?? client).post<LogoutResponses, unknown, ThrowOnError>({ url: '/auth/logout', ...options });
+
+/**
+ * Current Session
+ */
+export const getCurrentSession = <ThrowOnError extends boolean = false>(options?: Options<GetCurrentSessionData, ThrowOnError>): RequestResult<GetCurrentSessionResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetCurrentSessionResponses, unknown, ThrowOnError>({ url: '/auth/session', ...options });
+
+/**
  * Move Faces
  */
 export const moveFaces = <ThrowOnError extends boolean = false>(options: Options<MoveFacesData, ThrowOnError>): RequestResult<MoveFacesResponses, MoveFacesErrors, ThrowOnError> => (options.client ?? client).post<MoveFacesResponses, MoveFacesErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/faces/move',
     ...options,
     headers: {
@@ -220,17 +382,41 @@ export const moveFaces = <ThrowOnError extends boolean = false>(options: Options
 /**
  * Face Thumbnail
  */
-export const getFaceThumbnail = <ThrowOnError extends boolean = false>(options: Options<GetFaceThumbnailData, ThrowOnError>): RequestResult<GetFaceThumbnailResponses, GetFaceThumbnailErrors, ThrowOnError> => (options.client ?? client).get<GetFaceThumbnailResponses, GetFaceThumbnailErrors, ThrowOnError>({ url: '/faces/{face_id}/thumbnail', ...options });
+export const getFaceThumbnail = <ThrowOnError extends boolean = false>(options: Options<GetFaceThumbnailData, ThrowOnError>): RequestResult<GetFaceThumbnailResponses, GetFaceThumbnailErrors, ThrowOnError> => (options.client ?? client).get<GetFaceThumbnailResponses, GetFaceThumbnailErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/faces/{face_id}/thumbnail',
+    ...options
+});
 
 /**
  * Health
  */
-export const getHealth = <ThrowOnError extends boolean = false>(options?: Options<GetHealthData, ThrowOnError>): RequestResult<GetHealthResponses, GetHealthErrors, ThrowOnError> => (options?.client ?? client).get<GetHealthResponses, GetHealthErrors, ThrowOnError>({ url: '/health', ...options });
+export const getHealth = <ThrowOnError extends boolean = false>(options?: Options<GetHealthData, ThrowOnError>): RequestResult<GetHealthResponses, GetHealthErrors, ThrowOnError> => (options?.client ?? client).get<GetHealthResponses, GetHealthErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/health',
+    ...options
+});
 
 /**
  * Browse Assets
  */
-export const browseAssets = <ThrowOnError extends boolean = false>(options?: Options<BrowseAssetsData, ThrowOnError>): RequestResult<BrowseAssetsResponses, BrowseAssetsErrors, ThrowOnError> => (options?.client ?? client).get<BrowseAssetsResponses, BrowseAssetsErrors, ThrowOnError>({ url: '/library/assets', ...options });
+export const browseAssets = <ThrowOnError extends boolean = false>(options?: Options<BrowseAssetsData, ThrowOnError>): RequestResult<BrowseAssetsResponses, BrowseAssetsErrors, ThrowOnError> => (options?.client ?? client).get<BrowseAssetsResponses, BrowseAssetsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/library/assets',
+    ...options
+});
 
 /**
  * Livez
@@ -240,27 +426,64 @@ export const getLiveness = <ThrowOnError extends boolean = false>(options?: Opti
 /**
  * Recluster Bursts
  */
-export const reclusterBursts = <ThrowOnError extends boolean = false>(options?: Options<ReclusterBurstsData, ThrowOnError>): RequestResult<ReclusterBurstsResponses, unknown, ThrowOnError> => (options?.client ?? client).post<ReclusterBurstsResponses, unknown, ThrowOnError>({ url: '/maintenance/recluster-bursts', ...options });
+export const reclusterBursts = <ThrowOnError extends boolean = false>(options?: Options<ReclusterBurstsData, ThrowOnError>): RequestResult<ReclusterBurstsResponses, unknown, ThrowOnError> => (options?.client ?? client).post<ReclusterBurstsResponses, unknown, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/maintenance/recluster-bursts',
+    ...options
+});
 
 /**
  * Verify Storage
  */
-export const verifyStorage = <ThrowOnError extends boolean = false>(options?: Options<VerifyStorageData, ThrowOnError>): RequestResult<VerifyStorageResponses, VerifyStorageErrors, ThrowOnError> => (options?.client ?? client).post<VerifyStorageResponses, VerifyStorageErrors, ThrowOnError>({ url: '/maintenance/verify', ...options });
+export const verifyStorage = <ThrowOnError extends boolean = false>(options?: Options<VerifyStorageData, ThrowOnError>): RequestResult<VerifyStorageResponses, VerifyStorageErrors, ThrowOnError> => (options?.client ?? client).post<VerifyStorageResponses, VerifyStorageErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/maintenance/verify',
+    ...options
+});
 
 /**
  * List People
  */
-export const listPeople = <ThrowOnError extends boolean = false>(options?: Options<ListPeopleData, ThrowOnError>): RequestResult<ListPeopleResponses, ListPeopleErrors, ThrowOnError> => (options?.client ?? client).get<ListPeopleResponses, ListPeopleErrors, ThrowOnError>({ url: '/people', ...options });
+export const listPeople = <ThrowOnError extends boolean = false>(options?: Options<ListPeopleData, ThrowOnError>): RequestResult<ListPeopleResponses, ListPeopleErrors, ThrowOnError> => (options?.client ?? client).get<ListPeopleResponses, ListPeopleErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/people',
+    ...options
+});
 
 /**
  * Get Person
  */
-export const getPerson = <ThrowOnError extends boolean = false>(options: Options<GetPersonData, ThrowOnError>): RequestResult<GetPersonResponses, GetPersonErrors, ThrowOnError> => (options.client ?? client).get<GetPersonResponses, GetPersonErrors, ThrowOnError>({ url: '/people/{person_id}', ...options });
+export const getPerson = <ThrowOnError extends boolean = false>(options: Options<GetPersonData, ThrowOnError>): RequestResult<GetPersonResponses, GetPersonErrors, ThrowOnError> => (options.client ?? client).get<GetPersonResponses, GetPersonErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/people/{person_id}',
+    ...options
+});
 
 /**
  * Rename Person
  */
 export const renamePerson = <ThrowOnError extends boolean = false>(options: Options<RenamePersonData, ThrowOnError>): RequestResult<RenamePersonResponses, RenamePersonErrors, ThrowOnError> => (options.client ?? client).patch<RenamePersonResponses, RenamePersonErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/people/{person_id}',
     ...options,
     headers: {
@@ -273,6 +496,11 @@ export const renamePerson = <ThrowOnError extends boolean = false>(options: Opti
  * Merge Person
  */
 export const mergePerson = <ThrowOnError extends boolean = false>(options: Options<MergePersonData, ThrowOnError>): RequestResult<MergePersonResponses, MergePersonErrors, ThrowOnError> => (options.client ?? client).post<MergePersonResponses, MergePersonErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/people/{person_id}/merge',
     ...options,
     headers: {
@@ -285,6 +513,11 @@ export const mergePerson = <ThrowOnError extends boolean = false>(options: Optio
  * Queue Processing
  */
 export const queueProcessing = <ThrowOnError extends boolean = false>(options: Options<QueueProcessingData, ThrowOnError>): RequestResult<QueueProcessingResponses, QueueProcessingErrors, ThrowOnError> => (options.client ?? client).post<QueueProcessingResponses, QueueProcessingErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/processing',
     ...options,
     headers: {
@@ -296,17 +529,38 @@ export const queueProcessing = <ThrowOnError extends boolean = false>(options: O
 /**
  * Readyz
  */
-export const getReadiness = <ThrowOnError extends boolean = false>(options?: Options<GetReadinessData, ThrowOnError>): RequestResult<GetReadinessResponses, GetReadinessErrors, ThrowOnError> => (options?.client ?? client).get<GetReadinessResponses, GetReadinessErrors, ThrowOnError>({ url: '/readyz', ...options });
+export const getReadiness = <ThrowOnError extends boolean = false>(options?: Options<GetReadinessData, ThrowOnError>): RequestResult<GetReadinessResponses, GetReadinessErrors, ThrowOnError> => (options?.client ?? client).get<GetReadinessResponses, GetReadinessErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/readyz',
+    ...options
+});
 
 /**
  * Get Active Upload Batches
  */
-export const listUploadBatches = <ThrowOnError extends boolean = false>(options?: Options<ListUploadBatchesData, ThrowOnError>): RequestResult<ListUploadBatchesResponses, ListUploadBatchesErrors, ThrowOnError> => (options?.client ?? client).get<ListUploadBatchesResponses, ListUploadBatchesErrors, ThrowOnError>({ url: '/upload-batches', ...options });
+export const listUploadBatches = <ThrowOnError extends boolean = false>(options?: Options<ListUploadBatchesData, ThrowOnError>): RequestResult<ListUploadBatchesResponses, ListUploadBatchesErrors, ThrowOnError> => (options?.client ?? client).get<ListUploadBatchesResponses, ListUploadBatchesErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-batches',
+    ...options
+});
 
 /**
  * Start Upload Batch
  */
 export const createUploadBatch = <ThrowOnError extends boolean = false>(options: Options<CreateUploadBatchData, ThrowOnError>): RequestResult<CreateUploadBatchResponses, CreateUploadBatchErrors, ThrowOnError> => (options.client ?? client).post<CreateUploadBatchResponses, CreateUploadBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
     url: '/upload-batches',
     ...options,
     headers: {
@@ -318,29 +572,77 @@ export const createUploadBatch = <ThrowOnError extends boolean = false>(options:
 /**
  * Discard Upload Batch
  */
-export const abandonUploadBatch = <ThrowOnError extends boolean = false>(options: Options<AbandonUploadBatchData, ThrowOnError>): RequestResult<AbandonUploadBatchResponses, AbandonUploadBatchErrors, ThrowOnError> => (options.client ?? client).delete<AbandonUploadBatchResponses, AbandonUploadBatchErrors, ThrowOnError>({ url: '/upload-batches/{batch_id}', ...options });
+export const abandonUploadBatch = <ThrowOnError extends boolean = false>(options: Options<AbandonUploadBatchData, ThrowOnError>): RequestResult<AbandonUploadBatchResponses, AbandonUploadBatchErrors, ThrowOnError> => (options.client ?? client).delete<AbandonUploadBatchResponses, AbandonUploadBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-batches/{batch_id}',
+    ...options
+});
 
 /**
  * Get Upload Batch
  */
-export const getUploadBatch = <ThrowOnError extends boolean = false>(options: Options<GetUploadBatchData, ThrowOnError>): RequestResult<GetUploadBatchResponses, GetUploadBatchErrors, ThrowOnError> => (options.client ?? client).get<GetUploadBatchResponses, GetUploadBatchErrors, ThrowOnError>({ url: '/upload-batches/{batch_id}', ...options });
+export const getUploadBatch = <ThrowOnError extends boolean = false>(options: Options<GetUploadBatchData, ThrowOnError>): RequestResult<GetUploadBatchResponses, GetUploadBatchErrors, ThrowOnError> => (options.client ?? client).get<GetUploadBatchResponses, GetUploadBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-batches/{batch_id}',
+    ...options
+});
 
 /**
  * Upload File
  */
-export const uploadFile = <ThrowOnError extends boolean = false>(options: Options<UploadFileData, ThrowOnError>): RequestResult<UploadFileResponses, UploadFileErrors, ThrowOnError> => (options.client ?? client).put<UploadFileResponses, UploadFileErrors, ThrowOnError>({ url: '/upload-batches/{batch_id}/files/{file_id}', ...options });
+export const uploadFile = <ThrowOnError extends boolean = false>(options: Options<UploadFileData, ThrowOnError>): RequestResult<UploadFileResponses, UploadFileErrors, ThrowOnError> => (options.client ?? client).put<UploadFileResponses, UploadFileErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-batches/{batch_id}/files/{file_id}',
+    ...options
+});
 
 /**
  * Retry Upload Batch
  */
-export const retryUploadBatch = <ThrowOnError extends boolean = false>(options: Options<RetryUploadBatchData, ThrowOnError>): RequestResult<RetryUploadBatchResponses, RetryUploadBatchErrors, ThrowOnError> => (options.client ?? client).post<RetryUploadBatchResponses, RetryUploadBatchErrors, ThrowOnError>({ url: '/upload-batches/{batch_id}/retry', ...options });
+export const retryUploadBatch = <ThrowOnError extends boolean = false>(options: Options<RetryUploadBatchData, ThrowOnError>): RequestResult<RetryUploadBatchResponses, RetryUploadBatchErrors, ThrowOnError> => (options.client ?? client).post<RetryUploadBatchResponses, RetryUploadBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-batches/{batch_id}/retry',
+    ...options
+});
 
 /**
  * Finish Upload Batch
  */
-export const sealUploadBatch = <ThrowOnError extends boolean = false>(options: Options<SealUploadBatchData, ThrowOnError>): RequestResult<SealUploadBatchResponses, SealUploadBatchErrors, ThrowOnError> => (options.client ?? client).post<SealUploadBatchResponses, SealUploadBatchErrors, ThrowOnError>({ url: '/upload-batches/{batch_id}/seal', ...options });
+export const sealUploadBatch = <ThrowOnError extends boolean = false>(options: Options<SealUploadBatchData, ThrowOnError>): RequestResult<SealUploadBatchResponses, SealUploadBatchErrors, ThrowOnError> => (options.client ?? client).post<SealUploadBatchResponses, SealUploadBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-batches/{batch_id}/seal',
+    ...options
+});
 
 /**
  * Upload Queue
  */
-export const getUploadQueue = <ThrowOnError extends boolean = false>(options?: Options<GetUploadQueueData, ThrowOnError>): RequestResult<GetUploadQueueResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetUploadQueueResponses, unknown, ThrowOnError>({ url: '/upload-queue', ...options });
+export const getUploadQueue = <ThrowOnError extends boolean = false>(options?: Options<GetUploadQueueData, ThrowOnError>): RequestResult<GetUploadQueueResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetUploadQueueResponses, unknown, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }, {
+            in: 'cookie',
+            name: 'photo_session',
+            type: 'apiKey'
+        }],
+    url: '/upload-queue',
+    ...options
+});

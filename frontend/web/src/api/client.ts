@@ -69,7 +69,7 @@ const API_ROOT: string = import.meta.env.VITE_API_ROOT ?? "/api";
  * prefix: request URLs resolve against it here, while the generated
  * `client.gen.ts` default stays prefix-agnostic.
  */
-const client = createClient({ baseUrl: API_ROOT });
+const client = createClient({ baseUrl: API_ROOT, credentials: "include" });
 
 export class ApiError extends Error {
   constructor(
@@ -146,6 +146,30 @@ function uploadError(status: number, responseText: string): ApiError {
 }
 
 export const api = {
+  session: async (): Promise<{ authenticated: boolean }> => {
+    const response = await fetch(apiUrl("/auth/session"), { credentials: "include" });
+    if (!response.ok) throw new ApiError("Unable to check the current session.", response.status);
+    return response.json() as Promise<{ authenticated: boolean }>;
+  },
+
+  login: async (password: string): Promise<void> => {
+    const response = await fetch(apiUrl("/auth/login"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!response.ok) throw new ApiError("The password was not accepted.", response.status);
+  },
+
+  logout: async (): Promise<void> => {
+    const response = await fetch(apiUrl("/auth/logout"), {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) throw new ApiError("Unable to sign out.", response.status);
+  },
+
   health: (signal?: AbortSignal) =>
     call<Health>(() => getHealth({ client, signal })),
 

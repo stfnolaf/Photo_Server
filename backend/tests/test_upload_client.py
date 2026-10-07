@@ -133,8 +133,8 @@ def _mock_client(monkeypatch, bodies: dict, calls: list):
     real_client = httpx.Client  # captured before the patch below
 
     class _Client:
-        def __init__(self, base_url=None, timeout=None):
-            self._inner = real_client(base_url=base_url, transport=transport)
+        def __init__(self, base_url=None, timeout=None, headers=None):
+            self._inner = real_client(base_url=base_url, transport=transport, headers=headers)
 
         def post(self, url, **kwargs):
             return self._inner.post(url, **kwargs)
@@ -222,7 +222,7 @@ def test_upload_cli_flow_sends_declared_bytes_and_validates_responses(tmp_path, 
     calls = []
     _mock_client(monkeypatch, bodies, calls)
 
-    batch, raw = upload_client.upload(*args, wait=False)
+    batch, raw = upload_client.upload(*args, wait=False, api_token="cli-secret")
 
     assert batch.status == "queued"
     assert normalize(raw) == normalize(seal), "final stdout must be the raw wire JSON"

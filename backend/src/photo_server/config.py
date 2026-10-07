@@ -8,7 +8,9 @@ from sqlalchemy import URL
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="PHOTO_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="PHOTO_", env_file=".env", extra="ignore", populate_by_name=True
+    )
 
     s3_endpoint: str
     s3_bucket: str = "photo-library"
@@ -105,6 +107,16 @@ class Settings(BaseSettings):
     # information. When enabled, expose /metrics only to loopback clients.
     metrics_enabled: bool = False
     metrics_loopback_only: bool = True
+    # Authentication is opt-in for compatibility with existing development
+    # installs. Enabling it requires all three independent secrets below.
+    auth_enabled: bool = False
+    password_hash: str = Field(default="", repr=False, validation_alias="PHOTO_PASSWORD_HASH")
+    session_secret: SecretStr | None = Field(default=None, repr=False, validation_alias="PHOTO_SESSION_SECRET")
+    api_token: SecretStr | None = Field(default=None, repr=False, validation_alias="PHOTO_API_TOKEN")
+    session_ttl_seconds: int = Field(default=43200, ge=300, le=2592000)
+    session_cookie_name: str = "photo_session"
+    session_cookie_secure: bool = True
+    session_cookie_samesite: Literal["lax", "strict"] = "lax"
 
     @model_validator(mode="after")
     def configure_database(self):
@@ -135,6 +147,20 @@ class Settings(BaseSettings):
                 raise ValueError(f"PHOTO_AI_EXTRA_BODY must be a JSON object: {error.msg}") from error
             if not isinstance(value, dict):
                 raise ValueError("PHOTO_AI_EXTRA_BODY must be a JSON object")
+        return self
+
+    @model_validator(mode="after")
+    def validate_auth(self):
+        if not self.auth_enabled:
+            return self
+        if not self.password_hash or not self.password_hash.startswith("pbkdf2_sha256$"):
+            raise ValueError("PHOTO_PASSWORD_HASH must be a pbkdf2_sha256 password hash")
+        if self.session_secret is None or len(self.session_secret.get_secret_value()) < 32:
+            raise ValueError("PHOTO_SESSION_SECRET must contain at least 32 characters")
+        if self.api_token is None or len(self.api_token.get_secret_value()) < 32:
+            raise ValueError("PHOTO_API_TOKEN must contain at least 32 characters")
+        if not self.session_cookie_name.replace("_", "").isalnum():
+            raise ValueError("PHOTO_SESSION_COOKIE_NAME must be a simple cookie name")
         return self
 
 

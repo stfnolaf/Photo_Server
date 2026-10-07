@@ -1450,6 +1450,21 @@
         "title": "LocationOut",
         "type": "object"
       },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
       "MutationOut": {
         "additionalProperties": false,
         "description": "The last mutation applied to a v2 manifest or album document\n(models.py Mutation). ``entityId`` equals the owning asset/album id on\nthe wire (the source model's validator enforces it); ``expectedRevision``\nis null when the client did not send one; ``changes`` is a genuinely\nopen object (UserState patch fields, EXIF metadata, album\nname/description/membership).",
@@ -2242,6 +2257,20 @@
         "title": "ReadinessOut",
         "type": "object"
       },
+      "SessionOut": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authenticated"
+        ],
+        "title": "SessionOut",
+        "type": "object"
+      },
       "UploadBatchOut": {
         "additionalProperties": false,
         "description": "describe_batch(): the batch header (epoch-second createdAt, nullable\nsealedAt) plus its file and onboarding-job rows.",
@@ -2972,9 +3001,23 @@
         "title": "WorkerHeartbeatOut",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "bearerToken": {
+        "description": "Static PHOTO_API_TOKEN for CLI and automation.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "sessionCookie": {
+        "description": "HTTP-only signed browser session cookie.",
+        "in": "cookie",
+        "name": "photo_session",
+        "type": "apiKey"
+      }
     }
   },
   "info": {
+    "description": "Single-user photo library API. When authentication is enabled, `/livez` is public; all library, health, operational, docs, and asset routes require the signed browser session cookie or the configured bearer token.",
     "title": "Photo Server",
     "version": "0.6.0"
   },
@@ -3017,6 +3060,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "List Albums"
       },
       "post": {
@@ -3053,6 +3104,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Create Album"
       }
     },
@@ -3104,6 +3163,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Trash Album"
       },
       "get": {
@@ -3142,6 +3209,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Get Album"
       },
       "patch": {
@@ -3190,6 +3265,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Update Album"
       }
     },
@@ -3240,6 +3323,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Restore Album"
       }
     },
@@ -3278,6 +3369,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Queue Analysis"
       }
     },
@@ -3331,6 +3430,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "List Assets"
       }
     },
@@ -3381,6 +3488,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Trash Asset"
       },
       "get": {
@@ -3419,6 +3534,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Get Asset"
       }
     },
@@ -3469,6 +3592,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Retry Analysis"
       }
     },
@@ -3509,6 +3640,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Get Asset Burst"
       }
     },
@@ -3559,6 +3698,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Remove Burst Member"
       }
     },
@@ -3609,6 +3756,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Set Burst Representative"
       }
     },
@@ -3659,6 +3814,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Update User State"
       }
     },
@@ -3714,6 +3877,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Original"
       }
     },
@@ -3805,6 +3976,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Preview"
       }
     },
@@ -3845,6 +4024,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Retry Preview"
       }
     },
@@ -3895,6 +4082,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Restore Asset"
       }
     },
@@ -3986,6 +4181,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Thumbnail"
       }
     },
@@ -4036,7 +4239,89 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Update User State"
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login"
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout"
+      }
+    },
+    "/auth/session": {
+      "get": {
+        "operationId": "getCurrentSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Current Session"
       }
     },
     "/faces/move": {
@@ -4074,6 +4359,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Move Faces"
       }
     },
@@ -4165,6 +4458,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Face Thumbnail"
       }
     },
@@ -4193,6 +4494,14 @@
             "description": "Service Unavailable"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Health"
       }
     },
@@ -4388,6 +4697,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Browse Assets"
       }
     },
@@ -4424,6 +4741,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Recluster Bursts"
       }
     },
@@ -4464,6 +4789,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Verify Storage"
       }
     },
@@ -4528,6 +4861,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "List People"
       }
     },
@@ -4591,6 +4932,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Get Person"
       },
       "patch": {
@@ -4639,6 +4988,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Rename Person"
       }
     },
@@ -4689,6 +5046,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Merge Person"
       }
     },
@@ -4727,6 +5092,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Queue Processing"
       }
     },
@@ -4755,6 +5128,14 @@
             "description": "Service Unavailable"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Readyz"
       }
     },
@@ -4797,6 +5178,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Get Active Upload Batches"
       },
       "post": {
@@ -4833,6 +5222,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Start Upload Batch"
       }
     },
@@ -4873,6 +5270,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Discard Upload Batch"
       },
       "get": {
@@ -4911,6 +5316,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Get Upload Batch"
       }
     },
@@ -4961,6 +5374,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Upload File"
       }
     },
@@ -5001,6 +5422,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Retry Upload Batch"
       }
     },
@@ -5041,6 +5470,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Finish Upload Batch"
       }
     },
@@ -5059,6 +5496,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
         "summary": "Upload Queue"
       }
     }

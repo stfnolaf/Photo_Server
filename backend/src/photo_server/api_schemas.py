@@ -594,6 +594,18 @@ class LivenessOut(ResponseModel):
     status: Literal["ok"]
 
 
+class LoginRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=4096)
+
+
+class SessionOut(ResponseModel):
+    authenticated: bool
+
+
+class AuthStatusOut(ResponseModel):
+    authenticated: bool
+
+
 # ---------------------------------------------------------------------------
 # Phase 3a: albums (CRUD + restore).
 #
