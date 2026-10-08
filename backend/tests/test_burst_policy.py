@@ -10,12 +10,13 @@ from photo_server.models import Blob, Manifest
 def _manifest(*, filename="DSC0001.ARW", capture_time=None, imported_at="2026-01-01T00:00:00+00:00", metadata=None):
     asset_id = uuid4()
     blob_id = uuid4()
+    digest = uuid4().hex + uuid4().hex
     blob = Blob(
         blob_id=blob_id,
         role="ORIGINAL_RAW",
         original_filename=filename,
-        object_key=f"originals/{asset_id}/{filename}",
-        sha256=uuid4().hex + uuid4().hex,
+        object_key=f"objects/{digest}",
+        sha256=digest,
         size_bytes=100,
         mime_type="image/x-sony-arw",
     )

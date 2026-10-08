@@ -24,12 +24,13 @@ def fp(width=WIDTH, height=HEIGHT, version=BURST_HASH_VERSION, phash=PHASH, dhas
 def add_asset(backend, capture_time=None, metadata=None):
     asset_id = uuid4()
     blob_id = uuid4()
+    digest = uuid4().hex + uuid4().hex
     blob = Blob(
         blob_id=blob_id,
         role="ORIGINAL_JPEG",
         original_filename="sample.JPG",
-        object_key=f"originals/{asset_id}/sample.JPG",
-        sha256=uuid4().hex + uuid4().hex,
+        object_key=f"objects/{digest}",
+        sha256=digest,
         size_bytes=100,
         mime_type="image/jpeg",
     )
@@ -44,6 +45,12 @@ def add_asset(backend, capture_time=None, metadata=None):
         metadata=metadata or {},
     )
     backend.service.catalog.apply(manifest)
+    body = b"fixture-original"
+    backend.service.storage.put(blob.object_key, body, "image/jpeg")
+    backend.service.storage.put(f"objects/{blob.sha256}", body, "image/jpeg")
+    backend.service.publisher.publish_manifest(
+        backend.service.publisher.manifest_from_projection(manifest)
+    )
     return str(asset_id)
 
 
@@ -72,11 +79,11 @@ def test_fingerprint_stage_runs_without_ai_services(backend):
     assert backend.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is not None
 
 
-def test_fingerprint_upsert_is_idempotent(backend):
+def test_fingerprint_publication_is_idempotent(backend):
     catalog = backend.service.catalog
     asset_id = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00")
-    catalog.upsert_fingerprint(asset_id, fp())
-    catalog.upsert_fingerprint(asset_id, fp())
+    backend.service.publish_fingerprint(asset_id, fp())
+    backend.service.publish_fingerprint(asset_id, fp())
     with catalog.engine.connect() as connection:
         count = connection.scalar(
             text(
@@ -92,7 +99,7 @@ def test_get_fingerprint_roundtrip_and_version(backend):
     catalog = backend.service.catalog
     asset_id = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00")
     value = fp()
-    catalog.upsert_fingerprint(asset_id, value)
+    backend.service.publish_fingerprint(asset_id, value)
     assert catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) == value
     assert catalog.get_fingerprint(asset_id, "burst-hash-v0") is None
     assert catalog.get_fingerprint(str(uuid4()), BURST_HASH_VERSION) is None
@@ -102,26 +109,26 @@ def test_candidate_query_filters_on_version_time_camera_and_dimensions(backend):
     catalog = backend.service.catalog
     camera = {"Make": "Canon", "Model": "EOS R5"}
     target = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=camera)
-    catalog.upsert_fingerprint(target, fp())
+    backend.service.publish_fingerprint(target, fp())
 
     in_window = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=camera)
-    catalog.upsert_fingerprint(in_window, fp())
+    backend.service.publish_fingerprint(in_window, fp())
 
     out_of_window = add_asset(backend, capture_time="2026-01-01T12:00:10+00:00", metadata=camera)
-    catalog.upsert_fingerprint(out_of_window, fp())
+    backend.service.publish_fingerprint(out_of_window, fp())
 
     different_model = add_asset(
         backend,
         capture_time="2026-01-01T12:00:01+00:00",
         metadata={"Make": "Canon", "Model": "X-T4"},
     )
-    catalog.upsert_fingerprint(different_model, fp())
+    backend.service.publish_fingerprint(different_model, fp())
 
     different_dimensions = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=camera)
-    catalog.upsert_fingerprint(different_dimensions, fp(width=800, height=600))
+    backend.service.publish_fingerprint(different_dimensions, fp(width=800, height=600))
 
     different_version = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=camera)
-    catalog.upsert_fingerprint(different_version, fp(version="burst-hash-v0"))
+    backend.service.publish_fingerprint(different_version, fp(version="burst-hash-v0"))
 
     candidates = catalog.find_fingerprint_candidates(target, BURST_HASH_VERSION)
     assert [candidate.asset_id for candidate in candidates] == [in_window]
@@ -134,21 +141,21 @@ def test_target_without_capture_time_yields_no_candidates(backend):
     catalog = backend.service.catalog
     camera = {"Make": "Canon", "Model": "EOS R5"}
     target = add_asset(backend, capture_time=None, metadata=camera)
-    catalog.upsert_fingerprint(target, fp())
+    backend.service.publish_fingerprint(target, fp())
     other = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=camera)
-    catalog.upsert_fingerprint(other, fp())
+    backend.service.publish_fingerprint(other, fp())
     assert catalog.find_fingerprint_candidates(target, BURST_HASH_VERSION) == []
 
 
 def test_camera_gate_is_vacuous_when_target_lacks_camera_info(backend):
     catalog = backend.service.catalog
     target = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata={})
-    catalog.upsert_fingerprint(target, fp())
+    backend.service.publish_fingerprint(target, fp())
     other = add_asset(
         backend,
         capture_time="2026-01-01T12:00:01+00:00",
         metadata={"Make": "Fujifilm", "Model": "X-T4"},
     )
-    catalog.upsert_fingerprint(other, fp())
+    backend.service.publish_fingerprint(other, fp())
     candidates = catalog.find_fingerprint_candidates(target, BURST_HASH_VERSION)
     assert [candidate.asset_id for candidate in candidates] == [other]

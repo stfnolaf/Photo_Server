@@ -10,7 +10,7 @@ from test_integration import pytestmark  # noqa: F401
 
 from photo_server.browsing import BrowseQuery
 from photo_server.bursts import BURST_CLUSTER_POLICY_VERSION
-from photo_server.catalog import Catalog, image_fingerprints
+from photo_server.catalog import Catalog
 from photo_server.config import LibraryError
 from photo_server.fingerprints import BURST_HASH_VERSION, Fingerprint, hamming_distance
 from photo_server.models import Blob, Manifest, Mutation
@@ -31,12 +31,13 @@ def fp(width=WIDTH, height=HEIGHT, version=BURST_HASH_VERSION, phash=PHASH, dhas
 def add_asset(backend, capture_time=None, metadata=None):
     asset_id = uuid4()
     blob_id = uuid4()
+    digest = uuid4().hex + uuid4().hex
     blob = Blob(
         blob_id=blob_id,
         role="ORIGINAL_JPEG",
         original_filename="sample.JPG",
-        object_key=f"originals/{asset_id}/sample.JPG",
-        sha256=uuid4().hex + uuid4().hex,
+        object_key=f"objects/{digest}",
+        sha256=digest,
         size_bytes=100,
         mime_type="image/jpeg",
     )
@@ -51,6 +52,9 @@ def add_asset(backend, capture_time=None, metadata=None):
         metadata=metadata or {},
     )
     backend.service.catalog.apply(manifest)
+    backend.service.publisher.publish_manifest(
+        backend.service.publisher.manifest_from_projection(manifest)
+    )
     return str(asset_id)
 
 
@@ -97,11 +101,10 @@ def restore_asset(backend, asset_id):
 
 def make_pair(backend):
     """Two near-identical frames that share a burst cluster."""
-    catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp())
-    catalog.upsert_fingerprint(b, fp())
+    backend.service.publish_fingerprint(a, fp())
+    backend.service.publish_fingerprint(b, fp())
     return a, b
 
 
@@ -111,7 +114,7 @@ def make_pair(backend):
 def test_first_frame_creates_cluster_and_is_representative(backend):
     catalog = backend.service.catalog
     asset_id = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00")
-    catalog.upsert_fingerprint(asset_id, fp())
+    backend.service.publish_fingerprint(asset_id, fp())
     detail = catalog.burst_detail(asset_id)
     assert detail is not None
     assert detail["representativeAssetId"] == asset_id
@@ -130,27 +133,32 @@ def test_near_identical_frames_share_cluster(backend):
     assert cluster_id_of(backend, a) == cluster_id_of(backend, b)
 
 
-def test_existing_cluster_reconciles_with_later_compatible_cluster(backend):
-    """A frame that already has a cluster can still absorb a compatible one."""
+def test_metadata_change_reconciles_existing_clusters(backend):
     catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
-    b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp(phash="0000000000000000", dhash="0000000000000000"))
-    catalog.upsert_fingerprint(b, fp(phash="ffffffffffffffff", dhash="ffffffffffffffff"))
+    b = add_asset(backend, capture_time="2026-01-01T13:00:00+00:00", metadata=CAMERA)
+    backend.service.publish_fingerprint(a, fp())
+    backend.service.publish_fingerprint(b, fp())
     first_cluster = cluster_id_of(backend, a)
     second_cluster = cluster_id_of(backend, b)
     assert first_cluster != second_cluster
 
-    # Simulate a later fingerprint recalculation making b compatible with a.
-    with catalog.engine.begin() as connection:
-        connection.execute(
-            image_fingerprints.update()
-            .where(image_fingerprints.c.asset_id == b)
-            .values(phash="0000000000000001", dhash="0000000000000001")
-        )
-    catalog.upsert_fingerprint(b, fp(phash="0000000000000001", dhash="0000000000000001"))
-    assert cluster_id_of(backend, b) == second_cluster
-    assert cluster_id_of(backend, a) == second_cluster
+    mutate(
+        backend.service,
+        uuid4(),
+        Mutation(
+            action="asset.metadata",
+            entity_id=UUID(b),
+            changes={
+                "metadata": CAMERA,
+                "captureTime": "2026-01-01T12:00:01+00:00",
+            },
+        ),
+    )
+    backend.service.publish_fingerprint(b, fp())
+    merged_cluster = cluster_id_of(backend, a)
+    assert merged_cluster == cluster_id_of(backend, b)
+    assert merged_cluster in {first_cluster, second_cluster}
     detail = catalog.burst_detail(a)
     assert detail is not None
     assert {frame["assetId"] for frame in detail["frames"]} == {a, b}
@@ -163,11 +171,11 @@ def test_existing_cluster_reconciles_with_later_compatible_cluster(backend):
     assert item_b["burstSize"] == 2
 
 
-def test_upsert_fingerprint_is_idempotent_for_membership(backend):
+def test_publish_fingerprint_is_idempotent_for_membership(backend):
     catalog = backend.service.catalog
     a, _ = make_pair(backend)
     cluster_id = cluster_id_of(backend, a)
-    catalog.upsert_fingerprint(a, fp())
+    backend.service.publish_fingerprint(a, fp())
     assert cluster_id_of(backend, a) == cluster_id
     with catalog.engine.connect() as conn:
         count = conn.scalar(
@@ -217,9 +225,8 @@ def test_set_representative_rejects_non_member(backend):
 
 
 def test_set_representative_rejects_unknown_cluster(backend):
-    catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp())
+    backend.service.publish_fingerprint(a, fp())
     fake_cluster = str(uuid4())
     with pytest.raises(FileNotFoundError, match="Burst not found"):
         set_rep(backend, fake_cluster, a)
@@ -259,7 +266,7 @@ def test_delete_representative_moves_to_survivor(backend):
 def test_delete_last_member_removes_cluster(backend):
     catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp())
+    backend.service.publish_fingerprint(a, fp())
     cluster_id = cluster_id_of(backend, a)
     assert cluster_id is not None
     delete_asset(backend, a)
@@ -285,16 +292,14 @@ def test_restore_rejoins_cluster(backend):
 
 
 def test_capture_out_of_window_separate_cluster(backend):
-    catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:40+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp())
-    catalog.upsert_fingerprint(b, fp())
+    backend.service.publish_fingerprint(a, fp())
+    backend.service.publish_fingerprint(b, fp())
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)
 
 
 def test_different_camera_separate_cluster(backend):
-    catalog = backend.service.catalog
     a = add_asset(
         backend,
         capture_time="2026-01-01T12:00:00+00:00",
@@ -305,28 +310,26 @@ def test_different_camera_separate_cluster(backend):
         capture_time="2026-01-01T12:00:01+00:00",
         metadata={"Make": "Canon", "Model": "X-T4"},
     )
-    catalog.upsert_fingerprint(a, fp())
-    catalog.upsert_fingerprint(b, fp())
+    backend.service.publish_fingerprint(a, fp())
+    backend.service.publish_fingerprint(b, fp())
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)
 
 
 def test_different_dimensions_separate_cluster(backend):
-    catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp())
-    catalog.upsert_fingerprint(b, fp(width=800, height=600))
+    backend.service.publish_fingerprint(a, fp())
+    backend.service.publish_fingerprint(b, fp(width=800, height=600))
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)
 
 
 def test_hamming_over_threshold_separate_cluster(backend):
-    catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
     far_phash = "ffffffffffffffff"
     assert hamming_distance(PHASH, far_phash) > 17
-    catalog.upsert_fingerprint(a, fp())
-    catalog.upsert_fingerprint(b, fp(phash=far_phash))
+    backend.service.publish_fingerprint(a, fp())
+    backend.service.publish_fingerprint(b, fp(phash=far_phash))
     assert cluster_id_of(backend, a) != cluster_id_of(backend, b)
 
 
@@ -337,7 +340,7 @@ def test_no_fingerprint_not_clustered(backend):
     catalog = backend.service.catalog
     a = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     b = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(a, fp())
+    backend.service.publish_fingerprint(a, fp())
     assert catalog.burst_detail(b) is None
     assert get_item(backend, b)["burstId"] is None
     assert get_item(backend, b)["burstSize"] is None
@@ -350,8 +353,8 @@ def test_clustering_does_not_change_reuse_candidates(backend):
     catalog = backend.service.catalog
     target = add_asset(backend, capture_time="2026-01-01T12:00:00+00:00", metadata=CAMERA)
     candidate = add_asset(backend, capture_time="2026-01-01T12:00:01+00:00", metadata=CAMERA)
-    catalog.upsert_fingerprint(target, fp())
-    catalog.upsert_fingerprint(candidate, fp())
+    backend.service.publish_fingerprint(target, fp())
+    backend.service.publish_fingerprint(candidate, fp())
     assert cluster_id_of(backend, target) is not None
     candidates = catalog.find_fingerprint_candidates(target, BURST_HASH_VERSION)
     assert [c.asset_id for c in candidates] == [candidate]

@@ -152,7 +152,7 @@ def import_burst(backend) -> list[str]:
     for name, _, seconds in frames:
         asset_id = by_path[name]["assetId"]
         manifest = backend.service.catalog.get(asset_id)
-        assert manifest.capture_time == f"2026-01-01T12:00:{seconds:02d}+00:00", (
+        assert manifest.capture_time == f"2026-01-01T12:00:{seconds:02d}Z", (
             name,
             manifest.capture_time,
         )

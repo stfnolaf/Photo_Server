@@ -103,6 +103,12 @@ def test_ai_image_sizes_have_separate_environment_overrides(monkeypatch, tmp_pat
 
 def test_burst_cluster_thresholds_are_environment_overrides(monkeypatch, tmp_path):
     clear_credentials(monkeypatch)
+    for key in (
+        "PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE",
+        "PHOTO_BURST_CLUSTER_DHASH_MAX_DISTANCE",
+        "PHOTO_BURST_CLUSTER_CHROMA_MAX_DISTANCE",
+    ):
+        monkeypatch.delenv(key, raising=False)
     env = tmp_path / ".env"
     env.write_text(
         "PHOTO_BURST_CLUSTER_PHASH_MAX_DISTANCE=28\n"
