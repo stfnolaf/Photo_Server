@@ -1,0 +1,26 @@
+{
+  "status": "complete",
+  "mode": "dry-run",
+  "deletionEnabled": false,
+  "asOf": "2026-10-07T00:00:00Z",
+  "scanned": 2,
+  "candidateCount": 1,
+  "candidateBytes": 4096,
+  "candidates": [
+    {
+      "key": "incoming/abandoned/upload.bin",
+      "category": "temporary-upload",
+      "sizeBytes": 4096,
+      "reason": "unreferenced and retention age expired",
+      "referencing": [],
+      "retentionAgeSeconds": 172800,
+      "policy": "temporary-upload:2d"
+    }
+  ],
+  "protected": [],
+  "bytesByCategory": {"temporary-upload": 4096},
+  "unresolvedReferences": [],
+  "safetyWarnings": [],
+  "errors": [],
+  "checkpoint": "indexes/checkpoints/gc-nightly.json"
+}

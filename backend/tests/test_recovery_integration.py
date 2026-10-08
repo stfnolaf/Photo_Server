@@ -1,4 +1,4 @@
-"""Disposable PostgreSQL/SeaweedFS Phase 9 recovery acceptance.
+"""Disposable S3 recovery and projection rebuild acceptance.
 
 The Compose document is generated in pytest's temporary directory from the
 two services this test actually needs. It has no named volumes and is removed
@@ -12,32 +12,26 @@ import os
 import socket
 import subprocess
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from urllib.request import urlopen
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from PIL import Image
-from sqlalchemy import insert, select, update
+from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
-from photo_server.backfill import backfill_postgres_to_s3
 from photo_server.catalog import (
     ai_stage_jobs,
-    album_assets,
-    albums,
-    analysis_runs,
-    assets,
-    faces,
     jobs,
     onboarding_jobs,
-    people,
     upload_batches,
 )
 from photo_server.config import Settings
+from photo_server.fingerprints import Fingerprint
 from photo_server.manifests import canonical_json
+from photo_server.models import Mutation
 from photo_server.rebuild import compare_projections, rebuild_from_s3
 from photo_server.recovery import (
     create_recovery_checkpoint,
@@ -45,13 +39,14 @@ from photo_server.recovery import (
     restore_recovery_checkpoint,
 )
 from photo_server.service import Service
+from photo_server.state import mutate
 from photo_server.storage import Storage
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        os.environ.get("PHOTO_RUN_PHASE9_RECOVERY_INTEGRATION") != "1",
-        reason="Set PHOTO_RUN_PHASE9_RECOVERY_INTEGRATION=1 for disposable recovery acceptance",
+        os.environ.get("PHOTO_RUN_RECOVERY_INTEGRATION") != "1",
+        reason="Set PHOTO_RUN_RECOVERY_INTEGRATION=1 for disposable recovery acceptance",
     ),
 ]
 
@@ -74,23 +69,23 @@ def _wait(url: str) -> None:
 
 @pytest.fixture
 def disposable_backends(tmp_path: Path):
-    project = f"photo-phase9-{uuid4().hex}"
-    database = f"phase9_{uuid4().hex[:16]}"
-    bucket = f"phase9-{uuid4().hex}"
-    backup_bucket = f"phase9-backup-{uuid4().hex}"
+    project = f"photo-recovery-{uuid4().hex}"
+    database = f"recovery_{uuid4().hex[:16]}"
+    bucket = f"recovery-{uuid4().hex}"
+    backup_bucket = f"recovery-backup-{uuid4().hex}"
     pg_port, s3_port = _port(), _port()
-    compose = tmp_path / "phase9-compose.yaml"
+    compose = tmp_path / "recovery-compose.yaml"
     compose.write_text(
         f"""services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: phase9
-      POSTGRES_PASSWORD: phase9
+      POSTGRES_USER: recovery
+      POSTGRES_PASSWORD: recovery
       POSTGRES_DB: {database}
     ports: [\"127.0.0.1:{pg_port}:5432\"]
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U phase9 -d {database}]
+      test: [CMD-SHELL, pg_isready -U recovery -d {database}]
       interval: 1s
       timeout: 2s
       retries: 45
@@ -107,8 +102,8 @@ def disposable_backends(tmp_path: Path):
             check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         endpoint = f"http://127.0.0.1:{s3_port}"
-        database_url = f"postgresql+psycopg://phase9:phase9@127.0.0.1:{pg_port}/{database}"
-        admin_url = f"postgresql://phase9:phase9@127.0.0.1:{pg_port}/{database}"
+        database_url = f"postgresql+psycopg://recovery:recovery@127.0.0.1:{pg_port}/{database}"
+        admin_url = f"postgresql://recovery:recovery@127.0.0.1:{pg_port}/{database}"
         for _ in range(90):
             try:
                 with psycopg.connect(admin_url):
@@ -161,53 +156,55 @@ def test_disposable_checkpoint_resume_restore_and_rebuild(disposable_backends):
     source.initialize()
     imports = root / "imports"
     imports.mkdir()
-    for name, color in (("one.jpg", "red"), ("two.jpg", "blue")):
+    for name, color in (
+        ("IMG_0001.jpg", "red"),
+        ("IMG_0002.jpg", "orange"),
+        ("delete.jpg", "blue"),
+    ):
         Image.new("RGB", (32, 24), color).save(imports / name, format="JPEG")
-    imported = source.import_batch(["one.jpg", "two.jpg"], uuid4())
+    imported = source.import_batch(
+        ["IMG_0001.jpg", "IMG_0002.jpg", "delete.jpg"], uuid4()
+    )
     assert all(item["status"] == "imported" for item in imported["results"]), imported
     asset_ids = [item["assetId"] for item in imported["results"]]
 
-    person_id, face_id, run_id, album_id = (str(uuid4()) for _ in range(4))
-    input_hash = source.catalog.get(asset_ids[0]).primary.sha256
-    artifact_source = f"analysis/{asset_ids[0]}/{run_id}.json"
-    artifact_body = json.dumps({"description": "phase9 fixture"}, sort_keys=True).encode()
-    source.storage.put(artifact_source, artifact_body, "application/json")
-    created = datetime(2026, 10, 6, 19, 0, tzinfo=UTC)
-    with source.catalog.engine.begin() as connection:
-        connection.execute(insert(people).values(id=person_id, display_name="Avery", created_at=created))
-        connection.execute(insert(analysis_runs).values(
-            id=run_id, asset_id=asset_ids[0], analysis_type="photo-ai", model_name="fixture",
-            model_version="1", pipeline_version="fixture-v1", input_hash=input_hash,
-            object_key=artifact_source, result={"description": "phase9 fixture"},
-            searchable_text="phase9 fixture", is_current=True, semantic_origin="computed", created_at=created,
+    for asset_id in asset_ids[:2]:
+        mutate(source, uuid4(), Mutation(
+            action="asset.metadata",
+            entity_id=asset_id,
+            expected_revision=1,
+            changes={
+                "metadata": {"Make": "Fixture", "Model": "Camera"},
+                "captureTime": "2026-01-01T12:00:00Z",
+            },
         ))
-        connection.execute(insert(faces).values(
-            id=face_id, asset_id=asset_ids[0], analysis_run_id=run_id, person_id=person_id,
-            face_index=0, bounding_box={"x": 1, "y": 2, "width": 3, "height": 4},
-            confidence=0.99, embedding=[0.1, 0.2],
-        ))
-        connection.execute(insert(albums).values(
-            id=album_id, state_revision=1,
-            state={"schemaVersion": 1, "libraryId": str(source.library_id), "albumId": album_id,
-                   "revision": 1, "previousRevision": None, "operationId": str(uuid4()),
-                   "name": "Fixture", "description": "Phase 9", "assetIds": asset_ids,
-                   "deletedAt": None, "mutation": {"action": "album.create", "entityId": album_id,
-                   "changes": {}, "expectedRevision": None}}, deleted_at=None,
-        ))
-        connection.execute(insert(album_assets), [
-            {"album_id": album_id, "asset_id": asset_ids[0], "position": 0},
-            {"album_id": album_id, "asset_id": asset_ids[1], "position": 1},
-        ])
-        deleted = dict(connection.scalar(select(assets.c.manifest).where(assets.c.id == asset_ids[1])))
-        deleted["deletedAt"] = "2026-10-06T20:00:00Z"
-        connection.execute(update(assets).where(assets.c.id == asset_ids[1]).values(
-            deleted_at="2026-10-06T20:00:00Z", manifest=deleted,
-        ))
+        source.publish_fingerprint(
+            asset_id,
+            Fingerprint(
+                phash="0000000000000000",
+                dhash="0000000000000000",
+                width=32,
+                height=24,
+                chroma_histogram="00" * 12,
+            ),
+        )
+    burst = source.catalog.burst_detail(asset_ids[0])
+    assert burst is not None and len(burst["frames"]) == 2
+    mutate(source, uuid4(), Mutation(
+        action="burst.setRepresentative",
+        entity_id=UUID(burst["burstId"]),
+        changes={"representativeAssetId": asset_ids[1]},
+    ))
+    assert source.catalog.burst_detail(asset_ids[0])["representativeAssetId"] == asset_ids[1]
 
-    for key in list(source.storage.keys("manifests/")) + list(source.storage.keys("tombstones/")):
-        source.storage.delete(key)
-    exported = backfill_postgres_to_s3(source.catalog, source.storage, resume=False)
-    assert exported["status"] == "complete", exported
+    album_id = uuid4()
+    mutate(source, uuid4(), Mutation(
+        action="album.create", entity_id=album_id,
+        changes={"name": "Fixture", "description": "Recovery fixture", "assetIds": asset_ids},
+    ))
+    mutate(source, uuid4(), Mutation(
+        action="asset.delete", entity_id=asset_ids[2], changes={}, expected_revision=1,
+    ))
     operational_before = _operational_snapshot(source.catalog)
     canonical_before = {
         key: source.storage.read_bytes(key)
@@ -227,7 +224,7 @@ def test_disposable_checkpoint_resume_restore_and_rebuild(disposable_backends):
     def dump(_url):
         result = subprocess.run(
             ["docker", "compose", "-f", str(disposable_backends["compose"]), "exec", "-T", "postgres",
-             "pg_dump", "--dbname", f"postgresql://phase9:phase9@localhost:5432/{disposable_backends['database']}",
+             "pg_dump", "--dbname", f"postgresql://recovery:recovery@localhost:5432/{disposable_backends['database']}",
              "--format=custom", "--no-owner", "--no-acl"],
             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env={**os.environ, "COMPOSE_PROJECT_NAME": disposable_backends["project"]},
@@ -246,18 +243,18 @@ def test_disposable_checkpoint_resume_restore_and_rebuild(disposable_backends):
         for key in canonical_before
     } == canonical_before
 
-    restored_bucket = f"phase9-restored-{uuid4().hex}"
+    restored_bucket = f"recovery-restored-{uuid4().hex}"
     restored_storage = Storage(_settings(disposable_backends, disposable_backends["database_url"], root, restored_bucket))
     restored_storage.ensure_bucket()
     restored = restore_recovery_checkpoint(backup, restored_storage, "indexes/recovery-checkpoints/integration.json")
     assert restored["status"] == "complete", restored
-    dump_db = f"phase9_dump_{uuid4().hex[:16]}"
+    dump_db = f"recovery_dump_{uuid4().hex[:16]}"
     dump_url = _create_database(disposable_backends["admin_url"], dump_db)
 
     def restore_dump(body):
         subprocess.run(
             ["docker", "compose", "-f", str(disposable_backends["compose"]), "exec", "-T", "postgres",
-             "pg_restore", "--dbname", f"postgresql://phase9:phase9@localhost:5432/{dump_db}",
+             "pg_restore", "--dbname", f"postgresql://recovery:recovery@localhost:5432/{dump_db}",
              "--no-owner", "--no-acl"],
             input=body, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env={**os.environ, "COMPOSE_PROJECT_NAME": disposable_backends["project"]},
@@ -270,12 +267,22 @@ def test_disposable_checkpoint_resume_restore_and_rebuild(disposable_backends):
     dump_catalog = Service(_settings(disposable_backends, dump_url, root, restored_bucket)).catalog
     assert dump_catalog.existing_library_id() == source.library_id
     assert dump_catalog.counts() == source.catalog.counts()
-    fresh_url = _create_database(disposable_backends["admin_url"], f"phase9_restore_{uuid4().hex[:16]}")
+    fresh_url = _create_database(disposable_backends["admin_url"], f"recovery_restore_{uuid4().hex[:16]}")
     rebuilt = Service(_settings(disposable_backends, fresh_url, root, restored_bucket))
     rebuilt.initialize(str(source.library_id))
     report = rebuild_from_s3(restored_storage, rebuilt.catalog, checkpoint_id="restored", resume=False)
-    assert report["status"] == "complete", report
-    assert compare_projections(source.catalog, rebuilt.catalog)["match"]
+    assert report["status"] == "complete", json.dumps(report, indent=2, sort_keys=True)
+    assert _operational_snapshot(rebuilt.catalog) == {
+        "jobs": [],
+        "ai_stage_jobs": [],
+        "onboarding_jobs": [],
+        "upload_batches": [],
+    }
+    comparison = compare_projections(source.catalog, rebuilt.catalog)
+    if not comparison["match"]:
+        comparison["sourceAssets"] = [item.document() for item in source.catalog.all_assets()]
+        comparison["rebuiltAssets"] = [item.document() for item in rebuilt.catalog.all_assets()]
+    assert comparison["match"], json.dumps(comparison, indent=2, sort_keys=True)
 
     malformed_key = "manifests/assets/bad/1.json"
     source.storage.put(malformed_key, b"{}", "application/json")

@@ -59,7 +59,7 @@ def synthetic_asset_id(service, number: int, preview_bytes: int, thumbnail_bytes
         blob_id=uuid4(),
         role="ORIGINAL_JPEG",
         original_filename=f"evict-{number}.JPG",
-        object_key=f"originals/{asset_id}/evict-{number}.JPG",
+        object_key=f"objects/{hashlib.sha256(str(number).encode()).hexdigest()}",
         sha256=hashlib.sha256(str(number).encode()).hexdigest(),
         size_bytes=1,
         mime_type="image/jpeg",

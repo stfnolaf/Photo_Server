@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "libraryId": "00000000-0000-4000-8000-000000000001",
+  "albumId": "00000000-0000-4000-8000-000000000401",
+  "revision": 3,
+  "parentRevision": 2,
+  "operationId": "00000000-0000-4000-8000-000000000402",
+  "createdAt": "2026-10-06T19:05:00Z",
+  "name": "September hike",
+  "description": "Selected trail photos",
+  "assetIds": ["00000000-0000-4000-8000-000000000101"],
+  "deletedAt": null
+}

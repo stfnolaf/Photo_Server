@@ -66,7 +66,7 @@
       "body": {
         "assetId": "00000000-0000-0000-0000-00000000001f",
         "caption": "Burst test frame",
-        "deletedAt": "2025-04-01T00:00:00+00:00",
+        "deletedAt": "2025-04-01T00:00:00Z",
         "favorite": true,
         "keywords": [
           "burst",

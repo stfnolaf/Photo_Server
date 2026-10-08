@@ -45,7 +45,7 @@ def preview_fixture(tmp_path, content, role="ORIGINAL_RAW", metadata=None):
         blob_id=uuid4(),
         role=role,
         original_filename="sample.ARW",
-        object_key=f"originals/{asset_id}/sample.ARW",
+        object_key=f"objects/{'a' * 64}",
         sha256="a" * 64,
         size_bytes=len(content),
         mime_type="image/x-sony-arw",

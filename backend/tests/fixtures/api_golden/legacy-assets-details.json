@@ -8,7 +8,7 @@
             {
               "blobId": "0f295c62-1e2b-564f-b120-5831d9595434",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000a/photo-10.JPEG",
+              "objectKey": "objects/ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
               "originalFilename": "photo-10.JPEG",
               "role": "ORIGINAL_JPEG",
               "sha256": "ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
@@ -35,7 +35,7 @@
             {
               "blobId": "f9e2979a-2fbd-5eaf-a740-049ee9bb5d7b",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000b/photo-11.JPEG",
+              "objectKey": "objects/3ae47dc0fcc15a76d1bc803bd412853591e2bf8274fbee316e4b4034442d080a",
               "originalFilename": "photo-11.JPEG",
               "role": "ORIGINAL_JPEG",
               "sha256": "3ae47dc0fcc15a76d1bc803bd412853591e2bf8274fbee316e4b4034442d080a",
@@ -62,7 +62,7 @@
             {
               "blobId": "3012e312-3052-5578-a09d-df9360d54cc6",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000c/photo-12.JPEG",
+              "objectKey": "objects/01f26ecea123f8377e1b44ba10e25e9ff154835431c8b60a0fc1bf9dc327c899",
               "originalFilename": "photo-12.JPEG",
               "role": "ORIGINAL_JPEG",
               "sha256": "01f26ecea123f8377e1b44ba10e25e9ff154835431c8b60a0fc1bf9dc327c899",
@@ -89,7 +89,7 @@
             {
               "blobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000d/photo-13.JPEG",
+              "objectKey": "objects/fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
               "originalFilename": "photo-13.JPEG",
               "role": "ORIGINAL_JPEG",
               "sha256": "fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
@@ -163,7 +163,7 @@
             {
               "blobId": "848679a8-5889-5b52-9c00-93d1ee893153",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000e/photo-14.HEIF",
+              "objectKey": "objects/d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
               "originalFilename": "photo-14.HEIF",
               "role": "ORIGINAL_HEIF",
               "sha256": "d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
@@ -190,7 +190,7 @@
             {
               "blobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000f/photo-15.RAW",
+              "objectKey": "objects/f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
               "originalFilename": "photo-15.RAW",
               "role": "ORIGINAL_RAW",
               "sha256": "f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
@@ -224,7 +224,7 @@
             {
               "blobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000d/photo-13.JPEG",
+              "objectKey": "objects/fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
               "originalFilename": "photo-13.JPEG",
               "role": "ORIGINAL_JPEG",
               "sha256": "fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
@@ -298,7 +298,7 @@
             {
               "blobId": "848679a8-5889-5b52-9c00-93d1ee893153",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000e/photo-14.HEIF",
+              "objectKey": "objects/d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
               "originalFilename": "photo-14.HEIF",
               "role": "ORIGINAL_HEIF",
               "sha256": "d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
@@ -325,7 +325,7 @@
             {
               "blobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
               "mimeType": "image/jpeg",
-              "objectKey": "originals/00000000-0000-0000-0000-00000000000f/photo-15.RAW",
+              "objectKey": "objects/f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
               "originalFilename": "photo-15.RAW",
               "role": "ORIGINAL_RAW",
               "sha256": "f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
@@ -371,7 +371,7 @@
           {
             "blobId": "0f295c62-1e2b-564f-b120-5831d9595434",
             "mimeType": "image/jpeg",
-            "objectKey": "originals/00000000-0000-0000-0000-00000000000a/photo-10.JPEG",
+            "objectKey": "objects/ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
             "originalFilename": "photo-10.JPEG",
             "role": "ORIGINAL_JPEG",
             "sha256": "ecc7c7c9bce23431bb2d046c0fe7677b45ed7386f1e8dded7728439959d5d858",
@@ -491,7 +491,7 @@
           {
             "blobId": "24d3ef93-2f7e-5eb1-8786-ea8a40d0872e",
             "mimeType": "image/jpeg",
-            "objectKey": "originals/00000000-0000-0000-0000-00000000000d/photo-13.JPEG",
+            "objectKey": "objects/fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
             "originalFilename": "photo-13.JPEG",
             "role": "ORIGINAL_JPEG",
             "sha256": "fd3812b354f49bb88f4657d7f772cccba426f5d16a35798280c6668251a9f58f",
@@ -611,7 +611,7 @@
           {
             "blobId": "848679a8-5889-5b52-9c00-93d1ee893153",
             "mimeType": "image/jpeg",
-            "objectKey": "originals/00000000-0000-0000-0000-00000000000e/photo-14.HEIF",
+            "objectKey": "objects/d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
             "originalFilename": "photo-14.HEIF",
             "role": "ORIGINAL_HEIF",
             "sha256": "d2abde3df587c67c4f73c362dc1f53c93d1c7c095f8640e86a6898a03401e4ca",
@@ -689,7 +689,7 @@
           {
             "blobId": "29e1cd52-d3c1-5283-9b3d-8eb2f09cde3d",
             "mimeType": "image/jpeg",
-            "objectKey": "originals/00000000-0000-0000-0000-00000000000f/photo-15.RAW",
+            "objectKey": "objects/f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
             "originalFilename": "photo-15.RAW",
             "role": "ORIGINAL_RAW",
             "sha256": "f03451a91929d4789dd7024e05feed552b233a157553252ae8c05368bd49ac6e",
@@ -767,7 +767,7 @@
           {
             "blobId": "853b1ef4-5817-507d-b71f-b8374cff4538",
             "mimeType": "image/jpeg",
-            "objectKey": "originals/00000000-0000-0000-0000-000000000010/photo-16.JPEG",
+            "objectKey": "objects/0259d2ded8ff75c6d9c7e468415c2a4f7a700a3b4bd9a76e6f5fa3bc46d1bc5f",
             "originalFilename": "photo-16.JPEG",
             "role": "ORIGINAL_JPEG",
             "sha256": "0259d2ded8ff75c6d9c7e468415c2a4f7a700a3b4bd9a76e6f5fa3bc46d1bc5f",

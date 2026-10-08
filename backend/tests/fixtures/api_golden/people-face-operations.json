@@ -109,7 +109,7 @@
         "createdPerson": true,
         "movedFaces": 1,
         "operationId": "dc21e02d-47fe-5e75-86a2-9bbef3395464",
-        "personId": "32a9aa90-189f-565c-98bd-38d5523452a7"
+        "personId": "3dd08b36-991c-5ed0-8560-b610d64b2a88"
       },
       "method": "POST",
       "path": "/faces/move",
@@ -120,7 +120,7 @@
         "createdPerson": true,
         "movedFaces": 1,
         "operationId": "dc21e02d-47fe-5e75-86a2-9bbef3395464",
-        "personId": "32a9aa90-189f-565c-98bd-38d5523452a7"
+        "personId": "3dd08b36-991c-5ed0-8560-b610d64b2a88"
       },
       "method": "POST",
       "path": "/faces/move",

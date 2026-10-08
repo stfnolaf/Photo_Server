@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "assetId": "00000000-0000-4000-8000-000000000101",
+  "artifactId": "00000000-0000-4000-8000-000000000601",
+  "processingType": "semantic-analysis",
+  "modelName": "example-vision",
+  "modelVersion": "2026-01",
+  "pipelineVersion": "photo-ai-v1",
+  "inputSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "implementationVersion": "semantic-v1",
+  "createdAt": "2026-10-06T19:06:00Z",
+  "resultObject": {
+    "objectKey": "objects/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "sizeBytes": 1280,
+    "mimeType": "application/json"
+  }
+}

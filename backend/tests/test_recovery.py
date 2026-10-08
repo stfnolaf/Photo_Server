@@ -1,3 +1,5 @@
+"""S3 recovery checkpoint tests."""
+
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -11,7 +13,7 @@ from photo_server.recovery import (
     verify_recovery_checkpoint,
 )
 
-EXAMPLES = Path(__file__).parents[2] / "docs/in-progress/s3-authoritative-examples"
+EXAMPLES = Path(__file__).parent / "fixtures/s3-authoritative-examples"
 
 
 class MemoryStorage:

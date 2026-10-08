@@ -58,7 +58,7 @@ def test_dry_run_is_zero_mutation_and_complete_for_empty_namespace():
     assert result["status"] == "complete"
     assert result["dryRun"] is True
     assert storage.writes == []
-    assert result["authority"] == "postgres"
+    assert result["authority"] == "s3"
     assert result["queuesAndLeases"] == "untouched"
 
 

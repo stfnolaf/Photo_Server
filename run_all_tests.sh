@@ -219,15 +219,14 @@ fi
 log
 
 # --- Section 4: Backend tests (unit + integration + AI-worker e2e) ----------
-# This is the key section: with PHOTO_RUN_INTEGRATION=1 the live-backend
-# integration tests (including the AI-worker end-to-end tests) are enabled.
+# This is the key section: every opt-in backend acceptance group is enabled.
 # They use disposable Postgres databases and S3 buckets, and stub the GPU /
 # Ollama model calls, so no GPU is required to run them.
 log "==================================================================="
 log " SECTION 4: Backend tests (unit + integration + AI-worker e2e)"
-log "           PHOTO_RUN_INTEGRATION=1"
+log "           all disposable integration groups enabled"
 log "==================================================================="
-run_capture bash -c "cd '$ROOT' && PHOTO_RUN_INTEGRATION=1 '$PY' -m pytest backend/tests/ -v"
+run_capture bash -c "cd '$ROOT' && PHOTO_RUN_INTEGRATION=1 PHOTO_RUN_MUTATION_INTEGRATION=1 PHOTO_RUN_RECONCILIATION_INTEGRATION=1 PHOTO_RUN_GC_INTEGRATION=1 PHOTO_RUN_RECOVERY_INTEGRATION=1 '$PY' -m pytest backend/tests/ -v"
 rc=$?
 if [ "$rc" -eq 0 ]; then
   log "RESULT: Backend tests -> PASS"

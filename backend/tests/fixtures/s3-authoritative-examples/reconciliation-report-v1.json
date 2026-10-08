@@ -1,0 +1,19 @@
+{
+  "status": "complete",
+  "dryRun": true,
+  "applyRequested": false,
+  "checkpoint": null,
+  "scanned": 12,
+  "matched": 7,
+  "missing": [{"category": "asset", "key": "asset-id", "reason": "durable projection row is missing from PostgreSQL"}],
+  "divergent": [],
+  "orphaned": [{"category": "object", "key": "objects/deadbeef", "reason": "immutable object is not referenced by a durable manifest"}],
+  "unresolved": [],
+  "conflicting": [],
+  "malformed": [],
+  "skipped": 0,
+  "repaired": 0,
+  "failed": [],
+  "authority": "s3",
+  "queuesAndLeases": "untouched"
+}

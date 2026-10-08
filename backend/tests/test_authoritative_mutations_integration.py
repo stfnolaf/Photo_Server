@@ -1,4 +1,4 @@
-"""Disposable PostgreSQL/S3 Phase 7 mutation acceptance suite."""
+"""Disposable S3 mutation and PostgreSQL projection acceptance suite."""
 
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ from photo_server.state import mutate, mutate_face
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        os.environ.get("PHOTO_RUN_PHASE7_MUTATION_INTEGRATION") != "1",
-        reason="Set PHOTO_RUN_PHASE7_MUTATION_INTEGRATION=1 for disposable Phase 7 acceptance",
+        os.environ.get("PHOTO_RUN_MUTATION_INTEGRATION") != "1",
+        reason="Set PHOTO_RUN_MUTATION_INTEGRATION=1 for disposable mutation acceptance",
     ),
 ]
 
@@ -59,22 +59,22 @@ def _wait_s3(endpoint: str) -> None:
 
 @pytest.fixture
 def disposable_backends(tmp_path: Path):
-    project = f"photo-phase7-{uuid4().hex}"
-    database = f"phase7_{uuid4().hex[:16]}"
-    bucket = f"phase7-{uuid4().hex}"
+    project = f"photo-mutation-{uuid4().hex}"
+    database = f"mutation_{uuid4().hex[:16]}"
+    bucket = f"mutation-{uuid4().hex}"
     pg_port, s3_port = _free_port(), _free_port()
-    compose = tmp_path / "phase7-compose.yaml"
+    compose = tmp_path / "mutation-compose.yaml"
     compose.write_text(
         f"""services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: phase7
-      POSTGRES_PASSWORD: phase7
+      POSTGRES_USER: mutation
+      POSTGRES_PASSWORD: mutation
       POSTGRES_DB: {database}
     ports: [\"127.0.0.1:{pg_port}:5432\"]
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U phase7 -d {database}]
+      test: [CMD-SHELL, pg_isready -U mutation -d {database}]
       interval: 1s
       timeout: 2s
       retries: 30
@@ -90,10 +90,10 @@ def disposable_backends(tmp_path: Path):
             ["docker", "compose", "-f", str(compose), "up", "-d", "--wait"],
             check=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
-        _wait_postgres(f"postgresql://phase7:phase7@127.0.0.1:{pg_port}/{database}")
+        _wait_postgres(f"postgresql://mutation:mutation@127.0.0.1:{pg_port}/{database}")
         _wait_s3(f"http://127.0.0.1:{s3_port}")
         yield {
-            "database_url": f"postgresql+psycopg://phase7:phase7@127.0.0.1:{pg_port}/{database}",
+            "database_url": f"postgresql+psycopg://mutation:mutation@127.0.0.1:{pg_port}/{database}",
             "bucket": bucket,
             "s3_endpoint": f"http://127.0.0.1:{s3_port}",
             "root": tmp_path,
@@ -154,12 +154,12 @@ def test_full_disposable_mutation_lifecycle(disposable_backends):
         assert [dict(row) for row in connection.execute(select(jobs)).mappings()] == queue_before
 
     # S3 failure occurs before the PostgreSQL projection call.
-    old_put = service.dual_write._put_immutable
-    service.dual_write._put_immutable = lambda *_args: (_ for _ in ()).throw(RuntimeError("s3 down"))
+    old_put = service.publisher._put_immutable
+    service.publisher._put_immutable = lambda *_args: (_ for _ in ()).throw(RuntimeError("s3 down"))
     with pytest.raises(RuntimeError, match="s3 down"):
         mutate(service, uuid4(), Mutation(action="asset.patch", entity_id=current.asset_id,
                                            changes={"rating": 3}, expected_revision=2))
-    service.dual_write._put_immutable = old_put
+    service.publisher._put_immutable = old_put
     assert service.catalog.get(asset_id).revision == 2
 
     # A projection failure leaves a verified S3 revision that the same

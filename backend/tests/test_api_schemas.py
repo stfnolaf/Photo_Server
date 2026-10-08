@@ -922,7 +922,7 @@ def test_pending_202_model_round_trips():
 
 
 def test_verify_error_model_rejects_forbidden_shapes():
-    good = {"key": "originals/00000000-0000-0000-0000-000000000081/x", "error": "size mismatch"}
+    good = {"key": f"objects/{'a' * 64}", "error": "size mismatch"}
     assert_round_trip(VerifyErrorOut, good)
     with pytest.raises(ValidationError):
         VerifyErrorOut.model_validate({**good, "surprise": 1})

@@ -5,9 +5,9 @@ from copy import deepcopy
 from pathlib import Path
 
 from photo_server.manifests import canonical_json
-from photo_server.rebuild import RebuildReport, _history, rebuild_from_s3
+from photo_server.rebuild import RebuildReport, _history, _public_processing_result, rebuild_from_s3
 
-EXAMPLES = Path(__file__).parents[2] / "docs/in-progress/s3-authoritative-examples"
+EXAMPLES = Path(__file__).parent / "fixtures/s3-authoritative-examples"
 
 
 class FakeStorage:
@@ -46,11 +46,17 @@ class FakeCatalog:
     def apply(self, value):
         self.assets.append(value)
 
+    def apply_projection(self, value):
+        self.apply(value)
+
     def apply_album(self, value):
         self.albums.append(value)
 
     def apply_person(self, value, face_ids=()):
         self.people.append((value, tuple(face_ids)))
+
+    def projection_is_empty(self):
+        return not self.assets and not self.albums and not self.people
 
 
 def asset_payload():
@@ -62,7 +68,7 @@ def asset_payload():
     return payload, digest
 
 
-def test_scan_is_sorted_and_checkpoint_resume_is_idempotent():
+def test_interrupted_scan_restarts_from_beginning_without_losing_records():
     payload, digest = asset_payload()
     first = canonical_json(payload)
     second_payload = deepcopy(payload)
@@ -82,10 +88,76 @@ def test_scan_is_sorted_and_checkpoint_resume_is_idempotent():
     result = rebuild_from_s3(storage, catalog, checkpoint_id="resume")
     assert result["status"] == "complete"
     assert [str(item.asset_id) for item in catalog.assets] == [
+        "00000000-0000-4000-8000-000000000101",
         "00000000-0000-4000-8000-000000000102"
     ]
     repeated = rebuild_from_s3(storage, catalog, checkpoint_id="resume")
-    assert repeated["status"] == "complete"
+    assert repeated["status"] == "failed"
+    assert repeated["errors"][0]["reason"] == "rebuild target is not an empty disposable projection"
+
+
+def test_completed_checkpoint_does_not_skip_a_fresh_projection():
+    payload, digest = asset_payload()
+    storage = FakeStorage(
+        {
+            f"objects/{digest}": b"photo",
+            "manifests/assets/00000000-0000-4000-8000-000000000101/1.json": canonical_json(payload),
+            "indexes/checkpoints/completed.json": json.dumps(
+                {"schemaVersion": 1, "lastKey": None, "complete": True}
+            ).encode(),
+        }
+    )
+    catalog = FakeCatalog()
+
+    result = rebuild_from_s3(storage, catalog, checkpoint_id="completed")
+
+    assert result["status"] == "complete"
+    assert result["projectedAssets"] == 1
+    assert [str(item.asset_id) for item in catalog.assets] == [
+        "00000000-0000-4000-8000-000000000101"
+    ]
+
+
+def test_rich_processing_artifact_projects_to_compact_public_result():
+    artifact = {
+        "schemaVersion": 1,
+        "runId": "run",
+        "inputSha256": "input",
+        "semantic": {"description": "fixture"},
+        "faces": [{"box": {"x": 1}}],
+        "models": {"name": "private"},
+        "metrics": {"latencyMs": 12},
+    }
+    assert _public_processing_result(artifact) == {
+        "description": "fixture",
+        "faceCount": 1,
+        "personCount": 1,
+    }
+
+
+def test_rebuild_requires_referenced_content_object():
+    payload, digest = asset_payload()
+    storage = FakeStorage(
+        {"manifests/assets/00000000-0000-4000-8000-000000000101/1.json": canonical_json(payload)}
+    )
+    result = rebuild_from_s3(storage, FakeCatalog(), checkpoint_id="canonical-only", resume=False)
+    assert result["status"] == "failed"
+    assert result["missingObjects"] == [{"key": f"objects/{digest}", "reason": "object not found"}]
+
+
+def test_rebuild_refuses_to_merge_into_non_empty_projection():
+    payload, digest = asset_payload()
+    storage = FakeStorage(
+        {
+            f"objects/{digest}": b"photo",
+            "manifests/assets/00000000-0000-4000-8000-000000000101/1.json": canonical_json(payload),
+        }
+    )
+    catalog = FakeCatalog()
+    catalog.assets.append(object())
+    result = rebuild_from_s3(storage, catalog, checkpoint_id="non-empty", resume=False)
+    assert result["status"] == "failed"
+    assert result["errors"][0]["safety"].startswith("refusing")
 
 
 def test_missing_object_and_manifest_checksum_are_reported_without_projection():

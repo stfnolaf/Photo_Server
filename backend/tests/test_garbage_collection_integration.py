@@ -1,4 +1,4 @@
-"""Disposable PostgreSQL/S3 Phase 8 retention acceptance.
+"""Disposable S3 retention acceptance.
 
 This suite is opt-in because it owns Docker resources.  It never uses the
 repository Compose file or named production volumes.
@@ -28,8 +28,8 @@ from photo_server.service import Service
 from photo_server.state import mutate
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("PHOTO_RUN_PHASE8_GC_INTEGRATION") != "1",
-    reason="Set PHOTO_RUN_PHASE8_GC_INTEGRATION=1 for disposable Phase 8 acceptance",
+    os.environ.get("PHOTO_RUN_GC_INTEGRATION") != "1",
+    reason="Set PHOTO_RUN_GC_INTEGRATION=1 for disposable garbage-collection acceptance",
 )
 
 
@@ -54,21 +54,21 @@ def _wait(url, postgres=False):
 
 @pytest.fixture
 def disposable(tmp_path: Path):
-    project = f"photo-phase8-{uuid4().hex}"
-    database = f"phase8_{uuid4().hex[:16]}"
-    bucket = f"phase8-{uuid4().hex}"
+    project = f"photo-gc-{uuid4().hex}"
+    database = f"gc_{uuid4().hex[:16]}"
+    bucket = f"gc-{uuid4().hex}"
     pg_port, s3_port = _port(), _port()
-    compose = tmp_path / "phase8-compose.yaml"
+    compose = tmp_path / "gc-compose.yaml"
     compose.write_text(f"""services:
   postgres:
     image: postgres:17
     environment:
-      POSTGRES_USER: phase8
-      POSTGRES_PASSWORD: phase8
+      POSTGRES_USER: gc
+      POSTGRES_PASSWORD: gc
       POSTGRES_DB: {database}
     ports: [\"127.0.0.1:{pg_port}:5432\"]
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U phase8 -d {database}]
+      test: [CMD-SHELL, pg_isready -U gc -d {database}]
       interval: 1s
       timeout: 2s
       retries: 30
@@ -80,7 +80,7 @@ def disposable(tmp_path: Path):
     env = {**os.environ, "COMPOSE_PROJECT_NAME": project}
     try:
         subprocess.run(["docker", "compose", "-f", str(compose), "up", "-d", "--wait"], check=True, env=env)
-        database_url = f"postgresql+psycopg://phase8:phase8@127.0.0.1:{pg_port}/{database}"
+        database_url = f"postgresql+psycopg://gc:gc@127.0.0.1:{pg_port}/{database}"
         _wait(database_url.replace("+psycopg", ""), postgres=True)
         _wait(f"http://127.0.0.1:{s3_port}")
         yield {"project": project, "compose": compose, "database": database, "bucket": bucket,
@@ -111,13 +111,13 @@ def test_disposable_reachability_retention_and_cleanup(disposable):
     service.storage.put(orphan, b"orphan", "application/octet-stream")
     before_keys = sorted(service.storage.keys(""))
     as_of = (datetime.now(UTC) + timedelta(days=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    first = collect_garbage(service.storage, checkpoint_id="phase8", stop_after=1,
+    first = collect_garbage(service.storage, checkpoint_id="retention", stop_after=1,
                              as_of=as_of,
                              policy=RetentionPolicy(original_object_days=0, temporary_upload_days=0))
     assert first["status"] == "paused", (first["errors"], first["unresolvedReferences"])
-    resumed = collect_garbage(service.storage, checkpoint_id="phase8", as_of=as_of,
+    resumed = collect_garbage(service.storage, checkpoint_id="retention", as_of=as_of,
                                policy=RetentionPolicy(original_object_days=0, temporary_upload_days=0))
-    repeated = collect_garbage(service.storage, checkpoint_id="phase8", as_of=as_of,
+    repeated = collect_garbage(service.storage, checkpoint_id="retention", as_of=as_of,
                                 policy=RetentionPolicy(original_object_days=0, temporary_upload_days=0))
     assert resumed == repeated
     assert orphan in {item["key"] for item in resumed["candidates"]}

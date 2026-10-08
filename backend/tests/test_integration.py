@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 
 from photo_server.config import Settings
 from photo_server.export import export_library
+from photo_server.manifests import decode_asset_manifest
 from photo_server.rebuild import compare_projections, rebuild_from_s3
 from photo_server.service import Service
 from photo_server.storage import Storage
@@ -108,7 +109,7 @@ def test_storage_refuses_overwrite(backend):
     assert b"".join(storage.chunks("probe")) == b"first"
 
 
-def test_import_duplicate_retry_sidecar_and_postgres_authority(backend):
+def test_import_duplicate_retry_sidecar_and_canonical_storage(backend):
     service = backend.service
     original = photo(backend.root)
     sidecar = backend.root / "sample.xmp"
@@ -121,7 +122,7 @@ def test_import_duplicate_retry_sidecar_and_postgres_authority(backend):
     assert service.catalog.counts() == {"assets": 1, "blobs": 2}
     assert service.import_batch(paths, operation)["results"][0]["replayed"]
     assert service.import_batch(paths, uuid4())["results"][0]["status"] == "duplicate"
-    assert len(list(service.storage.keys("originals/"))) == 2
+    assert len(list(service.storage.keys("objects/"))) == 2
     assert list(service.storage.keys("state/")) == []
     fresh = backend.fresh_catalog()
     assert fresh.catalog.counts() == {"assets": 0, "blobs": 0}
@@ -151,7 +152,7 @@ def test_crash_after_original_before_database_reuses_immutable_object(backend, m
         result = service.import_batch([path.name], operation)
     assert result["results"][0]["status"] == "failed"
     assert service.catalog.counts()["assets"] == 0
-    assert len(list(service.storage.keys("originals/"))) == 1
+    assert len(list(service.storage.keys("objects/"))) == 1
     assert list(service.storage.keys("state/")) == []
     retry = service.import_batch([path.name], operation)
     assert retry["results"][0]["status"] == "imported"
@@ -170,12 +171,12 @@ def test_changed_retry_cannot_replace_orphaned_original(backend, monkeypatch):
         )
         result = service.import_batch([path.name], operation)
     assert result["results"][0]["status"] == "failed"
-    assert len(list(service.storage.keys("originals/"))) == 1
+    assert len(list(service.storage.keys("objects/"))) == 1
     photo(backend.root, color="blue")
     retry = service.import_batch([path.name], operation)
     assert retry["results"][0]["status"] == "failed"
     assert "Checksum verification failed" in retry["results"][0]["error"]
-    assert len(list(service.storage.keys("originals/"))) == 1
+    assert len(list(service.storage.keys("objects/"))) == 1
 
 
 def test_failed_raw_does_not_claim_companion_was_imported(backend):
@@ -193,7 +194,10 @@ def test_storage_verification_detects_corruption(backend):
     service = backend.service
     path = photo(backend.root)
     result = service.import_batch([path.name], uuid4())
-    manifest = service.catalog.get(result["results"][0]["assetId"])
+    asset_id = result["results"][0]["assetId"]
+    manifest = decode_asset_manifest(
+        service.storage.read_bytes(f"manifests/assets/{asset_id}/1.json")
+    )
     corrupted = bytearray(path.read_bytes())
     corrupted[-1] ^= 1
     service.storage.client.put_object(
@@ -565,12 +569,13 @@ def catalog_fixture(
 
     asset_id = UUID(int=number)
     filename = name or f"photo-{number}.{media}"
+    digest = hashlib.sha256(str(number).encode().ljust(100, b"0")).hexdigest()
     blob = Blob(
         blob_id=uuid4(),
         role=f"ORIGINAL_{media}",
         original_filename=filename,
-        object_key=f"originals/{asset_id}/{filename}",
-        sha256=hashlib.sha256(str(number).encode().ljust(100, b"0")).hexdigest(),
+        object_key=f"objects/{digest}",
+        sha256=digest,
         size_bytes=100,
         mime_type="image/jpeg",
     )
@@ -589,7 +594,7 @@ def catalog_fixture(
     return manifest
 
 
-def set_legacy_state(service, asset_id, changes):
+def set_projection_state(service, asset_id, changes):
     from photo_server.catalog import assets
 
     with service.catalog.engine.begin() as connection:
@@ -605,8 +610,8 @@ def test_browse_timeline_search_filters_and_cursor_stability(backend):
     c = catalog_fixture(service, 3, None, media="HEIF", camera="Apple")
     d = catalog_fixture(service, 4, "0000:00:00 00:00:00", imported="2023-01-01T00:00:00Z")
     e = catalog_fixture(service, 5, "2024-04-30T23:59:59", name="100%_done.JPG")
-    set_legacy_state(service, str(a.asset_id), {"rating": 5, "favorite": True})
-    set_legacy_state(service, str(b.asset_id), {"rating": 3})
+    set_projection_state(service, str(a.asset_id), {"rating": 5, "favorite": True})
+    set_projection_state(service, str(b.asset_id), {"rating": 3})
     with TestClient(create_app(service.settings)) as client:
         page = client.get("/library/assets?limit=2").json()
         assert page["total"] == 5

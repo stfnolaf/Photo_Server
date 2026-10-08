@@ -69,12 +69,13 @@ def shifted_image() -> Image.Image:
 def add_asset(backend, capture_time=None, metadata=None) -> str:
     asset_id = uuid4()
     blob_id = uuid4()
+    digest = uuid4().hex + uuid4().hex
     blob = Blob(
         blob_id=blob_id,
         role="ORIGINAL_JPEG",
         original_filename="sample.JPG",
-        object_key=f"originals/{asset_id}/sample.JPG",
-        sha256=uuid4().hex + uuid4().hex,
+        object_key=f"objects/{digest}",
+        sha256=digest,
         size_bytes=100,
         mime_type="image/jpeg",
     )
@@ -89,6 +90,12 @@ def add_asset(backend, capture_time=None, metadata=None) -> str:
         metadata=metadata or {},
     )
     backend.service.catalog.apply(manifest)
+    body = b"fixture-original"
+    backend.service.storage.put(blob.object_key, body, "image/jpeg")
+    backend.service.storage.put(f"objects/{blob.sha256}", body, "image/jpeg")
+    backend.service.publisher.publish_manifest(
+        backend.service.publisher.manifest_from_projection(manifest)
+    )
     return str(asset_id)
 
 

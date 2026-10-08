@@ -81,7 +81,7 @@ import json
 import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -98,6 +98,7 @@ from sqlalchemy.engine import make_url
 import photo_server.api as api_module
 from photo_server.api import create_app
 from photo_server.browsing import BrowseQuery
+from photo_server.burst_authority import fingerprint_key
 from photo_server.catalog import (
     analysis_runs,
     assets,
@@ -112,8 +113,10 @@ from photo_server.catalog import (
 )
 from photo_server.config import Settings
 from photo_server.face_client import ADAFACE_IDENTITY
+from photo_server.manifests import BurstCluster, BurstManifest, FingerprintManifest
 from photo_server.models import Blob, Manifest, Mutation
 from photo_server.service import Service
+from photo_server.state import mutate
 from photo_server.storage import Storage, canonical_json
 
 pytestmark = [
@@ -233,12 +236,13 @@ def pinned_catalog_fixture(
     blob_id = uuid5(GOLDEN_NAMESPACE, f"blob-{number}")
     operation_id = uuid5(GOLDEN_NAMESPACE, f"operation-{number}")
     filename = name or f"photo-{number}.{media}"
+    digest = hashlib.sha256(str(number).encode().ljust(100, b"0")).hexdigest()
     blob = Blob(
         blob_id=blob_id,
         role=f"ORIGINAL_{media}",
         original_filename=filename,
-        object_key=f"originals/{asset_id}/{filename}",
-        sha256=hashlib.sha256(str(number).encode().ljust(100, b"0")).hexdigest(),
+        object_key=f"objects/{digest}",
+        sha256=digest,
         size_bytes=100,
         mime_type="image/jpeg",
     )
@@ -257,6 +261,13 @@ def pinned_catalog_fixture(
     )
     service.storage.put(blob.object_key, str(number).encode().ljust(100, b"0"), "image/jpeg")
     service.catalog.apply(manifest)
+    canonical = service.publisher.manifest_from_projection(manifest)
+    if canonical.capture_time is not None:
+        canonical = replace(canonical, capture_time=(
+            datetime.fromisoformat(canonical.capture_time).astimezone(UTC).isoformat().replace("+00:00", "Z")
+        ))
+    service.storage.put(f"objects/{blob.sha256}", str(number).encode().ljust(100, b"0"), "image/jpeg")
+    service.publisher.publish_manifest(canonical)
     return manifest
 
 
@@ -381,6 +392,23 @@ def run_sequence(
 
 
 def _case_diff(expected: dict, actual: dict) -> str:
+    if len(expected["cases"]) != len(actual["cases"]):
+        return f"case count changed: recorded={len(expected['cases'])}, actual={len(actual['cases'])}"
+    positional = [
+        (index, want, got)
+        for index, (want, got) in enumerate(zip(expected["cases"], actual["cases"], strict=True))
+        if normalize(want) != normalize(got)
+    ]
+    if positional:
+        lines = []
+        for index, want, got in positional:
+            lines.append(f"--- case index {index}")
+            lines.extend(difflib.unified_diff(
+                json.dumps(normalize(want), indent=2, sort_keys=True).splitlines(),
+                json.dumps(normalize(got), indent=2, sort_keys=True).splitlines(),
+                "recorded", "actual", lineterm=""
+            ))
+        return "\n".join(lines)
     expected_cases = {(case["method"], case["path"]): case for case in expected["cases"]}
     actual_cases = {(case["method"], case["path"]): case for case in actual["cases"]}
     changed = [
@@ -1221,7 +1249,6 @@ ALBUM_B = uuid5(GOLDEN_LIBRARY_ID, f"album:{ALBUM_B_OPS['create']}")
 # The fixed instant the patched catalog ``datetime.now(UTC)`` returns; the
 # deletion's deletedAt is its ISO rendering.
 PHASE3A_PINNED_NOW = "2025-03-01T00:00:00+00:00"
-PHASE3A_HIDDEN_ASSET_STAMP = "2025-02-01T00:00:00+00:00"
 
 
 class _PinnedNowDatetime(datetime):
@@ -1258,20 +1285,11 @@ def seed_phase_3a(service) -> dict:
     }
     made[74] = pinned_catalog_fixture(service, 74, None, media="RAW", camera="Canon")
     hidden = made[74]
-    service.catalog.commit_mutation(
+    mutate(
+        service,
         uuid5(GOLDEN_NAMESPACE, "phase3a-hide-74"),
         Mutation(action="asset.delete", entity_id=hidden.asset_id, changes={}),
     )
-    with service.catalog.engine.begin() as connection:
-        document = connection.execute(
-            select(assets.c.manifest).where(assets.c.id == str(hidden.asset_id))
-        ).scalar_one()
-        document["deletedAt"] = PHASE3A_HIDDEN_ASSET_STAMP
-        connection.execute(
-            update(assets)
-            .where(assets.c.id == str(hidden.asset_id))
-            .values(deleted_at=PHASE3A_HIDDEN_ASSET_STAMP, manifest=document)
-        )
     return {
         "members": [str(made[number].asset_id) for number in (71, 72, 73)],
         "hidden": str(made[74].asset_id),
@@ -1400,7 +1418,10 @@ def test_phase_3a(backend):
     instant; no workers are started.
     """
     seeded = seed_phase_3a(backend.service)
-    with mock.patch("photo_server.catalog.datetime", new=_PinnedNowDatetime):
+    with (
+        mock.patch("photo_server.catalog.datetime", new=_PinnedNowDatetime),
+        mock.patch("photo_server.authoritative.datetime", new=_PinnedNowDatetime),
+    ):
         run_sequence(
             backend,
             "album-lifecycle",
@@ -1501,23 +1522,51 @@ def seed_phase_3b(service) -> dict:
     }
     asset_ids = {number: str(manifest.asset_id) for number, manifest in made.items()}
 
-    with service.catalog.engine.begin() as connection:
-        # Burst cluster: frame 34 is the representative until the section
-        # moves it to 33 through the API.
-        connection.execute(
-            insert(burst_clusters).values(
-                id=PHASE3B_CLUSTER_ID,
-                representative_asset_id=asset_ids[34],
-                policy_version="burst-cluster-v2",
-                created_at=datetime.fromisoformat("2025-01-02T12:00:00+00:00"),
-            )
+    fingerprint_records = []
+    for number in (33, 34, 35):
+        value = FingerprintManifest(
+            library_id=service.library_id,
+            asset_id=UUID(asset_ids[number]),
+            algorithm_version="burst-hash-v1",
+            phash="0000000000000000",
+            dhash="0000000000000000",
+            width=1200,
+            height=800,
+            chroma_histogram="00" * 12,
+            created_at="2025-01-02T12:00:00Z",
         )
-        for number in (33, 34, 35):
-            connection.execute(
-                insert(burst_members).values(
-                    cluster_id=PHASE3B_CLUSTER_ID, asset_id=asset_ids[number]
-                )
-            )
+        service.publisher.publish_record(
+            fingerprint_key(value.asset_id, value.algorithm_version),
+            value,
+            "fingerprint",
+        )
+        fingerprint_records.append(value)
+    burst_snapshot = BurstManifest(
+        library_id=service.library_id,
+        revision=1,
+        parent_revision=None,
+        operation_id=uuid5(GOLDEN_NAMESPACE, "phase3b-burst-seed"),
+        created_at="2025-01-02T12:00:00Z",
+        policy_version="burst-cluster-v2",
+        operation_action="burst.recluster",
+        operation_cluster_id=None,
+        operation_asset_id=None,
+        clusters=(
+            BurstCluster(
+                cluster_id=UUID(PHASE3B_CLUSTER_ID),
+                representative_asset_id=UUID(asset_ids[34]),
+                representative_selected=False,
+                asset_ids=tuple(UUID(asset_ids[number]) for number in (33, 34, 35)),
+            ),
+        ),
+        excluded_asset_ids=(),
+    )
+    service.publisher.publish_record(
+        "manifests/bursts/1.json", burst_snapshot, "burst"
+    )
+    service.catalog.apply_burst_projection(fingerprint_records, burst_snapshot)
+
+    with service.catalog.engine.begin() as connection:
         # Mixed job states for the queue operations.
         connection.execute(
             jobs.update()
@@ -1710,7 +1759,10 @@ def test_phase_3b(backend):
     to this section's instant for the session; no workers are started.
     """
     asset_ids = seed_phase_3b(backend.service)
-    with mock.patch("photo_server.catalog.datetime", new=_Phase3bPinnedNowDatetime):
+    with (
+        mock.patch("photo_server.catalog.datetime", new=_Phase3bPinnedNowDatetime),
+        mock.patch("photo_server.authoritative.datetime", new=_Phase3bPinnedNowDatetime),
+    ):
         run_sequence(
             backend,
             "asset-mutations-queues",

@@ -1,4 +1,4 @@
-"""PostgreSQL-authority tests against isolated S3 buckets and databases."""
+"""Durable-state tests against isolated S3 buckets and database projections."""
 
 from concurrent.futures import ThreadPoolExecutor
 from uuid import UUID, uuid4
@@ -84,7 +84,7 @@ def test_metadata_albums_tombstones_and_database_backed_export(backend, tmp_path
 
     service = backend.service
     first, second = imported(backend), imported(backend, "second.JPG", "blue")
-    originals = set(service.storage.keys("originals/"))
+    content_objects = set(service.storage.keys("objects/"))
     with TestClient(create_app(service.settings)) as client:
         metadata = {
             "operationId": str(uuid4()),
@@ -127,10 +127,10 @@ def test_metadata_albums_tombstones_and_database_backed_export(backend, tmp_path
             ).status_code
             == 409
         )
-        assert (
-            client.post(f"/assets/{first}/restore", json={"operationId": str(uuid4())}).status_code
-            == 200
+        restore_response = client.post(
+            f"/assets/{first}/restore", json={"operationId": str(uuid4())}
         )
+        assert restore_response.status_code == 200, restore_response.text
         assert client.get(f"/assets/{first}").json()["userState"]["caption"] == metadata["caption"]
         assert (
             client.request(
@@ -153,7 +153,7 @@ def test_metadata_albums_tombstones_and_database_backed_export(backend, tmp_path
         )
         expected_album = client.get(f"/albums/{album_id}").json()
 
-    assert set(service.storage.keys("originals/")) == originals
+    assert set(service.storage.keys("objects/")) == content_objects
     assert list(service.storage.keys("state/")) == []
     assert service.catalog.browse(BrowseQuery())["total"] == 1
     assert service.catalog.browse(BrowseQuery(deleted=True))["total"] == 1
@@ -258,14 +258,14 @@ def test_processing_endpoint_can_queue_many_or_the_active_library(backend):
         assert response.json()["jobsAlreadyQueued"] == 2
 
 
-def test_missing_blob_is_reported_without_turning_s3_into_state_authority(backend):
+def test_missing_content_object_is_reported(backend):
     service = backend.service
     asset_id = imported(backend)
     manifest = service.catalog.get(str(asset_id))
-    service.storage.delete(manifest.primary.object_key)
+    service.storage.delete(f"objects/{manifest.primary.sha256}")
     report = service.verify(full=True)
     assert report["errors"] and report["blobsChecked"] == 0
-    assert patch(service, asset_id, caption="Catalog remains authoritative")["caption"]
+    assert patch(service, asset_id, caption="Projection remains writable")["caption"]
 
 
 def test_migration_sql_files_are_idempotent(backend):

@@ -6,7 +6,7 @@ from pathlib import Path
 from photo_server.garbage_collector import RetentionPolicy, collect_garbage
 from photo_server.manifests import canonical_json
 
-ROOT = Path(__file__).parents[2] / "docs/in-progress/s3-authoritative-examples"
+ROOT = Path(__file__).parent / "fixtures/s3-authoritative-examples"
 
 
 class FakeStorage:
