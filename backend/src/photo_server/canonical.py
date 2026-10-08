@@ -51,6 +51,10 @@ class CanonicalPublisher:
         self.storage.put(key, data, mime)
         self.storage.verify(key, len(data), expected)
 
+    def put_immutable(self, key: str, data: bytes, mime: str) -> None:
+        """Create-only put with full read-back verification (public seam)."""
+        self._put_immutable(key, data, mime)
+
     def publish_object(self, path: Path, digest: str, size: int) -> str:
         data = path.read_bytes()
         if len(data) != size or hashlib.sha256(data).hexdigest() != digest:

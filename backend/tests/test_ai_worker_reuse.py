@@ -28,7 +28,7 @@ from test_integration import pytestmark  # noqa: F401
 
 import photo_server.ai_worker as ai_worker
 from photo_server.ai_worker import AIWorker
-from photo_server.analysis import SemanticAnalysis
+from photo_server.analysis import PIPELINE_VERSION, SemanticAnalysis
 from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.models import Blob, Manifest, Mutation
 from photo_server.reuse import REUSE_POLICY_VERSION
@@ -203,10 +203,17 @@ def test_first_frame_computed_then_near_duplicate_reused(backend, monkeypatch):
 
     source_run = current_run(backend, source_id)
     target_run = current_run(backend, target_id)
-    # The reused run has its own input hash and object key, and inherits the
-    # source's searchable text.
+    # The reused run has its own input hash and its own content-addressed
+    # canonical object; the data-plane copy still lives under analysis/.
     assert target_run["input_hash"] != source_run["input_hash"]
-    assert target_id in target_run["object_key"]
+    assert target_run["object_key"].startswith("objects/")
+    assert target_run["object_key"] != source_run["object_key"]
+    assert (
+        backend.service.storage.head(
+            f"analysis/{target_id}/{PIPELINE_VERSION}/{target_run['id']}.json"
+        )
+        is not None
+    )
     assert target_run["searchable_text"] == source_run["searchable_text"]
     # Provenance points at the source run under the burst-reuse policy.
     assert target_run["source_run_id"] == source_run["id"]
@@ -274,18 +281,30 @@ def test_retry_is_idempotent(backend, monkeypatch):
     first = worker.run_once()
     assert first["status"] == "ready"
     assert calls[0] == 1
+    record_key = f"manifests/processing/{first['runId']}.json"
+    record_bytes = backend.service.storage.read_bytes(record_key)
+    object_key = current_run(backend, source_id)["object_key"]
+    object_bytes = backend.service.storage.read_bytes(object_key)
 
-    # A normal retry recomputes (no qualifying near-duplicate) and publishes a
-    # new current run, leaving the job ready.
+    # A normal retry reuses the durable stages and republishes the same
+    # logical run: the deterministic run id and the content-addressed object
+    # are unchanged, the stored processing record is adopted, and the job
+    # stays ready.
     requeue_ai(backend, source_id)
     retry = worker.run_once()
     assert retry["status"] == "ready"
     # The durable semantic stage is reused on a normal retry; force_full is
     # the explicit opt-in for recomputation.
     assert calls[0] == 1
+    assert retry["runId"] == first["runId"]
     retry_run = current_run(backend, source_id)
-    assert retry_run["id"] != first["runId"]
+    assert retry_run["id"] == first["runId"]
     assert retry_run["semantic_origin"] == "computed"
+    # The retry is a byte-stable no-op against the canonical S3 plane.
+    assert retry_run["object_key"] == object_key
+    assert backend.service.storage.read_bytes(object_key) == object_bytes
+    assert backend.service.storage.read_bytes(record_key) == record_bytes
+    assert len(face_rows(backend, retry_run["id"])) == 1
 
 
 def test_force_full_invokes_vlm(backend, monkeypatch):

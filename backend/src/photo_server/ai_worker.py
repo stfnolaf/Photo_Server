@@ -36,12 +36,12 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from uuid import uuid4
 
 import httpx
 from pydantic import ValidationError
 
 from photo_server.ai_pipeline import independent
+from photo_server.ai_publication import build_processing_artifact, publish_ai_artifact
 from photo_server.analysis import (
     ANALYSIS_TYPE,
     PIPELINE_VERSION,
@@ -413,25 +413,25 @@ class AIWorker:
                 raise RuntimeError("AI publish requires durable face and semantic stages")
 
             semantic = semantic_details["semantic"]
-            run_id = str(uuid4())
             created_at = datetime.now(UTC).isoformat()
             public_result = {
                 **semantic.document(),
                 "faceCount": len(faces),
             }
-            artifact = {
+            model_name = self.service.settings.ai_model
+            model_version = semantic_details["model_digest"]
+            source_run_id = semantic_details["source_run_id"]
+            payload = {
                 "schemaVersion": 1,
-                "runId": run_id,
                 "libraryId": str(manifest.library_id),
                 "assetId": asset_id,
                 "analysisType": ANALYSIS_TYPE,
                 "inputSha256": manifest.primary.sha256,
                 "pipelineVersion": PIPELINE_VERSION,
-                "createdAt": created_at,
                 "models": {
                     "semantic": {
-                        "name": self.service.settings.ai_model,
-                        "digest": semantic_details["model_digest"],
+                        "name": model_name,
+                        "digest": model_version,
                     },
                     "faceDetector": "yunet-2023mar",
                     "faceEmbedding": {
@@ -444,13 +444,31 @@ class AIWorker:
                 "metrics": semantic_details["metrics"],
                 "semanticOrigin": semantic_details["semantic_origin"],
             }
-            source_run_id = semantic_details["source_run_id"]
             if source_run_id:
-                artifact["semanticSourceRunId"] = source_run_id
+                payload["semanticSourceRunId"] = source_run_id
             if semantic_details["similarity"] is not None:
-                artifact["similarity"] = semantic_details["similarity"]
-            object_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
-            self.service.storage.put_json(object_key, artifact)
+                payload["similarity"] = semantic_details["similarity"]
+            record, result_bytes, run_id = build_processing_artifact(
+                str(manifest.library_id),
+                payload,
+                created_at=created_at,
+                model_name=model_name,
+                model_version=model_version,
+            )
+            object_key, _record_key, _adopted = publish_ai_artifact(
+                self.service.storage,
+                self.service.publisher,
+                record,
+                result_bytes,
+            )
+            # The data-plane copy is kept for the migration period; it
+            # duplicates the canonical object and is not authoritative. The
+            # storage is immutable, so a retry adopts the existing copy.
+            data_plane_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
+            if self.service.storage.head(data_plane_key) is None:
+                self.service.storage.put_json(
+                    data_plane_key, {"runId": run_id, "createdAt": created_at, **payload}
+                )
             completed = self.service.catalog.complete_ai_analysis(
                 asset_id=asset_id,
                 run_id=run_id,
@@ -784,24 +802,22 @@ class AIWorker:
                 stage_durations_ms["semantic"] = round(semantic_elapsed, 1)
             stage_started = time.perf_counter()
             current_timing_stage = "publish"
-            run_id = str(uuid4())
             created_at = datetime.now(UTC).isoformat()
             public_result = {
                 **semantic.document(),
                 "faceCount": len(faces),
             }
-            artifact = {
+            model_name = self.service.settings.ai_model
+            payload = {
                 "schemaVersion": 1,
-                "runId": run_id,
                 "libraryId": str(manifest.library_id),
                 "assetId": asset_id,
                 "analysisType": ANALYSIS_TYPE,
                 "inputSha256": manifest.primary.sha256,
                 "pipelineVersion": PIPELINE_VERSION,
-                "createdAt": created_at,
                 "models": {
                     "semantic": {
-                        "name": self.service.settings.ai_model,
+                        "name": model_name,
                         "digest": model_digest,
                     },
                     "faceDetector": "yunet-2023mar",
@@ -816,13 +832,32 @@ class AIWorker:
                 "semanticOrigin": semantic_origin,
             }
             if source is not None:
-                artifact["semanticSource"] = {
+                payload["semanticSource"] = {
                     "assetId": source.asset_id,
                     "runId": source_run_id,
                 }
-                artifact["similarity"] = similarity
-            object_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
-            self.service.storage.put_json(object_key, artifact)
+                payload["similarity"] = similarity
+            record, result_bytes, run_id = build_processing_artifact(
+                str(manifest.library_id),
+                payload,
+                created_at=created_at,
+                model_name=model_name,
+                model_version=model_digest,
+            )
+            object_key, _record_key, _adopted = publish_ai_artifact(
+                self.service.storage,
+                self.service.publisher,
+                record,
+                result_bytes,
+            )
+            # The data-plane copy is kept for the migration period; it
+            # duplicates the canonical object and is not authoritative. The
+            # storage is immutable, so a retry adopts the existing copy.
+            data_plane_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
+            if self.service.storage.head(data_plane_key) is None:
+                self.service.storage.put_json(
+                    data_plane_key, {"runId": run_id, "createdAt": created_at, **payload}
+                )
             completed = self.service.catalog.complete_ai_analysis(
                 asset_id=asset_id,
                 run_id=run_id,

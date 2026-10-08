@@ -1680,26 +1680,66 @@ class Catalog:
                 )
                 .values(is_current=False)
             )
-            connection.execute(
-                insert(analysis_runs).values(
-                    id=run_id,
-                    asset_id=asset_id,
-                    analysis_type="photo-ai",
-                    model_name=model_name,
-                    model_version=model_version,
-                    pipeline_version=pipeline_version,
-                    input_hash=input_hash,
-                    object_key=object_key,
-                    result=public_result,
-                    searchable_text=searchable,
-                    is_current=True,
-                    created_at=datetime.fromisoformat(created_at),
-                    semantic_origin=semantic_origin,
-                    source_run_id=source_run_id,
-                    reuse_policy_version=reuse_policy_version,
-                    similarity=similarity,
+            # The run row is keyed by the deterministic run id. A retry of
+            # the same logical run reuses the row; any identity-field
+            # divergence fails closed (the S3 record is authoritative).
+            existing = connection.execute(
+                select(analysis_runs).where(analysis_runs.c.id == run_id)
+            ).mappings().first()
+            if existing is None:
+                connection.execute(
+                    insert(analysis_runs).values(
+                        id=run_id,
+                        asset_id=asset_id,
+                        analysis_type="photo-ai",
+                        model_name=model_name,
+                        model_version=model_version,
+                        pipeline_version=pipeline_version,
+                        input_hash=input_hash,
+                        object_key=object_key,
+                        result=public_result,
+                        searchable_text=searchable,
+                        is_current=True,
+                        created_at=datetime.fromisoformat(created_at),
+                        semantic_origin=semantic_origin,
+                        source_run_id=source_run_id,
+                        reuse_policy_version=reuse_policy_version,
+                        similarity=similarity,
+                    )
                 )
-            )
+            else:
+                for field, value in {
+                    "asset_id": asset_id,
+                    "analysis_type": "photo-ai",
+                    "model_name": model_name,
+                    "model_version": model_version,
+                    "pipeline_version": pipeline_version,
+                    "input_hash": input_hash,
+                    "object_key": object_key,
+                    "semantic_origin": semantic_origin,
+                    "source_run_id": source_run_id,
+                    "reuse_policy_version": reuse_policy_version,
+                    "similarity": similarity,
+                }.items():
+                    if existing[field] != value:
+                        raise LibraryError(
+                            f"AI analysis run projection diverged on {field} "
+                            f"for run {run_id}"
+                        )
+                # Retry: re-establish as current and refresh the derived
+                # result; the stored created_at (first publication) stands.
+                connection.execute(
+                    analysis_runs.update()
+                    .where(analysis_runs.c.id == run_id)
+                    .values(
+                        is_current=True,
+                        result=public_result,
+                        searchable_text=searchable,
+                    )
+                )
+                connection.execute(
+                    face_table.delete().where(face_table.c.analysis_run_id == run_id)
+                )
             if assigned:
                 connection.execute(
                     insert(face_table),
