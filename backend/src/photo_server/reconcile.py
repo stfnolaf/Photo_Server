@@ -1,9 +1,8 @@
 """Deterministic S3/PostgreSQL reconciliation.
 
-This is deliberately separate from the live catalog writers.  PostgreSQL is
-still the authority for normal requests; an explicit ``apply`` run may repair
-the derived projection from validated immutable records, but never resolves a
-conflict by overwriting a live row.
+This is deliberately separate from live writers. An explicit ``apply`` run may
+repair the derived database projection from validated immutable records, but
+never resolves a conflict by overwriting a divergent row.
 """
 
 from __future__ import annotations
@@ -15,9 +14,11 @@ from typing import Any
 from sqlalchemy import insert, select
 
 from photo_server.catalog import analysis_runs, faces, people
+from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.manifests import (
     AlbumManifest,
     AssetManifest,
+    BurstManifest,
     PersonManifest,
     ProcessingArtifact,
     Tombstone,
@@ -52,7 +53,7 @@ class ReconciliationReport:
     checkpoint: str | None = None
     dry_run: bool = True
     apply_requested: bool = False
-    # Internal compatibility fields used by the strict Phase 4 scanner
+    # Detailed validation counters used by the strict scanner.
     validated: int = 0
     objects_checked: int = 0
     missing_objects: list[dict[str, str]] = field(default_factory=list)
@@ -94,7 +95,7 @@ class ReconciliationReport:
                 "repaired": self.repaired,
                 "failed": len(self.failed),
             },
-            "authority": "postgres",
+            "authority": "s3",
             "queuesAndLeases": "untouched",
         }
 
@@ -115,21 +116,51 @@ def _norm(value: Any) -> Any:
         return [_norm(item) for item in value]
     if hasattr(value, "isoformat"):
         return value.isoformat().replace("+00:00", "Z")
-    if isinstance(value, str) and value.endswith("+00:00"):
-        return value[:-6] + "Z"
+    if isinstance(value, str):
+        try:
+            from datetime import datetime, timezone
+
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        except ValueError:
+            pass
+    return value
+
+
+def _face_norm(value: Any) -> Any:
+    if isinstance(value, list) and len(value) == 4 and all(
+        isinstance(item, (int, float)) and not isinstance(item, bool) for item in value
+    ):
+        return {"x": value[0], "y": value[1], "width": value[2], "height": value[3]}
     return value
 
 
 def _compare(report: ReconciliationReport, kind: str, expected: dict, actual: dict) -> None:
+    if kind == "album":
+        expected = {key: _album_compare(value) for key, value in expected.items()}
+        actual = {key: _album_compare(value) for key, value in actual.items()}
     for key in sorted(set(expected) - set(actual)):
-        _issue(report.missing, kind, key, "durable projection row is missing from PostgreSQL")
+        _issue(report.missing, kind, key, "database projection row is missing")
     for key in sorted(set(actual) - set(expected)):
-        _issue(report.orphaned, kind, key, "PostgreSQL row has no selected S3 projection")
+        _issue(report.orphaned, kind, key, "database projection row has no selected S3 manifest")
     for key in sorted(set(expected) & set(actual)):
         if _norm(expected[key]) == _norm(actual[key]):
             report.matched += 1
         else:
             _issue(report.divergent, kind, key, "durable projection differs from S3")
+
+
+def _album_compare(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    mutation = result.get("mutation")
+    if isinstance(mutation, dict):
+        mutation = dict(mutation)
+        mutation.pop("changes", None)
+        result["mutation"] = mutation
+    return result
 
 
 def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: bool, stop_after: int | None):
@@ -170,7 +201,12 @@ def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: boo
             if actual != expected_identity:
                 _issue(report.malformed, "manifest-identity", key, "record identity differs from key")
                 continue
-            records.setdefault((actual[0], actual[1]), []).append((key, record))
+            record_identity = (
+                ("tombstone", f"{actual[0]}:{actual[1]}")
+                if isinstance(record, Tombstone)
+                else (actual[0], actual[1])
+            )
+            records.setdefault(record_identity, []).append((key, record))
             if isinstance(record, AssetManifest):
                 for blob in record.blobs:
                     referenced.add(blob.object_key)
@@ -206,14 +242,6 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
     records, referenced, keys, checkpoint_key, already_complete = _scan(
         storage, report, checkpoint_id, resume, stop_after
     )
-    report.missing.extend(report.missing_objects)
-    report.divergent.extend(report.checksum_mismatches)
-    report.malformed.extend(report.malformed_manifests)
-    report.conflicting.extend(report.conflicting_operation_ids)
-    report.unresolved.extend(report.unresolved_references)
-    report.malformed.extend(report.parent_gaps)
-    report.conflicting.extend(report.duplicate_revisions)
-    report.conflicting.extend(report.multiple_valid_heads)
     if report.status == "paused":
         return report.as_dict()
     if already_complete:
@@ -222,13 +250,37 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
     selected: dict[tuple[str, str], Any] = {}
     tombstones: dict[tuple[str, str], Tombstone] = {}
     for identity, values in sorted(records.items()):
-        if identity[0] in {"face", "processing"}:
+        if identity[0] in {"face", "processing", "fingerprint"}:
+            continue
+        if identity[0] == "tombstone":
+            by_revision: dict[int, list[Tombstone]] = {}
+            for _key, value in values:
+                by_revision.setdefault(value.revision, []).append(value)
+            for revision, revisions in by_revision.items():
+                if len(revisions) > 1:
+                    report.duplicate_revisions.append(
+                        {"entity": identity[1], "revision": str(revision)}
+                    )
+            if any(len(revisions) > 1 for revisions in by_revision.values()):
+                continue
+            chosen = max((value for _key, value in values), key=lambda value: value.revision)
+            selected[identity] = chosen
+            tombstones[(chosen.entity_type, str(chosen.entity_id))] = chosen
             continue
         chosen = _history(values, report, identity[0], identity[1])
         if chosen is not None:
             selected[identity] = chosen
             if isinstance(chosen, Tombstone):
                 tombstones[(chosen.entity_type, str(chosen.entity_id))] = chosen
+
+    report.missing.extend(report.missing_objects)
+    report.divergent.extend(report.checksum_mismatches)
+    report.malformed.extend(report.malformed_manifests)
+    report.conflicting.extend(report.conflicting_operation_ids)
+    report.unresolved.extend(report.unresolved_references)
+    report.malformed.extend(report.parent_gaps)
+    report.conflicting.extend(report.duplicate_revisions)
+    report.conflicting.extend(report.multiple_valid_heads)
 
     if report.malformed or report.failed:
         report.status = "failed"
@@ -237,19 +289,25 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
     expected_assets, expected_albums, expected_people = {}, {}, {}
     for (kind, entity_id), record in selected.items():
         if isinstance(record, Tombstone):
-            candidates = [
-                value for _key, value in records.get((kind, entity_id), [])
-                if not isinstance(value, Tombstone) and value.revision <= record.parent_revision
-            ]
-            if not candidates:
-                _issue(report.unresolved, "tombstone", f"{kind}:{entity_id}", "tombstone has no parent snapshot")
-                continue
-            record = max(candidates, key=lambda value: value.revision)
-        tombstone = tombstones.get((kind, entity_id))
+            continue
         if isinstance(record, AssetManifest):
-            expected_assets[entity_id] = _asset_projection(record, tombstone.deleted_at if tombstone else None).document()
+            previous = next(
+                (
+                    value for _key, value in records[(kind, entity_id)]
+                    if value.revision == record.parent_revision
+                ),
+                None,
+            )
+            expected_assets[entity_id] = _asset_projection(record, previous=previous).document()
         elif isinstance(record, AlbumManifest):
-            expected_albums[entity_id] = _album_projection(record, tombstone.deleted_at if tombstone else None).document()
+            previous = next(
+                (
+                    value for _key, value in records[(kind, entity_id)]
+                    if value.revision == record.parent_revision
+                ),
+                None,
+            )
+            expected_albums[entity_id] = _album_projection(record, previous=previous).document()
         elif isinstance(record, PersonManifest):
             expected_people[entity_id] = {"personId": entity_id, "displayName": record.display_name,
                                           "createdAt": record.created_at, "faceIds": [str(x) for x in record.face_ids]}
@@ -270,7 +328,28 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
         for row in sorted(rows, key=lambda x: (x["album_id"], x["position"], x["asset_id"])):
             actual_memberships.setdefault(row["album_id"], []).append(row["asset_id"])
     _compare(report, "ordered-membership", expected_memberships, actual_memberships)
+    active_tombstones = {}
     for identity, tombstone in sorted(tombstones.items()):
+        revisions = records.get(identity, [])
+        matching = [record for _key, record in revisions if record.revision == tombstone.revision]
+        if len(matching) != 1:
+            _issue(report.unresolved, "tombstone", f"{identity[0]}:{identity[1]}",
+                   "tombstone has no unique deletion manifest")
+            continue
+        deletion = matching[0]
+        if (
+            deletion.operation_id != tombstone.operation_id
+            or deletion.deleted_at != tombstone.deleted_at
+            or deletion.parent_revision != tombstone.parent_revision
+        ):
+            _issue(report.conflicting, "tombstone", f"{identity[0]}:{identity[1]}",
+                   "tombstone does not match its deletion manifest")
+            continue
+        head = selected.get(identity)
+        if head is not None and head.revision == tombstone.revision:
+            active_tombstones[identity] = tombstone
+
+    for identity, tombstone in sorted(active_tombstones.items()):
         actual = actual_assets.get(identity[1]) if identity[0] == "asset" else actual_albums.get(identity[1])
         if actual is None:
             _issue(report.missing, "tombstone", f"{identity[0]}:{identity[1]}", "tombstone target is missing")
@@ -278,8 +357,8 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
             _issue(report.divergent, "tombstone", f"{identity[0]}:{identity[1]}", "deletedAt differs")
     for kind, values in sorted((("asset", actual_assets), ("album", actual_albums))):
         for entity_id, document in values.items():
-            if document.get("deletedAt") and (kind, entity_id) not in tombstones:
-                _issue(report.missing, "tombstone", f"{kind}:{entity_id}", "deleted PostgreSQL row has no S3 tombstone")
+            if document.get("deletedAt") and (kind, entity_id) not in active_tombstones:
+                _issue(report.missing, "tombstone", f"{kind}:{entity_id}", "deleted projection row has no S3 tombstone")
 
     # Face and processing rows are durable-derived records; queues and leases
     # are intentionally never selected or written here.
@@ -289,10 +368,10 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
         actual_faces = {row["id"]: dict(row) for row in connection.execute(select(faces)).mappings()}
         actual_runs = {row["id"]: dict(row) for row in connection.execute(select(analysis_runs)).mappings()}
     face_projection = {key: {"id": value["id"], "asset_id": value["asset_id"], "analysis_run_id": value["analysis_run_id"],
-                             "person_id": value["person_id"], "face_index": value["face_index"], "bounding_box": value["bounding_box"],
+                             "person_id": value["person_id"], "face_index": value["face_index"], "bounding_box": _face_norm(value["bounding_box"]),
                              "confidence": value["confidence"], "embedding": value["embedding"]} for key, value in actual_faces.items()}
     expected_face_projection = {key: {"id": key, "asset_id": str(value["assetId"]), "analysis_run_id": str(value["analysisRunId"]),
-                                     "person_id": str(value["personId"]), "face_index": value["faceIndex"], "bounding_box": value["boundingBox"],
+                                     "person_id": str(value["personId"]), "face_index": value["faceIndex"], "bounding_box": _face_norm(value["boundingBox"]),
                                      "confidence": value["confidence"], "embedding": value["embedding"]} for key, value in expected_faces.items()}
     _compare(report, "face", expected_face_projection, face_projection)
     expected_run_projection = {key: {"id": key, "asset_id": str(value.asset_id), "analysis_type": value.processing_type,
@@ -302,6 +381,90 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
                                    "pipeline_version": value["pipeline_version"], "input_hash": value["input_hash"], "object_key": value["object_key"]}
                              for key, value in actual_runs.items()}
     _compare(report, "analysis-run", expected_run_projection, actual_run_projection)
+    expected_fingerprints = {
+        f"{record.asset_id}:{record.algorithm_version}": {
+            "asset_id": str(record.asset_id),
+            "algorithm_version": record.algorithm_version,
+            "phash": record.phash,
+            "dhash": record.dhash,
+            "width": record.width,
+            "height": record.height,
+            "chroma_histogram": record.chroma_histogram,
+        }
+        for (kind, _), values in records.items()
+        if kind == "fingerprint"
+        for record in [values[0][1]]
+    }
+    from photo_server.burst_authority import load_burst_state
+
+    burst = load_burst_state(storage)
+    expected_clusters = {}
+    expected_members = {}
+    if isinstance(burst, BurstManifest):
+        expected_clusters = {
+            str(cluster.cluster_id): {
+                "id": str(cluster.cluster_id),
+                "representative_asset_id": str(cluster.representative_asset_id),
+                "policy_version": burst.policy_version,
+            }
+            for cluster in burst.clusters
+        }
+        expected_members = {
+            f"{cluster.cluster_id}:{asset_id}": {
+                "cluster_id": str(cluster.cluster_id),
+                "asset_id": str(asset_id),
+            }
+            for cluster in burst.clusters
+            for asset_id in cluster.asset_ids
+        }
+        current_fingerprints = {
+            (str(record.asset_id), record.algorithm_version)
+            for (kind, _), values in records.items()
+            if kind == "fingerprint"
+            for record in [values[0][1]]
+        }
+        for cluster in burst.clusters:
+            for asset_id in cluster.asset_ids:
+                if (str(asset_id), BURST_HASH_VERSION) not in current_fingerprints:
+                    _issue(
+                        report.unresolved,
+                        "fingerprint",
+                        str(cluster.cluster_id),
+                        f"burst member {asset_id} has no current canonical fingerprint",
+                    )
+                asset = selected.get(("asset", str(asset_id)))
+                if not isinstance(asset, AssetManifest) or asset.deleted_at is not None:
+                    _issue(
+                        report.unresolved,
+                        "asset",
+                        str(cluster.cluster_id),
+                        f"burst member {asset_id} is missing or deleted",
+                    )
+        for asset_id in burst.excluded_asset_ids:
+            if (str(asset_id), BURST_HASH_VERSION) not in current_fingerprints:
+                _issue(
+                    report.unresolved,
+                    "fingerprint",
+                    "excludedAssetIds",
+                    f"excluded asset {asset_id} has no current canonical fingerprint",
+                )
+    actual_burst = (
+        catalog.burst_projection()
+        if hasattr(catalog, "burst_projection")
+        else {"fingerprints": [], "clusters": [], "members": []}
+    )
+    actual_fingerprints = {
+        f"{row['asset_id']}:{row['algorithm_version']}": row
+        for row in actual_burst["fingerprints"]
+    }
+    actual_clusters = {row["id"]: row for row in actual_burst["clusters"]}
+    actual_members = {
+        f"{row['cluster_id']}:{row['asset_id']}": row
+        for row in actual_burst["members"]
+    }
+    _compare(report, "fingerprint", expected_fingerprints, actual_fingerprints)
+    _compare(report, "burst-cluster", expected_clusters, actual_clusters)
+    _compare(report, "burst-member", expected_members, actual_members)
     asset_ids = set(expected_assets)
     person_ids = set(expected_people)
     run_ids = set(expected_runs)
@@ -321,7 +484,7 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
     for key in sorted(set(storage.keys("objects/")) - referenced):
         _issue(report.orphaned, "object", key, "immutable object is not referenced by a durable manifest")
     for key, values in records.items():
-        if key[0] in {"face", "processing"} and not values:
+        if key[0] in {"face", "processing", "fingerprint"} and not values:
             _issue(report.orphaned, "manifest", str(key), "manifest has no record")
 
     if (
@@ -335,18 +498,39 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
         report.status = "failed"
     elif apply and not dry_run and not report_only:
         report.status = "complete"
-        # Only repair absent rows.  Divergent rows remain PostgreSQL-authoritative
-        # and are never silently overwritten by maintenance.
+        # Only repair absent rows. Divergent projections are reported and are
+        # never silently overwritten by maintenance.
         for entity_id, document in expected_assets.items():
             if entity_id not in actual_assets:
                 from photo_server.models import Manifest
-                catalog.apply(Manifest.model_validate(document))
+                catalog.apply_projection(Manifest.model_validate(document))
                 report.repaired += 1
         for entity_id, document in expected_albums.items():
             if entity_id not in actual_albums:
                 from photo_server.models import Album
                 catalog.apply_album(Album.model_validate(document))
                 report.repaired += 1
+        burst_missing = any(
+            issue["category"] in {"fingerprint", "burst-cluster", "burst-member"}
+            for issue in report.missing
+        )
+        burst_divergent = any(
+            issue["category"] in {"fingerprint", "burst-cluster", "burst-member"}
+            for issue in report.divergent + report.orphaned
+        )
+        if (
+            burst_missing
+            and not burst_divergent
+            and isinstance(burst, BurstManifest)
+            and hasattr(catalog, "apply_burst_projection")
+        ):
+            fingerprints = [
+                values[0][1]
+                for (kind, _), values in records.items()
+                if kind == "fingerprint"
+            ]
+            catalog.apply_burst_projection(fingerprints, burst)
+            report.repaired += len(fingerprints) + len(burst.clusters)
         if not (report.unresolved or report.conflicting or report.malformed or report.failed):
             with catalog.engine.begin() as connection:
                 for entity_id, _document in expected_people.items():

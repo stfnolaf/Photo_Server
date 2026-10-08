@@ -1,7 +1,7 @@
 """Fail-closed, dry-run-only object retention and reachability planning.
 
-Phase 8 intentionally has no deletion path.  The planner validates the complete
-canonical namespace before it reports an object as reclaimable; an incomplete,
+The planner intentionally has no deletion path. It validates the complete
+canonical namespace before reporting an object as reclaimable; an incomplete,
 malformed, or unavailable scan produces an empty candidate set.
 """
 
@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.manifests import (
     FaceManifest,
+    FingerprintManifest,
     ManifestCodecError,
     ProcessingArtifact,
     decode,
@@ -22,6 +24,7 @@ from photo_server.manifests import (
 )
 
 CANONICAL_PREFIXES = (
+    "library-state/",
     "manifests/",
     "tombstones/",
     "objects/",
@@ -36,6 +39,8 @@ MANIFEST_KINDS = {
     "people": "person",
     "faces": "face",
     "processing": "processing-artifact",
+    "fingerprints": "fingerprint",
+    "bursts": "burst",
 }
 
 
@@ -124,12 +129,18 @@ def _identity(key: str) -> tuple[str, str, int] | None:
     if not key.endswith(".json"):
         return None
     try:
+        if key == "library-state/bursts.json":
+            return "burst-current", "state", 1
         if len(parts) == 4 and parts[0] == "manifests":
             kind = MANIFEST_KINDS.get(parts[1])
             if kind in {"asset", "album", "person"}:
                 return kind, parts[2], int(parts[3][:-5])
         if len(parts) == 3 and parts[0] == "manifests" and parts[1] in {"faces", "processing"}:
             return MANIFEST_KINDS[parts[1]], parts[2][:-5], 1
+        if len(parts) == 3 and parts[0] == "manifests" and parts[1] == "bursts":
+            return "burst", "state", int(parts[2][:-5])
+        if len(parts) == 4 and parts[0] == "manifests" and parts[1] == "fingerprints":
+            return "fingerprint", f"{parts[2]}:{parts[3][:-5]}", 1
         if len(parts) == 4 and parts[0] == "tombstones":
             return "tombstone", f"{parts[1]}:{parts[2]}", int(parts[3][:-5])
     except (KeyError, ValueError):
@@ -170,7 +181,9 @@ def collect_garbage(
         report.checkpoint = checkpoint_key
 
         keys: dict[str, list[str]] = {prefix: sorted(storage.keys(prefix)) for prefix in CANONICAL_PREFIXES}
-        manifest_keys = sorted(keys["manifests/"] + keys["tombstones/"])
+        manifest_keys = sorted(
+            keys["library-state/"] + keys["manifests/"] + keys["tombstones/"]
+        )
         records: dict[str, Any] = {}
         histories: dict[tuple[str, str], list[tuple[str, Any]]] = {}
         auxiliary: list[tuple[str, Any]] = []
@@ -183,7 +196,7 @@ def collect_garbage(
             kind = identity[0]
             try:
                 body = storage.read_bytes(key)
-                record = decode(body, kind)
+                record = decode(body, "burst" if kind == "burst-current" else kind)
                 if body != encode(record):
                     raise ManifestCodecError("record is not canonical")
             except Exception as error:
@@ -193,8 +206,12 @@ def collect_garbage(
             if kind == "tombstone":
                 tombstones.append((key, record))
             else:
-                if kind in {"asset", "album", "person"}:
-                    entity = (kind, str(getattr(record, f"{kind}_id")))
+                if kind in {"asset", "album", "person", "burst", "burst-current"}:
+                    entity = (
+                        (kind, "state")
+                        if kind in {"burst", "burst-current"}
+                        else (kind, str(getattr(record, f"{kind}_id")))
+                    )
                     histories.setdefault(entity, []).append((key, record))
                 else:
                     auxiliary.append((key, record))
@@ -211,6 +228,9 @@ def collect_garbage(
         for entity, values in histories.items():
             values.sort(key=lambda item: (item[1].revision, item[0]))
             latest = values[-1][1]
+            if entity[0] == "burst-current":
+                retained_keys.add(values[-1][0])
+                continue
             revisions = [record.revision for _, record in values]
             if len(revisions) != len(set(revisions)):
                 report.errors.append({"key": entity[1], "reason": "duplicate manifest revision"})
@@ -260,6 +280,8 @@ def collect_garbage(
             age = now - _parse_time(created_at) if created_at else timedelta(0)
             if age <= timedelta(days=policy.processing_artifact_days):
                 retained_keys.add(key)
+            if isinstance(record, FingerprintManifest):
+                retained_keys.add(key)
         for key in sorted(retained_keys):
             record = records.get(key)
             if record is None:
@@ -302,6 +324,41 @@ def collect_garbage(
                 )
                 if record.source_object_key:
                     referenced.setdefault(record.source_object_key, set()).add(key)
+
+        fingerprint_assets = {
+            (str(record.asset_id), record.algorithm_version): key
+            for key, record in auxiliary
+            if isinstance(record, FingerprintManifest)
+        }
+        burst_history = histories.get(("burst-current", "state"), []) or histories.get(
+            ("burst", "state"), []
+        )
+        if burst_history:
+            burst_key, burst = max(burst_history, key=lambda item: item[1].revision)
+            for cluster in burst.clusters:
+                for asset_id in cluster.asset_ids:
+                    asset_id = str(asset_id)
+                    fingerprint_key = fingerprint_assets.get((asset_id, BURST_HASH_VERSION))
+                    if fingerprint_key is None:
+                        report.unresolved_references.append(
+                            {
+                                "key": burst_key,
+                                "reason": f"burst member {asset_id} has no fingerprint manifest",
+                            }
+                        )
+                    else:
+                        referenced.setdefault(fingerprint_key, set()).add(burst_key)
+                    asset_history = histories.get(("asset", asset_id), [])
+                    if not asset_history:
+                        report.unresolved_references.append(
+                            {
+                                "key": burst_key,
+                                "reason": f"burst member {asset_id} has no asset manifest",
+                            }
+                        )
+                    for asset_key, _record in asset_history:
+                        if asset_key in retained_keys:
+                            referenced.setdefault(asset_key, set()).add(burst_key)
 
         # Recovery checkpoints are roots.  Their payload is intentionally opaque,
         # but exact canonical key strings are safe to recognize.

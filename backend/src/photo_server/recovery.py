@@ -1,4 +1,4 @@
-"""Phase 9 immutable recovery checkpoints.
+"""Immutable recovery checkpoints for canonical S3 state.
 
 The builder is deliberately storage-and-database agnostic.  ``Storage``-like
 objects are accepted so recovery can be exercised against a disposable S3
@@ -20,14 +20,17 @@ from typing import Any, Callable
 from photo_server.manifests import ManifestCodecError, canonical_json, decode
 
 CHECKPOINT_SCHEMA_VERSION = 1
-TOOL_VERSION = "phase9-recovery-v1"
+TOOL_VERSION = "recovery-v1"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CANONICAL_PREFIXES = (
+    ("library-state/", "burst"),
     ("manifests/assets/", "asset"),
     ("manifests/albums/", "album"),
     ("manifests/people/", "person"),
     ("manifests/faces/", "face"),
     ("manifests/processing/", "processing"),
+    ("manifests/fingerprints/", "fingerprint"),
+    ("manifests/bursts/", "burst"),
     ("tombstones/", "tombstone"),
 )
 
@@ -150,7 +153,7 @@ def encode_checkpoint(value: RecoveryCheckpoint | dict[str, Any]) -> bytes:
             raise RecoveryError("invalid manifest inventory entry")
         if not isinstance(item["key"], str) or not item["key"].endswith(".json"):
             raise RecoveryError("invalid manifest inventory key")
-        if not isinstance(item["kind"], str) or item["kind"] not in {"asset", "album", "person", "face", "processing", "tombstone"}:
+        if not isinstance(item["kind"], str) or item["kind"] not in {"asset", "album", "person", "face", "processing", "fingerprint", "burst", "tombstone"}:
             raise RecoveryError("invalid manifest inventory kind")
         if not isinstance(item["schemaVersion"], int) or not isinstance(item["revision"], (int, type(None))):
             raise RecoveryError("invalid manifest inventory metadata")
