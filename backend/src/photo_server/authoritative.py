@@ -11,17 +11,29 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
+from photo_server.ai_publication import (
+    build_face_record,
+    build_processing_artifact,
+    cluster_faces,
+    derive_face_id,
+    derive_person_id,
+    publish_ai_artifact,
+    s3_face_state,
+    unit,
+)
 from photo_server.config import LibraryError
 from photo_server.manifests import (
     AlbumManifest,
     AssetManifest,
     BlobReference,
+    FaceManifest,
     Location,
     PersonManifest,
     Tombstone,
     UserState,
     decode_album_manifest,
     decode_asset_manifest,
+    decode_face_manifest,
     decode_person_manifest,
     encode,
 )
@@ -392,3 +404,185 @@ class AuthoritativeMutationCoordinator:
             self._publish_person(operation_id, target, face_ids=target_faces)
             return
         raise LibraryError("Invalid face operation")
+
+    def publish_ai_analysis(self, run_id: UUID, request: dict) -> dict:
+        """Publish one AI run S3-first: result object, face records, person revisions.
+
+        Every write is immutable and adoptive, and the run id is the
+        deterministic identity of the result content, so a retry re-reads
+        what the first attempt published and only fills the gaps. Faces
+        whose record already exists are adopted verbatim — the record's
+        person is the truth — and only the missing faces are clustered,
+        against the current per-person centroid sums; a face matching
+        nothing opens a new person with a deterministic id. Person
+        revisions build on the head manifest, so a concurrent rename or
+        merge is never regressed, and a revision is skipped (but still
+        reported) when the head already contains all of the run's faces.
+        The centroid read is best-effort and deliberately ordered late
+        (after the result object is durable) to minimize the window in
+        which a parallel run can skew clustering; a skewed assignment is
+        recoverable through face merge, unlike a lost one.
+        """
+        library_id = self._library_id()
+        result = request["result"]
+        model = result.get("models", {}).get("semantic") or {}
+        record, payload_bytes, built = build_processing_artifact(
+            library_id,
+            result,
+            created_at=request["createdAt"],
+            model_name=model.get("name"),
+            model_version=model.get("digest"),
+            source_object_key=request.get("sourceObjectKey"),
+        )
+        if built != str(run_id):
+            raise LibraryError(f"AI run id does not match the result content: {run_id}")
+        publish_ai_artifact(
+            self.service.storage, self.service.publisher, record, payload_bytes
+        )
+
+        centroids = self.service.catalog.ai_centroids()
+        people = self.service.catalog.all_people()
+        if not centroids and not people:
+            centroids, people = s3_face_state(self.service.storage)
+        person_sums = {item["personId"]: list(item["sum"]) for item in centroids}
+        snapshots = {item["personId"]: item for item in people}
+
+        asset_id = request["assetId"]
+        faces = request["faces"]
+        assignments: dict[int, str] = {}
+        stored_records: dict[int, FaceManifest] = {}
+        pending: list[tuple[int, dict]] = []
+        used: set[str] = set()
+        for index, face in enumerate(faces):
+            face_id = str(derive_face_id(library_id, asset_id, run_id, index))
+            key = f"manifests/faces/{face_id}.json"
+            if self.service.storage.head(key) is None:
+                pending.append((index, face))
+                continue
+            record = decode_face_manifest(self.service.storage.read_bytes(key))
+            person_id = str(record.person_id)
+            assignments[index] = person_id
+            vector = unit(record.embedding)
+            person_sums.setdefault(person_id, [0.0] * len(vector))
+            person_sums[person_id] = [
+                a + b for a, b in zip(person_sums[person_id], vector, strict=True)
+            ]
+            used.add(person_id)
+            stored_records[index] = record
+        for index, person_id in cluster_faces(
+            pending,
+            person_sums,
+            used,
+            self.service.settings.face_match_threshold,
+            lambda index: str(derive_person_id(library_id, run_id, index)),
+        ):
+            assignments[index] = person_id
+
+        final_faces: list[dict] = []
+        for index, face in enumerate(faces):
+            face_id = str(derive_face_id(library_id, asset_id, run_id, index))
+            record = stored_records.get(index)
+            if record is None:
+                record, _ = build_face_record(
+                    library_id, face_id, asset_id, run_id, index, face, assignments[index]
+                )
+                self.service.publisher.publish_record(
+                    f"manifests/faces/{face_id}.json", record, "face"
+                )
+            box = record.bounding_box
+            final_faces.append(
+                {
+                    "faceId": face_id,
+                    "personId": assignments[index],
+                    "faceIndex": index,
+                    "box": [box["x"], box["y"], box["width"], box["height"]],
+                    "confidence": record.confidence,
+                    "embedding": record.embedding,
+                }
+            )
+
+        new_faces: dict[str, list[str]] = {}
+        for face in final_faces:
+            new_faces.setdefault(face["personId"], []).append(face["faceId"])
+        person_revisions: list[dict] = []
+        for person_id in sorted(new_faces):
+            added = set(new_faces[person_id])
+            revision = self._person_revision(UUID(person_id))
+            head = None
+            tombstoned = False
+            if revision:
+                candidate = decode_person_manifest(
+                    self.service.storage.read_bytes(
+                        f"manifests/people/{person_id}/{revision}.json"
+                    )
+                )
+                if candidate.deleted_at is None:
+                    head = candidate
+                else:
+                    tombstoned = True
+            if head is not None:
+                display_name = head.display_name
+                created_at = head.created_at
+                base = {str(face_id) for face_id in head.face_ids}
+            else:
+                snapshot = snapshots.get(person_id)
+                display_name = snapshot["displayName"] if snapshot else ""
+                # The codec requires Z-normalized RFC 3339 timestamps; the
+                # request carries +00:00-suffixed wall clock, so normalize
+                # at write time (a no-op for Z values).
+                created_at = _utc(
+                    (snapshot["createdAt"] if snapshot else "") or request["createdAt"]
+                )
+                base = set(snapshot["faceIds"]) if snapshot else set()
+            new_set = sorted(base | added)
+            if head is not None:
+                if not added <= base:
+                    self._put(
+                        f"manifests/people/{person_id}/{revision + 1}.json",
+                        PersonManifest(
+                            library_id=library_id,
+                            person_id=UUID(person_id),
+                            revision=revision + 1,
+                            parent_revision=revision or None,
+                            operation_id=run_id,
+                            created_at=created_at,
+                            display_name=display_name,
+                            face_ids=tuple(UUID(face_id) for face_id in new_set),
+                            deleted_at=None,
+                        ),
+                    )
+            elif not tombstoned:
+                # A person without any head opens at revision 1; a
+                # tombstoned one is never revived by an AI run.
+                self._put(
+                    f"manifests/people/{person_id}/{revision + 1}.json",
+                    PersonManifest(
+                        library_id=library_id,
+                        person_id=UUID(person_id),
+                        revision=revision + 1,
+                        parent_revision=revision or None,
+                        operation_id=run_id,
+                        created_at=created_at,
+                        display_name=display_name,
+                        face_ids=tuple(UUID(face_id) for face_id in new_set),
+                        deleted_at=None,
+                    ),
+                )
+            person_revisions.append(
+                {
+                    "personId": person_id,
+                    "displayName": display_name,
+                    "createdAt": created_at,
+                    "faceIds": new_set,
+                }
+            )
+
+        return {
+            "assetId": request["assetId"],
+            "createdAt": request["createdAt"],
+            "sourceObjectKey": request.get("sourceObjectKey"),
+            "reusePolicyVersion": request.get("reusePolicyVersion"),
+            "result": result,
+            "faces": final_faces,
+            "personRevisions": person_revisions,
+        }

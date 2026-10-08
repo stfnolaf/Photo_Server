@@ -41,7 +41,7 @@ import httpx
 from pydantic import ValidationError
 
 from photo_server.ai_pipeline import independent
-from photo_server.ai_publication import build_processing_artifact, publish_ai_artifact
+from photo_server.ai_publication import derive_run_id, result_sha
 from photo_server.analysis import (
     ANALYSIS_TYPE,
     PIPELINE_VERSION,
@@ -51,7 +51,6 @@ from photo_server.analysis import (
     jpeg_dimensions,
     prepare_jpeg,
     resolve_model_digest,
-    searchable_text,
 )
 from photo_server.app_logging import log_event
 from photo_server.browsing import camera_time
@@ -69,6 +68,7 @@ from photo_server.reuse import (
     extract_semantic,
 )
 from photo_server.service import Service
+from photo_server.state import mutate_ai
 from photo_server.worker import cache_paths, generate
 
 # Gate / dispatcher tuning (Phase 3A of the split plan).
@@ -414,10 +414,6 @@ class AIWorker:
 
             semantic = semantic_details["semantic"]
             created_at = datetime.now(UTC).isoformat()
-            public_result = {
-                **semantic.document(),
-                "faceCount": len(faces),
-            }
             model_name = self.service.settings.ai_model
             model_version = semantic_details["model_digest"]
             source_run_id = semantic_details["source_run_id"]
@@ -448,45 +444,40 @@ class AIWorker:
                 payload["semanticSourceRunId"] = source_run_id
             if semantic_details["similarity"] is not None:
                 payload["similarity"] = semantic_details["similarity"]
-            record, result_bytes, run_id = build_processing_artifact(
-                str(manifest.library_id),
-                payload,
-                created_at=created_at,
-                model_name=model_name,
-                model_version=model_version,
+            run_id = str(
+                derive_run_id(
+                    str(manifest.library_id),
+                    ANALYSIS_TYPE,
+                    asset_id,
+                    manifest.primary.sha256,
+                    PIPELINE_VERSION,
+                    result_sha(payload),
+                )
             )
-            object_key, _record_key, _adopted = publish_ai_artifact(
-                self.service.storage,
-                self.service.publisher,
-                record,
-                result_bytes,
+            # S3-first: the canonical result object, face records, and
+            # person revisions are published before the projection, and
+            # the projection is byte-adopted on retry.
+            completed = mutate_ai(
+                self.service,
+                {
+                    "assetId": asset_id,
+                    "createdAt": created_at,
+                    "sourceObjectKey": None,
+                    "reusePolicyVersion": semantic_details["reuse_policy_version"],
+                    "result": payload,
+                    "faces": faces,
+                },
             )
             # The data-plane copy is kept for the migration period; it
             # duplicates the canonical object and is not authoritative. The
-            # storage is immutable, so a retry adopts the existing copy.
+            # storage is immutable, so a retry adopts the existing copy. It
+            # is written after the projection, so a failed projection
+            # leaves no orphan copy.
             data_plane_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
             if self.service.storage.head(data_plane_key) is None:
                 self.service.storage.put_json(
                     data_plane_key, {"runId": run_id, "createdAt": created_at, **payload}
                 )
-            completed = self.service.catalog.complete_ai_analysis(
-                asset_id=asset_id,
-                run_id=run_id,
-                model_name=self.service.settings.ai_model,
-                model_version=semantic_details["model_digest"],
-                pipeline_version=PIPELINE_VERSION,
-                input_hash=manifest.primary.sha256,
-                object_key=object_key,
-                result=public_result,
-                searchable=searchable_text(semantic),
-                detected_faces=faces,
-                match_threshold=self.service.settings.face_match_threshold,
-                created_at=created_at,
-                semantic_origin=semantic_details["semantic_origin"],
-                source_run_id=source_run_id,
-                reuse_policy_version=semantic_details["reuse_policy_version"],
-                similarity=semantic_details["similarity"],
-            )
             return {
                 "jobType": "analysis",
                 "assetId": asset_id,
@@ -803,10 +794,6 @@ class AIWorker:
             stage_started = time.perf_counter()
             current_timing_stage = "publish"
             created_at = datetime.now(UTC).isoformat()
-            public_result = {
-                **semantic.document(),
-                "faceCount": len(faces),
-            }
             model_name = self.service.settings.ai_model
             payload = {
                 "schemaVersion": 1,
@@ -837,45 +824,40 @@ class AIWorker:
                     "runId": source_run_id,
                 }
                 payload["similarity"] = similarity
-            record, result_bytes, run_id = build_processing_artifact(
-                str(manifest.library_id),
-                payload,
-                created_at=created_at,
-                model_name=model_name,
-                model_version=model_digest,
+            run_id = str(
+                derive_run_id(
+                    str(manifest.library_id),
+                    ANALYSIS_TYPE,
+                    asset_id,
+                    manifest.primary.sha256,
+                    PIPELINE_VERSION,
+                    result_sha(payload),
+                )
             )
-            object_key, _record_key, _adopted = publish_ai_artifact(
-                self.service.storage,
-                self.service.publisher,
-                record,
-                result_bytes,
+            # S3-first: the canonical result object, face records, and
+            # person revisions are published before the projection, and
+            # the projection is byte-adopted on retry.
+            completed = mutate_ai(
+                self.service,
+                {
+                    "assetId": asset_id,
+                    "createdAt": created_at,
+                    "sourceObjectKey": None,
+                    "reusePolicyVersion": reuse_policy_version,
+                    "result": payload,
+                    "faces": faces,
+                },
             )
             # The data-plane copy is kept for the migration period; it
             # duplicates the canonical object and is not authoritative. The
-            # storage is immutable, so a retry adopts the existing copy.
+            # storage is immutable, so a retry adopts the existing copy. It
+            # is written after the projection, so a failed projection
+            # leaves no orphan copy.
             data_plane_key = f"analysis/{asset_id}/{PIPELINE_VERSION}/{run_id}.json"
             if self.service.storage.head(data_plane_key) is None:
                 self.service.storage.put_json(
                     data_plane_key, {"runId": run_id, "createdAt": created_at, **payload}
                 )
-            completed = self.service.catalog.complete_ai_analysis(
-                asset_id=asset_id,
-                run_id=run_id,
-                model_name=self.service.settings.ai_model,
-                model_version=model_digest,
-                pipeline_version=PIPELINE_VERSION,
-                input_hash=manifest.primary.sha256,
-                object_key=object_key,
-                result=public_result,
-                searchable=searchable_text(semantic),
-                detected_faces=faces,
-                match_threshold=self.service.settings.face_match_threshold,
-                created_at=created_at,
-                semantic_origin=semantic_origin,
-                source_run_id=source_run_id,
-                reuse_policy_version=reuse_policy_version,
-                similarity=similarity,
-            )
             result = {
                 "jobType": "analysis",
                 "assetId": asset_id,

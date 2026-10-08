@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import time as day_time
 from threading import RLock
 from time import time
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from sqlalchemy import (
     BigInteger,
@@ -27,11 +27,18 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 
+from photo_server.ai_publication import result_sha, unit
+from photo_server.analysis import SemanticAnalysis, searchable_text
 from photo_server.browsing import BrowseQuery, asset_summary, browse_fields, camera_time
 from photo_server.config import LibraryError, Settings
 from photo_server.fingerprints import Candidate, Fingerprint
 from photo_server.migrations import migrate
 from photo_server.models import Album, Manifest, Mutation, UserState
+
+
+def _parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
 
 schema = MetaData()
 library = Table(
@@ -870,6 +877,39 @@ class Catalog:
             for row in rows
         ]
 
+    def ai_centroids(self) -> list[dict]:
+        """Per-person sums of unit embeddings over current AI runs.
+
+        Read outside any lock and outside the commit transaction; the
+        caller treats the result as a best-effort clustering seed.
+        """
+        with self.engine.connect() as connection:
+            rows = (
+                connection.execute(
+                    select(faces.c.person_id, faces.c.embedding)
+                    .where(analysis_runs.c.is_current)
+                    .join(
+                        analysis_runs,
+                        analysis_runs.c.id == faces.c.analysis_run_id,
+                    )
+                    .where(analysis_runs.c.analysis_type == "photo-ai")
+                )
+                .tuples()
+                .all()
+            )
+        sums: dict[str, list[float]] = {}
+        for person_id, embedding in rows:
+            vector = unit(embedding)
+            total = sums.get(person_id)
+            sums[person_id] = (
+                [a + b for a, b in zip([0.0] * len(vector), vector, strict=True)]
+                if total is None
+                else [a + b for a, b in zip(total, vector, strict=True)]
+            )
+        return [
+            {"personId": person_id, "sum": sums[person_id]} for person_id in sorted(sums)
+        ]
+
     def apply_person(self, person, face_ids: tuple[UUID, ...] = ()):
         """Project a person snapshot and its canonical assignments.
 
@@ -1583,99 +1623,62 @@ class Catalog:
     ) -> dict:
         return self.queue_processing(asset_ids, ["ai-v1"], include_deleted, force_full)
 
-    def complete_ai_analysis(
-        self,
-        *,
-        asset_id: str,
-        run_id: str,
-        model_name: str,
-        model_version: str,
-        pipeline_version: str,
-        input_hash: str,
-        object_key: str,
-        result: dict,
-        searchable: str,
-        detected_faces: list[dict],
-        match_threshold: float,
-        created_at: str,
-        semantic_origin: str = "computed",
-        source_run_id: str | None = None,
-        reuse_policy_version: str | None = None,
-        similarity: dict | None = None,
-    ) -> dict:
-        """Atomically publish a run, cluster its faces, and finish its job."""
-        from math import sqrt
-        def unit(vector):
-            length = sqrt(sum(value * value for value in vector)) or 1.0
-            return [value / length for value in vector]
+    def commit_ai_analysis(self, run_id: str, request: dict) -> dict:
+        """Project an AI run whose canonical records are already published.
 
+        ``request`` is the coordinator's enriched request: the result
+        payload, the face records' assignments, and the published person
+        revisions.  The operation row is the projection gate — if it
+        exists, the stored result is returned for an identical request
+        and a hard error is raised for a different one — so a committed
+        projection is a no-op and a divergent one fails closed.  The
+        advisory lock preserves the historical serialization of
+        current-run replacement against parallel workers.
+        """
+        asset_id = str(request["assetId"])
+        result = request["result"]
+        model = result.get("models", {}).get("semantic") or {}
+        semantic_origin = result.get("semanticOrigin", "computed")
+        source = result.get("semanticSource")
+        source_run_id = result.get("semanticSourceRunId")
+        if source_run_id is None and isinstance(source, dict):
+            source_run_id = source.get("runId")
+        face_entries = request["faces"]
+        person_count = len({face["personId"] for face in face_entries})
         with self.engine.begin() as connection:
-            # Publication takes an advisory lock while face clustering and
-            # current-run replacement are serialized. Never let a blocked
-            # database lock hold the parent job indefinitely.
+            # Publication takes an advisory lock while current-run
+            # replacement is serialized. Never let a blocked database
+            # lock hold the parent job indefinitely.
             connection.execute(text("SET LOCAL lock_timeout = '10s'"))
             connection.execute(text("SET LOCAL statement_timeout = '120s'"))
             # Face centroids and current-run replacement must be serialized even
             # if an operator deliberately starts more than one AI worker.
             connection.execute(text("SELECT pg_advisory_xact_lock(7046868303)"))
+            stored = (
+                connection.execute(
+                    select(operations.c.request, operations.c.result)
+                    .where(operations.c.id == run_id)
+                    .with_for_update()
+                )
+                .tuples()
+                .one_or_none()
+            )
+            if stored is not None:
+                if stored[0] != request:
+                    raise LibraryError("Operation ID was reused with a different request")
+                return dict(stored[1])
             current_hash = connection.scalar(
                 select(assets.c.sha256).where(assets.c.id == asset_id).with_for_update()
             )
             if current_hash is None:
                 raise FileNotFoundError("AI job references a missing asset")
-            if current_hash != input_hash:
+            if current_hash != result["inputSha256"]:
                 raise LibraryError("Asset changed while AI analysis was running")
-
-            face_table = faces
-            centroid_rows = connection.execute(
-                select(face_table.c.person_id, face_table.c.embedding)
-                .select_from(
-                    face_table.join(
-                        analysis_runs,
-                        face_table.c.analysis_run_id == analysis_runs.c.id,
-                    )
-                )
-                .where(analysis_runs.c.is_current)
-            )
-            sums: dict[str, list[float]] = {}
-            for person_id, embedding in centroid_rows:
-                vector = unit(embedding)
-                if person_id not in sums:
-                    sums[person_id] = [0.0] * len(vector)
-                sums[person_id] = [a + b for a, b in zip(sums[person_id], vector, strict=True)]
-
-            assigned = []
-            used: set[str] = set()
-            for index, face in enumerate(detected_faces):
-                vector = unit(face["embedding"])
-                best_person, best_score = None, -1.0
-                for person_id, total in sums.items():
-                    if person_id in used:
-                        continue
-                    center = unit(total)
-                    score = sum(a * b for a, b in zip(center, vector, strict=True))
-                    if score > best_score:
-                        best_person, best_score = person_id, score
-                if best_person is None or best_score <= match_threshold:
-                    best_person = str(uuid4())
-                    connection.execute(
-                        insert(people).values(
-                            id=best_person,
-                            display_name="",
-                            created_at=datetime.fromisoformat(created_at),
-                        )
-                    )
-                    sums[best_person] = [0.0] * len(vector)
-                sums[best_person] = [a + b for a, b in zip(sums[best_person], vector, strict=True)]
-                used.add(best_person)
-                assigned.append((index, best_person, face))
-
-            public_result = {**result, "personCount": len(used)}
             connection.execute(
                 analysis_runs.update()
                 .where(
                     analysis_runs.c.asset_id == asset_id,
-                    analysis_runs.c.analysis_type == "photo-ai",
+                    analysis_runs.c.analysis_type == result["analysisType"],
                     analysis_runs.c.is_current,
                 )
                 .values(is_current=False)
@@ -1688,38 +1691,42 @@ class Catalog:
             ).mappings().first()
             if existing is None:
                 connection.execute(
-                    insert(analysis_runs).values(
+                    analysis_runs.insert().values(
                         id=run_id,
                         asset_id=asset_id,
-                        analysis_type="photo-ai",
-                        model_name=model_name,
-                        model_version=model_version,
-                        pipeline_version=pipeline_version,
-                        input_hash=input_hash,
-                        object_key=object_key,
-                        result=public_result,
-                        searchable_text=searchable,
+                        analysis_type=result["analysisType"],
+                        model_name=model.get("name") or "",
+                        model_version=model.get("digest") or "",
+                        pipeline_version=result["pipelineVersion"],
+                        input_hash=result["inputSha256"],
+                        object_key=f"objects/{result_sha(result)}",
+                        result={
+                            **result["semantic"],
+                            "faceCount": len(face_entries),
+                            "personCount": person_count,
+                        },
+                        searchable_text=self._searchable_for(result["semantic"]),
                         is_current=True,
-                        created_at=datetime.fromisoformat(created_at),
+                        created_at=_parse_utc(request["createdAt"]),
                         semantic_origin=semantic_origin,
                         source_run_id=source_run_id,
-                        reuse_policy_version=reuse_policy_version,
-                        similarity=similarity,
+                        reuse_policy_version=request.get("reusePolicyVersion"),
+                        similarity=result.get("similarity"),
                     )
                 )
             else:
                 for field, value in {
                     "asset_id": asset_id,
-                    "analysis_type": "photo-ai",
-                    "model_name": model_name,
-                    "model_version": model_version,
-                    "pipeline_version": pipeline_version,
-                    "input_hash": input_hash,
-                    "object_key": object_key,
+                    "analysis_type": result["analysisType"],
+                    "model_name": model.get("name") or "",
+                    "model_version": model.get("digest") or "",
+                    "pipeline_version": result["pipelineVersion"],
+                    "input_hash": result["inputSha256"],
+                    "object_key": f"objects/{result_sha(result)}",
                     "semantic_origin": semantic_origin,
                     "source_run_id": source_run_id,
-                    "reuse_policy_version": reuse_policy_version,
-                    "similarity": similarity,
+                    "reuse_policy_version": request.get("reusePolicyVersion"),
+                    "similarity": result.get("similarity"),
                 }.items():
                     if existing[field] != value:
                         raise LibraryError(
@@ -1733,28 +1740,39 @@ class Catalog:
                     .where(analysis_runs.c.id == run_id)
                     .values(
                         is_current=True,
-                        result=public_result,
-                        searchable_text=searchable,
+                        result={
+                            **result["semantic"],
+                            "faceCount": len(face_entries),
+                            "personCount": person_count,
+                        },
+                        searchable_text=self._searchable_for(result["semantic"]),
                     )
                 )
+            # Person rows first: the face assignments below reference
+            # them by foreign key, and this loop is the projection for
+            # every person the run assigned a face to.
+            for person in request.get("personRevisions") or []:
+                self._commit_ai_person(connection, person)
+            # Unconditional on purpose: a no-op on a fresh run, defensive on
+            # a retry where a crashed first attempt may have left rows.
+            connection.execute(
+                faces.delete().where(faces.c.analysis_run_id == run_id)
+            )
+            if face_entries:
                 connection.execute(
-                    face_table.delete().where(face_table.c.analysis_run_id == run_id)
-                )
-            if assigned:
-                connection.execute(
-                    insert(face_table),
+                    insert(faces),
                     [
                         {
-                            "id": str(uuid4()),
+                            "id": face["faceId"],
                             "asset_id": asset_id,
                             "analysis_run_id": run_id,
-                            "person_id": person_id,
-                            "face_index": index,
+                            "person_id": face["personId"],
+                            "face_index": face["faceIndex"],
                             "bounding_box": face["box"],
                             "confidence": face["confidence"],
                             "embedding": face["embedding"],
                         }
-                        for index, person_id, face in assigned
+                        for face in face_entries
                     ],
                 )
             connection.execute(
@@ -1778,7 +1796,55 @@ class Catalog:
                 )
                 .values(status="ready", error=None, lease_until=None)
             )
-        return {"faceCount": len(assigned), "personCount": len(used)}
+            # The operation row lands last: a committed projection always
+            # has it, and it is the idempotency gate for the next retry.
+            connection.execute(
+                operations.insert().values(
+                    id=run_id,
+                    request=request,
+                    result={"faceCount": len(face_entries), "personCount": person_count},
+                )
+            )
+        return {"faceCount": len(face_entries), "personCount": person_count}
+
+    @staticmethod
+    def _searchable_for(semantic: dict) -> str:
+        """Search text for the stored semantic result; unparseable input
+        degrades to empty rather than failing the projection."""
+        try:
+            return searchable_text(SemanticAnalysis.model_validate(semantic))
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _commit_ai_person(connection, person: dict) -> None:
+        """Mirror one published person revision into the people table.
+
+        Only the person's identity is projected; face membership is
+        derived from face rows at read time.  A stored person whose
+        creation time diverges from the published revision is a hard
+        error — the canonical head is the authority — but a name is
+        never written on an existing row, so an AI run can never
+        regress a name a face operation chose.
+        """
+        existing = (
+            connection.execute(
+                select(people).where(people.c.id == person["personId"]).with_for_update()
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing is None:
+            connection.execute(
+                people.insert().values(
+                    id=person["personId"],
+                    display_name=person["displayName"],
+                    created_at=_parse_utc(person["createdAt"]),
+                )
+            )
+            return
+        if existing["created_at"] != _parse_utc(person["createdAt"]):
+            raise LibraryError(f"AI person projection diverged for person {person['personId']}")
 
     def analysis_status(self, asset_id: str) -> dict:
         face_table = faces

@@ -1,6 +1,7 @@
 """S3-authoritative mutation entry points and database projection updates."""
 
 from threading import RLock
+from uuid import UUID
 
 from photo_server.models import Album, Manifest, Mutation
 
@@ -117,5 +118,59 @@ def mutate_face(service, operation_id, request: dict) -> dict:
             service.publisher.record_reconciliation(
                 operation_id,
                 {"status": "canonical-written-projection-failed", "faceOperation": request, "error": str(error)},
+            )
+            raise
+
+
+def mutate_ai(service, request: dict) -> dict:
+    """Publish an AI run S3-first, then apply its projection.
+
+    The run id is derived from the result content, so it doubles as
+    the operation id.  The precheck compares only the stable identity
+    fields: the stored request is enriched with the first publication's
+    face assignments, which are byte-stable for the same content but
+    not part of the logical identity.
+    """
+    from photo_server.ai_publication import derive_run_id, result_sha
+
+    run_id = str(
+        derive_run_id(
+            service.library_id,
+            request["result"]["analysisType"],
+            request["assetId"],
+            request["result"]["inputSha256"],
+            request["result"]["pipelineVersion"],
+            result_sha(request["result"]),
+        )
+    )
+    previous = service.catalog.operation(run_id)
+    if previous is not None:
+        stable = {
+            key: value
+            for key, value in previous["request"].items()
+            if key in {"assetId", "result", "sourceObjectKey", "reusePolicyVersion"}
+        }
+        current = {key: request.get(key) for key in stable}
+        if stable != current:
+            from photo_server.config import LibraryError
+
+            raise LibraryError("Operation ID was reused with a different request")
+        return previous["result"]
+    from photo_server.authoritative import AuthoritativeMutationCoordinator
+
+    with _MUTATION_LOCK:
+        final = AuthoritativeMutationCoordinator(service).publish_ai_analysis(
+            UUID(run_id), request
+        )
+        try:
+            return service.catalog.commit_ai_analysis(run_id, final)
+        except Exception as error:
+            service.publisher.record_reconciliation(
+                run_id,
+                {
+                    "status": "canonical-written-projection-failed",
+                    "runId": run_id,
+                    "error": str(error),
+                },
             )
             raise

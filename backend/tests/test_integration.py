@@ -331,39 +331,86 @@ def test_ai_analysis_is_separate_searchable_durable_and_requeueable(backend):
     claimed = service.catalog.claim_ai_job()
     assert claimed == {"asset_id": asset_id, "preview_status": "ready", "force_full": False}
 
-    run_id = str(uuid4())
-    object_key = f"analysis/{asset_id}/photo-ai-v1/{run_id}.json"
-    service.storage.put_json(object_key, {"schemaVersion": 1, "runId": run_id})
-    result = {
-        "summary": "Two hikers beside an alpine lake",
-        "photoTypes": ["travel", "group"],
-        "scene": "mountain lake",
-        "setting": "outdoor",
-        "objects": [{"name": "backpack", "count": 2}],
-        "activities": ["hiking"],
-        "tags": ["mountains"],
-        "visibleText": [],
-        "faceCount": 2,
+    from uuid import UUID
+
+    from photo_server.ai_publication import (
+        canonical_payload,
+        decode_processing_artifact,
+        derive_run_id,
+        result_sha,
+    )
+    from photo_server.manifests import canonical_json
+    from photo_server.state import mutate_ai
+
+    faces = [
+        {"box": [0.1, 0.1, 0.2, 0.3], "confidence": 0.99, "embedding": [1.0, 0.0]},
+        {"box": [0.5, 0.1, 0.2, 0.3], "confidence": 0.98, "embedding": [1.0, 0.0]},
+    ]
+    payload = {
+        "schemaVersion": 1,
+        "libraryId": str(service.library_id),
+        "assetId": asset_id,
+        "analysisType": "photo-ai",
+        "inputSha256": manifest.primary.sha256,
+        "pipelineVersion": "photo-ai-v1",
+        "models": {
+            "semantic": {"name": "qwen-test", "digest": "sha256:model"},
+            "faceDetector": "yunet-2023mar",
+            "faceEmbedding": {"name": "adaf", "digest": "sha256:adaf"},
+        },
+        "semantic": {
+            "summary": "Two hikers beside an alpine lake",
+            "photoTypes": ["travel", "group"],
+            "scene": "mountain lake",
+            "setting": "outdoor",
+            "objects": [{"name": "backpack", "count": 2}],
+            "activities": ["hiking"],
+            "tags": ["mountains"],
+            "visibleText": [],
+        },
+        "faces": faces,
+        "metrics": {},
+        "semanticOrigin": "computed",
     }
-    completed = service.catalog.complete_ai_analysis(
-        asset_id=asset_id,
-        run_id=run_id,
-        model_name="qwen-test",
-        model_version="sha256:model",
-        pipeline_version="photo-ai-v1",
-        input_hash=manifest.primary.sha256,
-        object_key=object_key,
-        result=result,
-        searchable="Two hikers alpine lake travel group backpack hiking mountains",
-        detected_faces=[
-            {"box": [0.1, 0.1, 0.2, 0.3], "confidence": 0.99, "embedding": [1.0, 0.0]},
-            {"box": [0.5, 0.1, 0.2, 0.3], "confidence": 0.98, "embedding": [1.0, 0.0]},
-        ],
-        match_threshold=0.4,
-        created_at=datetime.now(UTC).isoformat(),
+    run_id = str(
+        derive_run_id(
+            service.library_id,
+            "photo-ai",
+            asset_id,
+            manifest.primary.sha256,
+            "photo-ai-v1",
+            result_sha(payload),
+        )
+    )
+    completed = mutate_ai(
+        service,
+        {
+            "assetId": asset_id,
+            "createdAt": datetime.now(UTC).isoformat(),
+            "sourceObjectKey": None,
+            "reusePolicyVersion": None,
+            "result": payload,
+            "faces": faces,
+        },
     )
     assert completed == {"faceCount": 2, "personCount": 2}
-    assert service.storage.get_json(object_key)["runId"] == run_id
+
+    # The canonical plane is the source of truth: a content-addressed
+    # object under objects/ and a processing record that references it.
+    record = decode_processing_artifact(
+        service.storage.read_bytes(f"manifests/processing/{run_id}.json")
+    )
+    assert record.artifact_id == UUID(run_id)
+    object_key = record.result_object.object_key
+    assert object_key == f"objects/{result_sha(payload)}"
+    assert service.storage.read_bytes(object_key) == canonical_json(canonical_payload(payload))
+    # The data-plane copy is kept for the migration period; the worker
+    # writes it after the projection, so a failed projection leaves none.
+    data_plane_key = f"analysis/{asset_id}/photo-ai-v1/{run_id}.json"
+    service.storage.put_json(
+        data_plane_key, {"runId": run_id, "createdAt": datetime.now(UTC).isoformat(), **payload}
+    )
+    assert service.storage.get_json(data_plane_key)["runId"] == run_id
 
     with TestClient(create_app(service.settings)) as client:
         detail = client.get(f"/assets/{asset_id}").json()
@@ -413,25 +460,43 @@ def test_people_api_names_combines_and_corrects_face_groups(backend):
     imported = service.import_batch([source.name], uuid4())
     assert imported["results"][0]["status"] == "imported", imported
     asset_id = imported["results"][0]["assetId"]
+    from photo_server.state import mutate_ai
+
     manifest = service.catalog.get(asset_id)
     assert run_once(service)["status"] == "ready"
-    service.catalog.complete_ai_analysis(
-        asset_id=asset_id,
-        run_id=str(uuid4()),
-        model_name="test",
-        model_version="test",
-        pipeline_version="photo-ai-v1",
-        input_hash=manifest.primary.sha256,
-        object_key=f"analysis/{asset_id}/test.json",
-        result={"faceCount": 3},
-        searchable="people",
-        detected_faces=[
-            {"box": [0.05, 0.1, 0.2, 0.3], "confidence": 0.99, "embedding": [1.0, 0.0]},
-            {"box": [0.4, 0.1, 0.2, 0.3], "confidence": 0.98, "embedding": [1.0, 0.0]},
-            {"box": [0.72, 0.1, 0.2, 0.3], "confidence": 0.97, "embedding": [1.0, 0.0]},
-        ],
-        match_threshold=0.4,
-        created_at=datetime.now(UTC).isoformat(),
+    faces = [
+        {"box": [0.05, 0.1, 0.2, 0.3], "confidence": 0.99, "embedding": [1.0, 0.0]},
+        {"box": [0.4, 0.1, 0.2, 0.3], "confidence": 0.98, "embedding": [1.0, 0.0]},
+        {"box": [0.72, 0.1, 0.2, 0.3], "confidence": 0.97, "embedding": [1.0, 0.0]},
+    ]
+    payload = {
+        "schemaVersion": 1,
+        "libraryId": str(service.library_id),
+        "assetId": asset_id,
+        "analysisType": "photo-ai",
+        "inputSha256": manifest.primary.sha256,
+        "pipelineVersion": "photo-ai-v1",
+        "models": {"semantic": {"name": "test", "digest": "test"}},
+        "semantic": {
+            "summary": "three people",
+            "photoTypes": ["group"],
+            "scene": "people",
+            "setting": "outdoor",
+        },
+        "faces": faces,
+        "metrics": {},
+        "semanticOrigin": "computed",
+    }
+    mutate_ai(
+        service,
+        {
+            "assetId": asset_id,
+            "createdAt": datetime.now(UTC).isoformat(),
+            "sourceObjectKey": None,
+            "reusePolicyVersion": None,
+            "result": payload,
+            "faces": faces,
+        },
     )
 
     with TestClient(create_app(service.settings)) as client:
