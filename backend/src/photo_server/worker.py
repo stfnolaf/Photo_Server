@@ -273,9 +273,9 @@ def evict_previews(service: Service) -> dict:
 def cache_dir_deleted(service: Service, asset_id: str) -> bool:
     """Delete one asset's files from its current cache directory, idempotently."""
     with _PREVIEW_CACHE_LOCK:
-        manifest = service.catalog.get(asset_id)
-        if manifest is None:
+        if service.catalog.get(asset_id) is None:
             return False
+        manifest = service.canonical_asset(asset_id)
         targets = cache_paths(service, manifest)
         for path in targets.values():
             try:
@@ -332,9 +332,9 @@ def _run_preview_once(service: Service) -> dict | None:
     if asset_id is None:
         return None
     try:
-        manifest = service.catalog.get(asset_id)
-        if manifest is None:
+        if service.catalog.get(asset_id) is None:
             raise ValueError("Preview job references missing asset")
+        manifest = service.canonical_asset(asset_id)
         status = "ready" if generate(service, manifest) else "unavailable"
         service.catalog.finish_job(asset_id, status)
         return {"jobType": "preview", "assetId": asset_id, "status": status}

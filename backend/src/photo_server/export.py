@@ -9,7 +9,7 @@ from photo_server.storage import canonical_json
 
 
 def export_library(settings: Settings, destination: Path, include_trash: bool = False) -> dict:
-    """Create a portable export from PostgreSQL state and immutable S3 originals."""
+    """Create a portable export from the query projection and canonical S3 objects."""
     service = Service(settings)
     try:
         service.initialize(recover_uploads=False)
@@ -25,9 +25,12 @@ def export_library(settings: Settings, destination: Path, include_trash: bool = 
         for manifest in manifests:
             if manifest.deleted_at and not include_trash:
                 continue
+            canonical = service.canonical_asset(manifest.asset_id)
+            canonical_blobs = {blob.blob_id: blob for blob in canonical.blobs}
             folder = destination / str(manifest.asset_id)
             folder.mkdir(exist_ok=True)
             for blob in manifest.blobs:
+                blob = canonical_blobs[blob.blob_id]
                 target = folder / blob.original_filename
                 if target.exists():
                     raise LibraryError(

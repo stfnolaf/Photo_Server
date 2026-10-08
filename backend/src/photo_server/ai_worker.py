@@ -185,9 +185,9 @@ class AIWorker:
     def _execute_face_stage(self, job: dict) -> dict:
         asset_id = job["asset_id"]
         try:
-            manifest = self.service.catalog.get(asset_id)
-            if manifest is None:
+            if self.service.catalog.get(asset_id) is None:
                 raise FileNotFoundError("Face stage references a missing asset")
+            manifest = self.service.canonical_asset(asset_id)
             if job["preview_status"] != "ready":
                 raise RuntimeError(
                     f"Face analysis requires a usable preview; preview is {job['preview_status']}"
@@ -324,9 +324,9 @@ class AIWorker:
     def _execute_semantic_stage(self, job: dict) -> dict:
         asset_id = job["asset_id"]
         try:
-            manifest = self.service.catalog.get(asset_id)
-            if manifest is None:
+            if self.service.catalog.get(asset_id) is None:
                 raise FileNotFoundError("Semantic stage references a missing asset")
+            manifest = self.service.canonical_asset(asset_id)
             if job["preview_status"] != "ready":
                 raise RuntimeError(
                     f"Semantic analysis requires a usable preview; preview is {job['preview_status']}"
@@ -344,7 +344,7 @@ class AIWorker:
                 jpeg = prepare_jpeg(preview, self.service.settings.ai_vlm_max_image_side)
                 fingerprint = compute_fingerprint(jpeg)
                 if self.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is None:
-                    self.service.catalog.upsert_fingerprint(asset_id, fingerprint)
+                    self.service.publish_fingerprint(asset_id, fingerprint)
                 model_digest = resolve_model_digest(self.service.settings, self.service.settings.ai_model)
                 decision, source, source_run_id, rejections, policy_evaluated = self._semantic_reuse(
                     manifest, fingerprint, jpeg, model_digest, force_full
@@ -402,9 +402,9 @@ class AIWorker:
         """
         asset_id = job["asset_id"]
         try:
-            manifest = self.service.catalog.get(asset_id)
-            if manifest is None:
+            if self.service.catalog.get(asset_id) is None:
                 raise FileNotFoundError("AI publish references a missing asset")
+            manifest = self.service.canonical_asset(asset_id)
             faces = self._load_face_stage(asset_id, manifest.primary.sha256)
             semantic_details = self._load_semantic_stage_details(
                 asset_id, manifest.primary.sha256
@@ -640,9 +640,9 @@ class AIWorker:
                 raise RuntimeError(
                     f"AI analysis requires a usable preview; preview is {job['preview_status']}"
                 )
-            manifest = self.service.catalog.get(asset_id)
-            if manifest is None:
+            if self.service.catalog.get(asset_id) is None:
                 raise FileNotFoundError("AI job references a missing asset")
+            manifest = self.service.canonical_asset(asset_id)
             preview = cache_paths(self.service, manifest)["preview"]
             regenerate_preview = False
             if not preview.is_file():
@@ -671,7 +671,7 @@ class AIWorker:
             stage = "fingerprint"
             fingerprint = compute_fingerprint(vlm_jpeg)
             if self.service.catalog.get_fingerprint(asset_id, BURST_HASH_VERSION) is None:
-                self.service.catalog.upsert_fingerprint(asset_id, fingerprint)
+                self.service.publish_fingerprint(asset_id, fingerprint)
             model_digest = resolve_model_digest(self.service.settings, self.service.settings.ai_model)
             begin_timing("reuse")
             stage = "semantic"
@@ -1074,9 +1074,9 @@ class AIWorker:
 
     def _load_reuse_source(self, candidate, settings) -> dict | None:
         """Build the ``ReuseAsset`` fields for a candidate, or ``None`` to skip it."""
-        manifest = self.service.catalog.get(candidate.asset_id)
-        if manifest is None:
+        if self.service.catalog.get(candidate.asset_id) is None:
             return None
+        manifest = self.service.canonical_asset(candidate.asset_id)
         fingerprint = self.service.catalog.get_fingerprint(
             candidate.asset_id, BURST_HASH_VERSION
         )

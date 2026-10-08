@@ -25,7 +25,6 @@ from sqlalchemy import text
 
 from photo_server.api_schemas import (
     AlbumOut,
-    AuthorityStatusOut,
     BatchAbandonedOut,
     BrowsePageOut,
     BurstDetailOut,
@@ -34,7 +33,6 @@ from photo_server.api_schemas import (
     BurstRepresentativeOut,
     CurrentAssetDetailOut,
     CurrentAssetDocOut,
-    CutoverReadinessOut,
     FaceMoveOut,
     HealthFailureOut,
     HealthOut,
@@ -452,14 +450,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ],
         }
 
-    @app.get("/authority/status", response_model=AuthorityStatusOut, operation_id="getAuthorityStatus")
-    def authority_status():
-        return service.authority_status()
-
-    @app.get("/authority/readiness", response_model=CutoverReadinessOut, operation_id="getAuthorityReadiness")
-    def authority_readiness():
-        return service.cutover_readiness()
-
     @app.get("/metrics", include_in_schema=False)
     def prometheus_metrics(request: Request):
         """Opt-in Prometheus text endpoint with bounded, non-private labels."""
@@ -770,9 +760,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         face = service.catalog.face(str(face_id))
         if face is None:
             raise HTTPException(404, "Face not found")
-        manifest = service.catalog.get(face["asset_id"])
-        if manifest is None:
+        if service.catalog.get(face["asset_id"]) is None:
             raise HTTPException(404, "Photograph not found")
+        manifest = service.canonical_asset(face["asset_id"])
         path = cache_paths(service, manifest)["preview"]
         if not path.exists():
             safe_metrics(metrics, "inc", "photo_preview_cache_misses", labels={"kind": "face_thumbnail"})
@@ -1016,6 +1006,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def original(asset_id: UUID):
         manifest = find(asset_id)
+        manifest = service.canonical_asset(asset_id)
         if service.storage.head(manifest.primary.object_key) is None:
             raise HTTPException(503, "Original is missing from storage")
         return StreamingResponse(
@@ -1030,6 +1021,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def derivative(asset_id: UUID, kind: str, request: Request):
         manifest = find(asset_id)
+        manifest = service.canonical_asset(asset_id)
         path = cache_paths(service, manifest)[kind]
         if not path.exists():
             safe_metrics(metrics, "inc", "photo_preview_cache_misses", labels={"kind": kind})
@@ -1102,7 +1094,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_id="reclusterBursts",
     )
     def recluster_bursts():
-        return service.catalog.recluster_bursts()
+        return service.recluster_bursts()
 
     # The responses= declarations above are merged by FastAPI into (not
     # replacing) the untyped application/json placeholder it writes for
