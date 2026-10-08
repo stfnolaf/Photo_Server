@@ -64,6 +64,37 @@ FACE_FIELDS = {
     "confidence",
     "embedding",
 }
+FINGERPRINT_FIELDS = {
+    "schemaVersion",
+    "libraryId",
+    "assetId",
+    "algorithmVersion",
+    "pHash",
+    "dHash",
+    "width",
+    "height",
+    "chromaHistogram",
+    "createdAt",
+}
+BURST_FIELDS = {
+    "schemaVersion",
+    "libraryId",
+    "revision",
+    "parentRevision",
+    "operationId",
+    "createdAt",
+    "policyVersion",
+    "operation",
+    "clusters",
+    "excludedAssetIds",
+}
+BURST_OPERATION_FIELDS = {"action", "clusterId", "assetId"}
+BURST_CLUSTER_FIELDS = {
+    "clusterId",
+    "representativeAssetId",
+    "representativeSelected",
+    "assetIds",
+}
 TOMBSTONE_FIELDS = {
     "schemaVersion",
     "libraryId",

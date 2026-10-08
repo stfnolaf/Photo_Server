@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -11,7 +12,11 @@ from .validation import (
     ARTIFACT_FIELDS,
     ASSET_FIELDS,
     BLOB_FIELDS,
+    BURST_CLUSTER_FIELDS,
+    BURST_FIELDS,
+    BURST_OPERATION_FIELDS,
     FACE_FIELDS,
+    FINGERPRINT_FIELDS,
     PERSON_FIELDS,
     PROCESSING_FIELDS,
     TOMBSTONE_FIELDS,
@@ -184,6 +189,16 @@ class AssetManifest:
     deleted_at: str | None
     processing: tuple[ProcessingReference, ...]
     schema_version: int = 1
+
+    @property
+    def primary(self) -> BlobReference:
+        """The media blob used by runtime readers."""
+        return next(blob for blob in self.blobs if blob.blob_id == self.primary_blob_id)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Convenience alias for runtime metadata readers."""
+        return self.extracted_metadata
 
     @classmethod
     def from_dict(cls, v: Any) -> "AssetManifest":
@@ -401,6 +416,196 @@ class FaceManifest:
             "boundingBox": self.bounding_box,
             "confidence": self.confidence,
             "embedding": self.embedding,
+        }
+
+
+@dataclass(frozen=True)
+class FingerprintManifest:
+    library_id: UUID
+    asset_id: UUID
+    algorithm_version: str
+    phash: str
+    dhash: str
+    width: int
+    height: int
+    chroma_histogram: str | None
+    created_at: str
+    schema_version: int = 1
+
+    @classmethod
+    def from_dict(cls, v):
+        check_fields(v, FINGERPRINT_FIELDS, "fingerprint manifest")
+        if v.get("schemaVersion") != 1:
+            raise ValueError("fingerprint manifest has unsupported schemaVersion")
+        phash = require_str(v["pHash"], "pHash")
+        dhash = require_str(v["dHash"], "dHash")
+        if not re.fullmatch(r"[0-9a-f]{16}", phash) or not re.fullmatch(r"[0-9a-f]{16}", dhash):
+            raise ValueError("fingerprint hashes must be 16-character lowercase hex")
+        width = require_int(v["width"], "width")
+        height = require_int(v["height"], "height")
+        histogram = v["chromaHistogram"]
+        if histogram is not None and (
+            not isinstance(histogram, str) or not re.fullmatch(r"[0-9a-f]{24}", histogram)
+        ):
+            raise ValueError("chromaHistogram must be 24-character lowercase hex or null")
+        return cls(
+            check_uuid(v["libraryId"], "libraryId"),
+            check_uuid(v["assetId"], "assetId"),
+            require_str(v["algorithmVersion"], "algorithmVersion"),
+            phash,
+            dhash,
+            width,
+            height,
+            histogram,
+            check_timestamp(v["createdAt"], "createdAt"),
+        )
+
+    def to_dict(self):
+        return {
+            "schemaVersion": 1,
+            "libraryId": str(self.library_id),
+            "assetId": str(self.asset_id),
+            "algorithmVersion": self.algorithm_version,
+            "pHash": self.phash,
+            "dHash": self.dhash,
+            "width": self.width,
+            "height": self.height,
+            "chromaHistogram": self.chroma_histogram,
+            "createdAt": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
+class BurstCluster:
+    cluster_id: UUID
+    representative_asset_id: UUID
+    representative_selected: bool
+    asset_ids: tuple[UUID, ...]
+
+    @classmethod
+    def from_dict(cls, v):
+        check_fields(v, BURST_CLUSTER_FIELDS, "burst cluster")
+        asset_ids = tuple(check_uuid(value, "assetIds") for value in v["assetIds"])
+        if not asset_ids or len(asset_ids) != len(set(asset_ids)):
+            raise ValueError("burst cluster assetIds must be non-empty and unique")
+        representative = check_uuid(v["representativeAssetId"], "representativeAssetId")
+        if representative not in asset_ids:
+            raise ValueError("burst representative must be a cluster member")
+        if not isinstance(v["representativeSelected"], bool):
+            raise ValueError("representativeSelected must be a boolean")
+        return cls(
+            check_uuid(v["clusterId"], "clusterId"),
+            representative,
+            v["representativeSelected"],
+            asset_ids,
+        )
+
+    def to_dict(self):
+        return {
+            "clusterId": str(self.cluster_id),
+            "representativeAssetId": str(self.representative_asset_id),
+            "representativeSelected": self.representative_selected,
+            "assetIds": [str(value) for value in self.asset_ids],
+        }
+
+
+@dataclass(frozen=True)
+class BurstManifest:
+    library_id: UUID
+    revision: int
+    parent_revision: int | None
+    operation_id: UUID
+    created_at: str
+    policy_version: str
+    operation_action: str
+    operation_cluster_id: UUID | None
+    operation_asset_id: UUID | None
+    clusters: tuple[BurstCluster, ...]
+    excluded_asset_ids: tuple[UUID, ...]
+    schema_version: int = 1
+
+    @classmethod
+    def from_dict(cls, v):
+        check_fields(v, BURST_FIELDS, "burst manifest")
+        check_common(v, "burst manifest")
+        operation = v["operation"]
+        check_fields(operation, BURST_OPERATION_FIELDS, "burst operation")
+        action = operation["action"]
+        if action not in {
+            "fingerprint.publish",
+            "burst.setRepresentative",
+            "burst.removeMember",
+            "asset.synchronize",
+            "burst.recluster",
+        }:
+            raise ValueError("invalid burst operation action")
+        cluster_id = (
+            None
+            if operation["clusterId"] is None
+            else check_uuid(operation["clusterId"], "operation.clusterId")
+        )
+        asset_id = (
+            None
+            if operation["assetId"] is None
+            else check_uuid(operation["assetId"], "operation.assetId")
+        )
+        if action in {"burst.setRepresentative", "burst.removeMember"}:
+            if cluster_id is None or asset_id is None:
+                raise ValueError("burst member operations require clusterId and assetId")
+        elif cluster_id is not None:
+            raise ValueError("only burst member operations may specify clusterId")
+        if action in {"fingerprint.publish", "asset.synchronize"} and asset_id is None:
+            raise ValueError(f"{action} requires assetId")
+        if action == "burst.recluster" and asset_id is not None:
+            raise ValueError("burst.recluster must not specify assetId")
+        clusters = tuple(BurstCluster.from_dict(value) for value in v["clusters"])
+        cluster_ids = [cluster.cluster_id for cluster in clusters]
+        members = [asset_id for cluster in clusters for asset_id in cluster.asset_ids]
+        excluded = tuple(check_uuid(value, "excludedAssetIds") for value in v["excludedAssetIds"])
+        if len(cluster_ids) != len(set(cluster_ids)):
+            raise ValueError("burst cluster IDs must be unique")
+        if len(members) != len(set(members)):
+            raise ValueError("an asset may belong to only one burst cluster")
+        if len(excluded) != len(set(excluded)) or set(excluded) & set(members):
+            raise ValueError("excluded burst assets must be unique and unclustered")
+        return cls(
+            check_uuid(v["libraryId"], "libraryId"),
+            v["revision"],
+            v["parentRevision"],
+            check_uuid(v["operationId"], "operationId"),
+            check_timestamp(v["createdAt"], "createdAt"),
+            require_str(v["policyVersion"], "policyVersion"),
+            action,
+            cluster_id,
+            asset_id,
+            clusters,
+            excluded,
+        )
+
+    def to_dict(self):
+        return {
+            "schemaVersion": 1,
+            "libraryId": str(self.library_id),
+            "revision": self.revision,
+            "parentRevision": self.parent_revision,
+            "operationId": str(self.operation_id),
+            "createdAt": self.created_at,
+            "policyVersion": self.policy_version,
+            "operation": {
+                "action": self.operation_action,
+                "clusterId": (
+                    str(self.operation_cluster_id)
+                    if self.operation_cluster_id is not None
+                    else None
+                ),
+                "assetId": (
+                    str(self.operation_asset_id)
+                    if self.operation_asset_id is not None
+                    else None
+                ),
+            },
+            "clusters": [cluster.to_dict() for cluster in self.clusters],
+            "excludedAssetIds": [str(value) for value in self.excluded_asset_ids],
         }
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from photo_server.manifests import (
     ManifestCodecError,
+    canonical_json,
     canonicalize,
     decode,
     encode,
@@ -15,7 +16,7 @@ from photo_server.manifests import (
 )
 
 ROOT = Path(__file__).parents[2]
-EXAMPLES = ROOT / "docs/in-progress/s3-authoritative-examples"
+EXAMPLES = ROOT / "backend/tests/fixtures/s3-authoritative-examples"
 
 
 def document(name):
@@ -132,3 +133,48 @@ def test_person_manifest_round_trips_empty_name_and_assignments():
     record = decode(json.dumps(payload), "person")
     assert record.display_name == ""
     assert decode(encode(record), "person") == record
+
+
+def test_fingerprint_and_burst_manifests_round_trip_strictly():
+    fingerprint = {
+        "schemaVersion": 1,
+        "libraryId": "00000000-0000-4000-8000-000000000001",
+        "assetId": "00000000-0000-4000-8000-000000000002",
+        "algorithmVersion": "burst-hash-v1",
+        "pHash": "0123456789abcdef",
+        "dHash": "fedcba9876543210",
+        "width": 1200,
+        "height": 800,
+        "chromaHistogram": "00" * 12,
+        "createdAt": "2026-01-01T00:00:00Z",
+    }
+    burst = {
+        "schemaVersion": 1,
+        "libraryId": fingerprint["libraryId"],
+        "revision": 1,
+        "parentRevision": None,
+        "operationId": "00000000-0000-4000-8000-000000000003",
+        "createdAt": "2026-01-01T00:00:01Z",
+        "policyVersion": "burst-cluster-v2",
+        "operation": {
+            "action": "burst.setRepresentative",
+            "clusterId": "00000000-0000-4000-8000-000000000004",
+            "assetId": fingerprint["assetId"],
+        },
+        "clusters": [
+            {
+                "clusterId": "00000000-0000-4000-8000-000000000004",
+                "representativeAssetId": fingerprint["assetId"],
+                "representativeSelected": True,
+                "assetIds": [fingerprint["assetId"]],
+            }
+        ],
+        "excludedAssetIds": [],
+    }
+    assert encode(decode(canonical_json(fingerprint), "fingerprint")) == canonical_json(fingerprint)
+    assert encode(decode(canonical_json(burst), "burst")) == canonical_json(burst)
+    burst["clusters"][0]["representativeAssetId"] = (
+        "00000000-0000-4000-8000-000000000099"
+    )
+    with pytest.raises(ManifestCodecError, match="representative"):
+        decode(canonical_json(burst), "burst")

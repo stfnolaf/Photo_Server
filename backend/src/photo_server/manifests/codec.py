@@ -10,7 +10,9 @@ from typing import Any, TypeVar
 from .models import (
     AlbumManifest,
     AssetManifest,
+    BurstManifest,
     FaceManifest,
+    FingerprintManifest,
     PersonManifest,
     ProcessingArtifact,
     Tombstone,
@@ -92,6 +94,14 @@ def decode_face_manifest(payload):
     return _decode(payload, FaceManifest)
 
 
+def decode_fingerprint_manifest(payload):
+    return _decode(payload, FingerprintManifest)
+
+
+def decode_burst_manifest(payload):
+    return _decode(payload, BurstManifest)
+
+
 def decode_tombstone(payload):
     return _decode(payload, Tombstone)
 
@@ -106,6 +116,8 @@ def decode(payload: bytes | str, kind: str):
         "album": AlbumManifest,
         "person": PersonManifest,
         "face": FaceManifest,
+        "fingerprint": FingerprintManifest,
+        "burst": BurstManifest,
         "tombstone": Tombstone,
         "processing-artifact": ProcessingArtifact,
     }
