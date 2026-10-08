@@ -119,7 +119,10 @@ def create_batch(service, files: list[dict], batch_id: UUID | None = None, album
         if not digest:
             continue
         manifest = service.catalog.find_hash(digest)
-        if not manifest or manifest.primary.size_bytes != declaration["sizeBytes"]:
+        if not manifest:
+            continue
+        canonical = service.canonical_asset(manifest.asset_id)
+        if canonical.primary.size_bytes != declaration["sizeBytes"]:
             continue
         duplicate_paths = {asset["path"], *asset["sidecars"]}
         for record in records:
@@ -134,7 +137,10 @@ def create_batch(service, files: list[dict], batch_id: UUID | None = None, album
         if not album_name:
             raise LibraryError("New album name cannot be empty")
         album_id = uuid5(service.library_id, f"upload-album:{batch_id}")
-        service.catalog.commit_mutation(
+        from photo_server.state import mutate
+
+        mutate(
+            service,
             uuid5(batch_id, "album-create"),
             Mutation(
                 action="album.create", entity_id=album_id,
@@ -386,8 +392,11 @@ def seal_batch(service, batch_id: UUID) -> dict:
             if row["status"] == "duplicate" and row["asset_id"]
         }
         for asset_id in duplicate_assets:
-            service.catalog.add_upload_asset_to_album(
-                UUID(str(target_album)), asset_id, uuid5(batch_id, f"album-duplicate:{asset_id}")
+            _publish_album_membership(
+                service,
+                UUID(str(target_album)),
+                asset_id,
+                uuid5(batch_id, f"album-duplicate:{asset_id}"),
             )
     return describe_batch(service, batch_id)
 
@@ -405,6 +414,29 @@ def _delete_claimed_batch(service, claimed: dict) -> dict:
         "filesDeleted": len(claimed["stagingKeys"]),
         "multipartUploadsAborted": aborted,
     }
+
+
+def _publish_album_membership(service, album_id: UUID, asset_id: UUID, operation_id: UUID) -> None:
+    """Publish an upload-driven album change before projecting it."""
+    from photo_server.state import mutate
+
+    album = service.catalog.get_album(str(album_id))
+    if album is None:
+        raise LibraryError("Upload target album no longer exists")
+    if album.deleted_at:
+        raise LibraryError("Upload target album is hidden")
+    if asset_id in album.asset_ids:
+        return
+    mutate(
+        service,
+        operation_id,
+        Mutation(
+            action="album.patch",
+            entity_id=album_id,
+            changes={"assetIds": [*map(str, album.asset_ids), str(asset_id)]},
+            expected_revision=album.revision,
+        ),
+    )
 
 
 def abandon_batch(service, batch_id: UUID) -> dict:
@@ -451,7 +483,7 @@ def process_onboarding_job(service, job: dict) -> dict:
                     raise LibraryError(f"Staged upload failed verification: {row['relative_path']}")
                 staged.append((path, digest.hexdigest(), size))
             result = _commit_staged(service, job, staged)
-        service.catalog.finish_onboarding_job(job, result=result)
+        service.catalog.finish_onboarding_job(job, result=result, service=service)
         _delete_staging(service, job)
         return result
     except Exception as error:
@@ -484,13 +516,23 @@ def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> di
             ]
             if stored != fingerprints:
                 raise LibraryError("Onboarding job conflicts with an existing asset")
+            canonical = service.canonical_asset(asset_id)
+            canonical_fingerprints = [
+                {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
+                for blob in canonical.blobs
+            ]
+            if canonical.operation_id != operation_id or canonical_fingerprints != fingerprints:
+                raise LibraryError("Database projection conflicts with the canonical import manifest")
+            for path, digest, size in files:
+                service.publisher.publish_object(path, digest, size)
             status = "imported"
             replayed = True
         else:
             manifest = service.catalog.find_hash(files[0][1])
             if manifest:
+                canonical = service.canonical_asset(manifest.asset_id)
                 existing_sidecars = {
-                    blob.sha256 for blob in manifest.blobs if blob.role == "SIDECAR"
+                    blob.sha256 for blob in canonical.blobs if blob.role == "SIDECAR"
                 }
                 if any(digest not in existing_sidecars for _, digest, _ in files[1:]):
                     raise LibraryError(
@@ -506,16 +548,11 @@ def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> di
                         blob_id=uuid5(asset_id, path.name),
                         role=role(path),
                         original_filename=path.name,
-                        object_key=f"originals/{asset_id}/{path.name}",
+                        object_key=f"objects/{digest}",
                         sha256=digest,
                         size_bytes=size,
                         mime_type=mime if index == 0 else "application/rdf+xml",
                     )
-                    with path.open("rb") as stream:
-                        service.storage.put(
-                            blob.object_key, stream, blob.mime_type, {"sha256": digest}
-                        )
-                    service.storage.verify(blob.object_key, size, digest)
                     imported_blobs.append(blob)
                 manifest = Manifest(
                     library_id=service.library_id,
@@ -527,6 +564,11 @@ def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> di
                     capture_time=info.get("captureTime"),
                     metadata=info,
                 )
+                for path, digest, size in files:
+                    service.publisher.publish_object(path, digest, size)
+                canonical = service.publisher.manifest_from_projection(manifest)
+                service.publisher.publish_manifest(canonical)
+                manifest = service.publisher.projection_from_manifest(canonical)
                 service.catalog.apply(manifest)
                 status = "imported"
                 replayed = False

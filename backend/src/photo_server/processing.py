@@ -27,6 +27,7 @@ def extract_metadata(service, path: Path) -> tuple[dict, str]:
 
 def process_metadata(service, manifest: Manifest) -> dict:
     """Rebuild one asset's extracted metadata from its immutable original."""
+    manifest = service.canonical_asset(manifest.asset_id)
     with TemporaryDirectory(dir=service.scratch) as directory:
         path = Path(directory) / manifest.primary.original_filename
         digest, size = hashlib.sha256(), 0
@@ -49,7 +50,10 @@ def process_metadata(service, manifest: Manifest) -> dict:
         manifest.library_id,
         f"metadata-v1:{manifest.asset_id}:{fingerprint}",
     )
-    result = service.catalog.commit_mutation(
+    from photo_server.state import mutate
+
+    result = mutate(
+        service,
         operation_id,
         Mutation(
             action="asset.metadata",
@@ -62,6 +66,7 @@ def process_metadata(service, manifest: Manifest) -> dict:
 
 def process_fingerprint(service, manifest: Manifest) -> dict:
     """Compute the burst fingerprint without requiring AI services."""
+    manifest = service.canonical_asset(manifest.asset_id)
     from photo_server.worker import cache_paths, generate
 
     asset_id = str(manifest.asset_id)
@@ -69,7 +74,7 @@ def process_fingerprint(service, manifest: Manifest) -> dict:
     if existing is not None and existing.chroma_histogram is not None:
         # Reconciliation is intentionally also run for already-persisted
         # fingerprints so policy/context changes can repair split clusters.
-        service.catalog.reconcile_burst(asset_id)
+        service.publish_fingerprint(asset_id, existing)
         return {"status": "unchanged", "fingerprintVersion": BURST_HASH_VERSION}
     preview = cache_paths(service, manifest)["preview"]
     if not preview.is_file() and not generate(service, manifest):
@@ -78,7 +83,7 @@ def process_fingerprint(service, manifest: Manifest) -> dict:
 
     jpeg = prepare_jpeg(preview, service.settings.ai_vlm_max_image_side)
     fingerprint = compute_fingerprint(jpeg)
-    service.catalog.upsert_fingerprint(asset_id, fingerprint)
+    service.publish_fingerprint(asset_id, fingerprint)
     return {
         "status": "updated" if existing is not None else "created",
         "fingerprintVersion": fingerprint.algorithm_version,
@@ -89,9 +94,10 @@ def process_fingerprint(service, manifest: Manifest) -> dict:
 
 def run_stage(service, asset_id: str, job_type: str) -> dict:
     """Dispatch a claimed processing job through the stage registry."""
-    manifest = service.catalog.get(asset_id)
-    if manifest is None:
+    projection = service.catalog.get(asset_id)
+    if projection is None:
         raise FileNotFoundError("Processing job references a missing asset")
+    manifest = service.canonical_asset(asset_id)
     if job_type == STAGE_JOBS["metadata"]:
         return process_metadata(service, manifest)
     if job_type == STAGE_JOBS["fingerprint"]:

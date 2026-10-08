@@ -7,9 +7,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4, uuid5
 
+from photo_server.canonical import CanonicalPublisher
 from photo_server.catalog import Catalog
 from photo_server.config import LibraryError, Settings
-from photo_server.dual_write import DualWritePublisher
+from photo_server.manifests import AssetManifest, decode_asset_manifest
 from photo_server.models import Blob, Manifest
 from photo_server.processing import STAGE_JOBS, extract_metadata
 from photo_server.selection import plan_import, role
@@ -20,37 +21,39 @@ class Service:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.storage = Storage(settings)
-        self.dual_write = DualWritePublisher(self.storage)
+        self.publisher = CanonicalPublisher(self.storage)
         self.catalog = Catalog(settings.database_url, settings)
         self.library_id: UUID | None = None
         self.scratch = settings.data_dir / "scratch"
         self.scratch.mkdir(parents=True, exist_ok=True)
 
-    def authority_status(self) -> dict:
-        """Return the persisted cutover status without requiring PostgreSQL."""
-        from photo_server.cutover import authority_status
+    def canonical_asset(self, asset_id: str | UUID) -> AssetManifest:
+        """Load the current S3 asset manifest for byte-serving runtime paths.
 
-        return authority_status(self)
+        PostgreSQL remains the projection used for indexed queries.
+        Runtime bytes always resolve through the canonical manifest.
+        """
+        asset_id = str(asset_id)
+        prefix = f"manifests/assets/{asset_id}/"
+        revisions = []
+        for key in self.storage.keys(prefix):
+            suffix = key.removeprefix(prefix).removesuffix(".json")
+            if suffix.isdigit():
+                revisions.append((int(suffix), key))
+        if not revisions:
+            raise LibraryError(f"Canonical asset manifest is missing: {asset_id}")
+        _, key = max(revisions)
+        return decode_asset_manifest(self.storage.read_bytes(key))
 
-    def cutover_readiness(self, **kwargs) -> dict:
-        from photo_server.cutover import cutover_readiness
+    def publish_fingerprint(self, asset_id: str, fingerprint):
+        from photo_server.burst_authority import BurstAuthority
 
-        return cutover_readiness(self, **kwargs)
+        return BurstAuthority(self).publish_fingerprint(asset_id, fingerprint)
 
-    def activate_s3_authority(self, readiness: dict | None = None) -> dict:
-        from photo_server.cutover import CutoverManager
+    def recluster_bursts(self) -> dict:
+        from photo_server.burst_authority import BurstAuthority
 
-        return CutoverManager(self).activate(readiness)
-
-    def rollback_s3_authority(self, reason: str = "rollback requested") -> dict:
-        from photo_server.cutover import CutoverManager
-
-        return CutoverManager(self).rollback(reason)
-
-    def reconcile_authority(self, **kwargs) -> dict:
-        from photo_server.cutover import CutoverManager
-
-        return CutoverManager(self).reconcile(**kwargs)
+        return BurstAuthority(self).refresh(uuid4(), clear_exclusions=True)
 
     def initialize(self, recover_uploads: bool = True) -> dict:
         with self.catalog.writer():
@@ -63,12 +66,25 @@ class Service:
             if marker and marker.get("schemaVersion") != 1:
                 raise LibraryError("Unsupported S3 library schema")
             database_id = self.catalog.existing_library_id()
-            proposed_id = database_id or (UUID(marker["libraryId"]) if marker else uuid4())
+            if marker:
+                proposed_id = UUID(marker["libraryId"])
+            else:
+                from photo_server.rebuild import discover_library_id
+
+                manifest_id = discover_library_id(self.storage)
+                if manifest_id:
+                    proposed_id = manifest_id
+                elif database_id:
+                    raise LibraryError(
+                        "Canonical S3 library identity is missing for the existing database projection"
+                    )
+                else:
+                    proposed_id = uuid4()
             self.library_id = proposed_id
             database_migrations = self.catalog.initialize(str(self.library_id))
             self.library_id = self.catalog.library_id()
             if marker and UUID(marker["libraryId"]) != self.library_id:
-                raise LibraryError("PostgreSQL and the S3 media bucket belong to different libraries")
+                raise LibraryError("The database projection and canonical S3 library belong to different libraries")
             if marker is None:
                 from photo_server.storage import canonical_json
 
@@ -116,10 +132,16 @@ class Service:
             yield staged, digest.hexdigest(), size
 
     def verify(self, full: bool = False) -> dict:
-        """Verify that PostgreSQL's authoritative records reference valid S3 blobs."""
+        """Verify canonical manifests and their referenced S3 objects."""
         errors, checked = [], 0
-        manifests = self.catalog.all_assets()
-        asset_ids = {manifest.asset_id for manifest in manifests}
+        projections = self.catalog.all_assets()
+        asset_ids = {manifest.asset_id for manifest in projections}
+        manifests = []
+        for projection in projections:
+            try:
+                manifests.append(self.canonical_asset(projection.asset_id))
+            except Exception as error:
+                errors.append({"key": f"asset:{projection.asset_id}", "error": str(error)})
         for manifest in manifests:
             for blob in manifest.blobs:
                 try:
@@ -139,7 +161,7 @@ class Service:
                         }
                     )
         return {
-            "assetsChecked": len(manifests),
+            "assetsChecked": len(projections),
             "blobsChecked": checked,
             "verification": "sha256" if full else "size",
             "errors": errors,
@@ -263,43 +285,42 @@ class Service:
                     batch_inputs.append({"name": relative, "sha256": digest, "size": size})
         batch_error = None
         try:
-            self.dual_write.assert_operation_input(operation_id, "batch", batch_inputs)
+            self.publisher.assert_operation_input(operation_id, "batch", batch_inputs)
         except Exception as error:
             # Preserve the existing import API's per-entry failure response.
             batch_error = error
-        with self.catalog.writer():
-            results = []
-            if batch_error is not None:
-                results.append(
-                    {"path": plan["assets"][0]["path"], "status": "failed", "error": str(batch_error)}
-                )
-            else:
-                for entry in plan["assets"]:
-                    try:
-                        result = self._import_asset(entry, operation_id)
-                        results.append({"path": entry["path"], **result})
-                    except Exception as error:
-                        results.append({"path": entry["path"], "status": "failed", "error": str(error)})
-                        break
-            completed = {entry["path"] for entry in results}
-            results.extend(
-                {"path": entry["path"], "status": "not_attempted"}
-                for entry in plan["assets"]
-                if entry["path"] not in completed
+        results = []
+        if batch_error is not None:
+            results.append(
+                {"path": plan["assets"][0]["path"], "status": "failed", "error": str(batch_error)}
             )
-            successful = {
-                entry["path"] for entry in results if entry["status"] in {"imported", "duplicate"}
-            }
-            skipped = [
-                {**entry, "status": "skipped" if entry["selected"] in successful else "deferred"}
-                for entry in plan["skipped"]
-            ]
-            return {
-                "operationId": str(operation_id),
-                "results": results,
-                "skipped": skipped,
-                "warnings": plan["warnings"],
-            }
+        else:
+            for entry in plan["assets"]:
+                try:
+                    result = self._import_asset(entry, operation_id)
+                    results.append({"path": entry["path"], **result})
+                except Exception as error:
+                    results.append({"path": entry["path"], "status": "failed", "error": str(error)})
+                    break
+        completed = {entry["path"] for entry in results}
+        results.extend(
+            {"path": entry["path"], "status": "not_attempted"}
+            for entry in plan["assets"]
+            if entry["path"] not in completed
+        )
+        successful = {
+            entry["path"] for entry in results if entry["status"] in {"imported", "duplicate"}
+        }
+        skipped = [
+            {**entry, "status": "skipped" if entry["selected"] in successful else "deferred"}
+            for entry in plan["skipped"]
+        ]
+        return {
+            "operationId": str(operation_id),
+            "results": results,
+            "skipped": skipped,
+            "warnings": plan["warnings"],
+        }
 
     def _import_asset(self, entry: dict, operation_id: UUID) -> dict:
         from contextlib import ExitStack
@@ -314,7 +335,7 @@ class Service:
             fingerprints = [
                 {"name": path.name, "sha256": digest, "size": size} for path, digest, size in files
             ]
-            self.dual_write.assert_operation_input(operation_id, entry["path"], fingerprints)
+            self.publisher.assert_operation_input(operation_id, entry["path"], fingerprints)
             manifest = self.catalog.get(str(asset_id))
             if manifest:
                 stored = [
@@ -323,25 +344,18 @@ class Service:
                 ]
                 if stored != fingerprints:
                     raise LibraryError("Operation ID was reused with changed file content")
-                # A previous attempt may have committed PostgreSQL and failed
-                # during canonical-manifest publication. Re-run the complete
-                # immutable publication on every idempotent retry.
+                canonical = self.canonical_asset(asset_id)
+                canonical_fingerprints = [
+                    {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
+                    for blob in canonical.blobs
+                ]
+                if canonical.operation_id != operation_id or canonical_fingerprints != fingerprints:
+                    raise LibraryError("Database projection conflicts with the canonical import manifest")
+                # Re-uploading identical source bytes may repair a missing
+                # content object, but the canonical manifest is never derived
+                # from the database projection.
                 for path, digest, size in files:
-                    self.dual_write.publish_object(path, digest, size)
-                try:
-                    self.dual_write.publish_manifest(
-                        self.dual_write.manifest_from_legacy(manifest)
-                    )
-                except Exception as error:
-                    self.dual_write.record_reconciliation(
-                        operation_id,
-                        {
-                            "status": "database-written-manifest-failed",
-                            "assetId": str(asset_id),
-                            "error": str(error),
-                        },
-                    )
-                    raise
+                    self.publisher.publish_object(path, digest, size)
                 return {
                     "status": "imported",
                     "assetId": str(manifest.asset_id),
@@ -350,8 +364,9 @@ class Service:
 
             manifest = self.catalog.find_hash(files[0][1])
             if manifest:
+                canonical = self.canonical_asset(manifest.asset_id)
                 existing_sidecars = {
-                    blob.sha256 for blob in manifest.blobs if blob.role == "SIDECAR"
+                    blob.sha256 for blob in canonical.blobs if blob.role == "SIDECAR"
                 }
                 if any(digest not in existing_sidecars for _, digest, _ in files[1:]):
                     raise LibraryError(
@@ -359,6 +374,36 @@ class Service:
                     )
                 status = "duplicate"
             else:
+                # A prior attempt may have completed the canonical S3 import
+                # and failed while applying PostgreSQL. Reuse that immutable
+                # revision and its timestamps instead of rebuilding a new
+                # manifest that would conflict on the same S3 key.
+                canonical_key = f"manifests/assets/{asset_id}/1.json"
+                canonical = None
+                if self.storage.head(canonical_key) is not None:
+                    canonical = decode_asset_manifest(self.storage.read_bytes(canonical_key))
+                    if canonical.operation_id != operation_id:
+                        raise LibraryError("Immutable import manifest conflicts with this operation")
+                    canonical_fingerprints = [
+                        {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
+                        for blob in canonical.blobs
+                    ]
+                    if canonical_fingerprints != fingerprints:
+                        raise LibraryError("Operation ID was reused with changed file content")
+                    manifest = self.publisher.projection_from_manifest(canonical)
+                    for path, digest, size in files:
+                        self.publisher.publish_object(path, digest, size)
+                    self.publisher.publish_manifest(canonical)
+                    try:
+                        self.catalog.apply(manifest)
+                    except Exception as error:
+                        self.publisher.record_reconciliation(
+                            operation_id,
+                            {"status": "canonical-written-projection-failed", "assetId": str(asset_id), "error": str(error)},
+                        )
+                        raise
+                    return {"status": "imported", "assetId": str(asset_id), "replayed": True}
+
                 info, mime = extract_metadata(self, files[0][0])
                 imported_blobs = []
                 for index, (path, digest, size) in enumerate(files):
@@ -366,14 +411,11 @@ class Service:
                         blob_id=uuid5(asset_id, path.name),
                         role=role(path),
                         original_filename=path.name,
-                        object_key=f"originals/{asset_id}/{path.name}",
+                        object_key=f"objects/{digest}",
                         sha256=digest,
                         size_bytes=size,
                         mime_type=mime if index == 0 else "application/rdf+xml",
                     )
-                    with path.open("rb") as stream:
-                        self.storage.put(blob.object_key, stream, blob.mime_type, {"sha256": digest})
-                    self.storage.verify(blob.object_key, size, digest)
                     imported_blobs.append(blob)
                 manifest = Manifest(
                     library_id=self.library_id,
@@ -385,40 +427,20 @@ class Service:
                     capture_time=info.get("captureTime"),
                     metadata=info,
                 )
-                # Publish canonical bytes before the unchanged PostgreSQL
-                # apply. A DB failure leaves content to be completed by retry.
+                # Publish and verify canonical bytes before the PostgreSQL
+                # projection. A DB failure leaves the import recoverable.
                 for path, digest, size in files:
-                    self.dual_write.publish_object(path, digest, size)
-                canonical = self.dual_write.manifest_from_legacy(manifest)
-                if self.settings.authority_mode == "s3":
-                    # Phase 10: canonical state must be durable before the
-                    # PostgreSQL projection is changed. A projection failure
-                    # is repaired by reconciliation or an idempotent retry.
-                    self.dual_write.publish_manifest(canonical)
-                    try:
-                        self.catalog.apply(manifest)
-                    except Exception as error:
-                        self.dual_write.record_reconciliation(
-                            operation_id,
-                            {"status": "canonical-written-projection-failed", "assetId": str(asset_id), "error": str(error)},
-                        )
-                        raise
-                else:
-                    try:
-                        self.catalog.apply(manifest)
-                    except Exception as error:
-                        self.dual_write.record_reconciliation(
-                            operation_id,
-                            {"status": "object-written-database-failed", "assetId": str(asset_id), "error": str(error)},
-                        )
-                        raise
-                    try:
-                        self.dual_write.publish_manifest(canonical)
-                    except Exception as error:
-                        self.dual_write.record_reconciliation(
-                            operation_id,
-                            {"status": "database-written-manifest-failed", "assetId": str(asset_id), "error": str(error)},
-                        )
-                        raise
+                    self.publisher.publish_object(path, digest, size)
+                canonical = self.publisher.manifest_from_projection(manifest)
+                self.publisher.publish_manifest(canonical)
+                manifest = self.publisher.projection_from_manifest(canonical)
+                try:
+                    self.catalog.apply(manifest)
+                except Exception as error:
+                    self.publisher.record_reconciliation(
+                        operation_id,
+                        {"status": "canonical-written-projection-failed", "assetId": str(asset_id), "error": str(error)},
+                    )
+                    raise
                 status = "imported"
             return {"status": status, "assetId": str(manifest.asset_id), "replayed": False}

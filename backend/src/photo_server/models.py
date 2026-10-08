@@ -111,8 +111,8 @@ class Manifest(DurableModel):
             name = blob.original_filename
             if name in {"", ".", ".."} or "/" in name or "\\" in name:
                 raise ValueError("Original filename must be a basename")
-            if blob.object_key != f"originals/{self.asset_id}/{name}":
-                raise ValueError("Blob key does not match its asset and original filename")
+            if blob.object_key != f"objects/{blob.sha256}":
+                raise ValueError("Blob key must be its content-addressed object key")
         return self
 
     @property

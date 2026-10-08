@@ -114,6 +114,19 @@ class Storage:
             ContentType="application/json",
         )
 
+    def replace(self, key: str, body: bytes, mime: str) -> None:
+        """Atomically replace one authoritative current-state object.
+
+        Revision history is supplied by the storage filesystem snapshots, not
+        by accumulating application-level copies under new object keys.
+        """
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=body,
+            ContentType=mime,
+        )
+
     def get_json(self, key: str) -> dict:
         with closing(self.client.get_object(Bucket=self.bucket, Key=key)["Body"]) as body:
             data = body.read(8 * CHUNK + 1)

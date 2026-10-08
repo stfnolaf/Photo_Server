@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import time as day_time
 from threading import RLock
 from time import time
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import (
     BigInteger,
@@ -29,7 +29,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from photo_server.browsing import BrowseQuery, asset_summary, browse_fields, camera_time
 from photo_server.config import LibraryError, Settings
-from photo_server.fingerprints import BURST_HASH_VERSION, Candidate, Fingerprint
+from photo_server.fingerprints import Candidate, Fingerprint
 from photo_server.migrations import migrate
 from photo_server.models import Album, Manifest, Mutation, UserState
 
@@ -40,7 +40,6 @@ library = Table(
     Column("singleton", Integer, primary_key=True),
     Column("library_id", String, nullable=False),
     Column("schema_version", Integer, nullable=False),
-    Column("state_authority", String, nullable=False, server_default="postgres"),
 )
 assets = Table(
     "assets",
@@ -260,16 +259,6 @@ class Catalog:
     def __init__(self, url: str, settings: Settings | None = None):
         self.engine = create_engine(url, pool_pre_ping=True)
         self._writer_lock = RLock()
-        if settings is None:
-            self._burst_phash_max = 17
-            self._burst_dhash_max = 15
-            self._burst_chroma_max = 0.15
-            self._burst_capture_window_seconds = 35
-        else:
-            self._burst_phash_max = settings.burst_cluster_phash_max_distance
-            self._burst_dhash_max = settings.burst_cluster_dhash_max_distance
-            self._burst_chroma_max = settings.burst_cluster_chroma_max_distance
-            self._burst_capture_window_seconds = settings.burst_cluster_capture_window_seconds
 
     @contextmanager
     def writer(self):
@@ -303,6 +292,32 @@ class Catalog:
     def initialize(self, library_id: str) -> dict:
         return migrate(self.engine, library_id)
 
+    def projection_is_empty(self) -> bool:
+        """Return whether this database is safe to use as a rebuild target.
+
+        The schema/bootstrap row is expected to exist.  A rebuild must never
+        merge into an existing projection because that could retain state that
+        is not recoverable from the S3 namespace.
+        """
+        with self.engine.connect() as connection:
+            counts = connection.execute(
+                text(
+                    """
+                    SELECT
+                        (SELECT count(*) FROM assets),
+                        (SELECT count(*) FROM albums),
+                        (SELECT count(*) FROM people),
+                        (SELECT count(*) FROM faces),
+                        (SELECT count(*) FROM analysis_runs),
+                        (SELECT count(*) FROM operations),
+                        (SELECT count(*) FROM image_fingerprints),
+                        (SELECT count(*) FROM burst_clusters),
+                        (SELECT count(*) FROM burst_members)
+                    """
+                )
+            ).one()
+        return not any(counts)
+
     def existing_library_id(self) -> UUID | None:
         """Read identity without assuming that migrations have already run."""
         with self.engine.connect() as connection:
@@ -325,8 +340,18 @@ class Catalog:
         with self.engine.begin() as connection:
             self._apply(connection, manifest)
 
-    def _apply(self, connection, manifest: Manifest):
-        """Project one authoritative asset snapshot using the caller's transaction."""
+    def apply_projection(self, manifest: Manifest):
+        """Apply canonical state without inventing operational work.
+
+        Rebuild and reconciliation use this path. Processing queues are not
+        canonical library state, and recreating them for every projected asset
+        would turn a database recovery into a library-wide processing run.
+        """
+        with self.engine.begin() as connection:
+            self._apply(connection, manifest, enqueue_jobs=False)
+
+    def _apply(self, connection, manifest: Manifest, *, enqueue_jobs: bool = True):
+        """Apply one canonical asset snapshot to the query projection."""
         existing = connection.execute(
             select(assets.c.manifest).where(assets.c.id == str(manifest.asset_id)).with_for_update()
         ).scalar_one_or_none()
@@ -379,6 +404,8 @@ class Catalog:
                         mime_type=blob.mime_type,
                     )
                 )
+        if not enqueue_jobs:
+            return
         connection.execute(
             insert(jobs)
             .values(
@@ -465,7 +492,7 @@ class Catalog:
             )
 
     def all_assets(self) -> list[Manifest]:
-        """Return every authoritative asset, including trash, for verify/export."""
+        """Return every projected asset, including trash, for verify/export."""
         with self.engine.connect() as connection:
             values = list(connection.scalars(select(assets.c.manifest).order_by(assets.c.id)))
         return [Manifest.model_validate(value) for value in values]
@@ -605,9 +632,34 @@ class Catalog:
             )
         return dict(row) if row else None
 
-    def commit_mutation(self, operation_id: UUID, mutation: Mutation) -> dict:
-        """Apply state and record its retry result in one PostgreSQL transaction."""
-        from photo_server.bursts import remove_member, set_representative
+    def record_burst_operation(self, operation_id: UUID, mutation: Mutation, result: dict) -> dict:
+        """Record the result after canonical burst state has been projected."""
+        with self.engine.begin() as connection:
+            previous = (
+                connection.execute(
+                    select(operations).where(operations.c.id == str(operation_id)).with_for_update()
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if previous:
+                if previous["request"] != mutation.document():
+                    raise LibraryError("Operation ID was reused with a different request")
+                return previous["result"]
+            connection.execute(
+                insert(operations).values(
+                    id=str(operation_id), request=mutation.document(), result=result
+                )
+            )
+        return result
+
+    def commit_mutation(
+        self,
+        operation_id: UUID,
+        mutation: Mutation,
+        canonical_snapshot: Manifest | Album | None = None,
+    ) -> dict:
+        """Apply a canonical snapshot and record its retry result transactionally."""
         from photo_server.state import mutation_result
 
         with self.writer(), self.engine.begin() as connection:
@@ -625,6 +677,8 @@ class Catalog:
 
             entity_id = str(mutation.entity_id)
             kind, action = mutation.action.split(".")
+            if kind not in {"asset", "album"}:
+                raise LibraryError("Invalid mutation type")
             if kind == "asset":
                 value = connection.scalar(
                     select(assets.c.manifest).where(assets.c.id == entity_id).with_for_update()
@@ -635,18 +689,14 @@ class Catalog:
                     select(albums.c.state).where(albums.c.id == entity_id).with_for_update()
                 )
                 current = Album.model_validate(value) if value else None
-            else:
-                current = None
-
-            if kind != "burst":
-                if current is None and mutation.action != "album.create":
-                    raise FileNotFoundError("Entity not found")
-                if mutation.expected_revision is not None and (
-                    current is None or current.revision != mutation.expected_revision
-                ):
-                    raise LibraryError("Revision changed; reload before editing")
-                if current and current.deleted_at and action not in {"restore", "delete"}:
-                    raise LibraryError("Unhide this item before editing")
+            if current is None and mutation.action != "album.create":
+                raise FileNotFoundError("Entity not found")
+            if mutation.expected_revision is not None and (
+                current is None or current.revision != mutation.expected_revision
+            ):
+                raise LibraryError("Revision changed; reload before editing")
+            if current and current.deleted_at and action not in {"restore", "delete"}:
+                raise LibraryError("Unhide this item before editing")
 
             if kind == "asset":
                 changes = {}
@@ -672,41 +722,32 @@ class Catalog:
                     )
                 else:
                     raise LibraryError("Invalid asset mutation")
-                snapshot = Manifest.model_validate(
-                    {
-                        **current.model_dump(),
-                        "schema_version": 2,
-                        "revision": current.revision + 1,
-                        "previous_revision": current.revision,
-                        "operation_id": operation_id,
-                        "mutation": mutation,
-                        **changes,
-                    }
-                )
-                self._apply(connection, snapshot)
-                if action == "delete":
-                    remove_member(connection, entity_id)
-                elif action == "restore":
-                    self._join_burst(connection, entity_id)
-                result = mutation_result(snapshot)
-            elif kind == "burst":
-                if action == "removeMember":
-                    member_id = mutation.changes.get("assetId")
-                    if not member_id:
-                        raise LibraryError("Asset is required")
-                    result = remove_member(
-                        connection,
-                        entity_id,
-                        str(member_id),
-                    )
-                elif action == "setRepresentative":
-                    result = set_representative(
-                        connection,
-                        entity_id,
-                        mutation.changes.get("representativeAssetId"),
-                    )
+                if canonical_snapshot is not None:
+                    if not isinstance(canonical_snapshot, Manifest):
+                        raise LibraryError("Canonical mutation snapshot has the wrong entity type")
+                    snapshot = canonical_snapshot
+                    if (
+                        snapshot.asset_id != mutation.entity_id
+                        or snapshot.operation_id != operation_id
+                        or snapshot.revision != current.revision + 1
+                        or snapshot.previous_revision != current.revision
+                        or snapshot.mutation != mutation
+                    ):
+                        raise LibraryError("Canonical mutation snapshot does not match the request")
                 else:
-                    raise LibraryError("Invalid burst mutation")
+                    snapshot = Manifest.model_validate(
+                        {
+                            **current.model_dump(),
+                            "schema_version": 2,
+                            "revision": current.revision + 1,
+                            "previous_revision": current.revision,
+                            "operation_id": operation_id,
+                            "mutation": mutation,
+                            **changes,
+                        }
+                    )
+                self._apply(connection, snapshot)
+                result = mutation_result(snapshot)
             else:
                 if action == "create" and current:
                     raise LibraryError("Album already exists")
@@ -743,15 +784,28 @@ class Catalog:
                         raise LibraryError(
                             f"Unhide asset before adding it to an album: {asset_id}"
                         )
-                snapshot = Album.model_validate(
-                    {
-                        **values,
-                        "revision": current.revision + 1 if current else 1,
-                        "previousRevision": current.revision if current else None,
-                        "operationId": str(operation_id),
-                        "mutation": mutation.document(),
-                    }
-                )
+                if canonical_snapshot is not None:
+                    if not isinstance(canonical_snapshot, Album):
+                        raise LibraryError("Canonical mutation snapshot has the wrong entity type")
+                    snapshot = canonical_snapshot
+                    if (
+                        snapshot.album_id != mutation.entity_id
+                        or snapshot.operation_id != operation_id
+                        or snapshot.revision != (current.revision + 1 if current else 1)
+                        or snapshot.previous_revision != (current.revision if current else None)
+                        or snapshot.mutation != mutation
+                    ):
+                        raise LibraryError("Canonical mutation snapshot does not match the request")
+                else:
+                    snapshot = Album.model_validate(
+                        {
+                            **values,
+                            "revision": current.revision + 1 if current else 1,
+                            "previousRevision": current.revision if current else None,
+                            "operationId": str(operation_id),
+                            "mutation": mutation.document(),
+                        }
+                    )
                 self._apply_album(connection, snapshot)
                 result = mutation_result(snapshot)
 
@@ -1070,147 +1124,100 @@ class Catalog:
             ).mappings()
             return [dict(row) for row in rows]
 
-    def upsert_fingerprint(self, asset_id: str, fingerprint: Fingerprint):
-        """Persist a fingerprint idempotently for (asset_id, algorithm_version)."""
-        with self.engine.begin() as connection:
-            statement = insert(image_fingerprints).values(
-                asset_id=asset_id,
-                algorithm_version=fingerprint.algorithm_version,
-                phash=fingerprint.phash,
-                dhash=fingerprint.dhash,
-                width=fingerprint.width,
-                height=fingerprint.height,
-                chroma_histogram=fingerprint.chroma_histogram,
-            )
-            if fingerprint.chroma_histogram is None:
-                statement = statement.on_conflict_do_nothing(
-                    index_elements=["asset_id", "algorithm_version"]
-                )
-            else:
-                statement = statement.on_conflict_do_update(
-                    index_elements=["asset_id", "algorithm_version"],
-                    set_={"chroma_histogram": fingerprint.chroma_histogram},
-                )
-            connection.execute(statement)
-            if fingerprint.algorithm_version == BURST_HASH_VERSION:
-                self._join_burst(connection, asset_id)
+    def apply_burst_projection(self, fingerprints, snapshot) -> None:
+        """Replace burst tables from one already-verified canonical S3 snapshot.
 
-    def reconcile_burst(self, asset_id: str) -> None:
-        """Re-evaluate an existing burst membership against current neighbors."""
-        with self.engine.begin() as connection:
-            self._join_burst(connection, asset_id)
-
-    def _join_burst(self, connection, asset_id: str):
-        """Compute burst membership for one fingerprinted frame in the caller's transaction."""
-        from photo_server.bursts import join_or_create_cluster
-
-        row = (
-            connection.execute(
-                select(image_fingerprints).where(
-                    image_fingerprints.c.asset_id == asset_id,
-                    image_fingerprints.c.algorithm_version == BURST_HASH_VERSION,
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
-        if row is None:
-            return
-        fingerprint = Fingerprint(
-            algorithm_version=row["algorithm_version"],
-            phash=row["phash"],
-            dhash=row["dhash"],
-            width=row["width"],
-            height=row["height"],
-            chroma_histogram=row["chroma_histogram"],
-        )
-        join_or_create_cluster(
-            connection,
-            asset_id,
-            fingerprint,
-            self._burst_phash_max,
-            self._burst_dhash_max,
-            self._burst_capture_window_seconds,
-            self._burst_chroma_max,
-        )
-
-    def recluster_bursts(self) -> dict:
-        """Rebuild all display burst memberships using the current policy."""
-        from photo_server.bursts import join_or_create_cluster
-
+        This path never creates processing jobs. Callers must publish the
+        fingerprint records and snapshot before entering this projection step.
+        """
+        fingerprint_ids = {str(record.asset_id) for record in fingerprints}
+        member_ids = {
+            str(asset_id)
+            for cluster in snapshot.clusters
+            for asset_id in cluster.asset_ids
+        }
+        if not member_ids <= fingerprint_ids:
+            raise LibraryError("Canonical burst snapshot references an asset without a fingerprint")
         with self.engine.begin() as connection:
             connection.execute(burst_members.delete())
             connection.execute(burst_clusters.delete())
-            rows = (
+            connection.execute(image_fingerprints.delete())
+            for record in sorted(
+                fingerprints,
+                key=lambda value: (str(value.asset_id), value.algorithm_version),
+            ):
                 connection.execute(
-                    select(
-                        assets.c.id,
-                        assets.c.timeline_at,
-                        image_fingerprints.c.algorithm_version,
-                        image_fingerprints.c.phash,
-                        image_fingerprints.c.dhash,
-                        image_fingerprints.c.width,
-                        image_fingerprints.c.height,
-                        image_fingerprints.c.chroma_histogram,
-                    )
-                    .join(image_fingerprints, image_fingerprints.c.asset_id == assets.c.id)
-                    .where(
-                        assets.c.deleted_at.is_(None),
-                        image_fingerprints.c.algorithm_version == BURST_HASH_VERSION,
-                    )
-                    .order_by(assets.c.timeline_at, assets.c.id)
-                )
-                .mappings()
-                .all()
-            )
-            for row in rows:
-                join_or_create_cluster(
-                    connection,
-                    row["id"],
-                    Fingerprint(
-                        algorithm_version=row["algorithm_version"],
-                        phash=row["phash"],
-                        dhash=row["dhash"],
-                        width=row["width"],
-                        height=row["height"],
-                        chroma_histogram=row["chroma_histogram"],
-                    ),
-                    self._burst_phash_max,
-                    self._burst_dhash_max,
-                    self._burst_capture_window_seconds,
-                    self._burst_chroma_max,
-                )
-            clusters = connection.scalar(select(func.count()).select_from(burst_clusters))
-            members = connection.scalar(select(func.count()).select_from(burst_members))
-            non_representatives = (
-                select(burst_members.c.asset_id)
-                .select_from(
-                    burst_members.join(
-                        burst_clusters,
-                        burst_clusters.c.id == burst_members.c.cluster_id,
+                    insert(image_fingerprints).values(
+                        asset_id=str(record.asset_id),
+                        algorithm_version=record.algorithm_version,
+                        phash=record.phash,
+                        dhash=record.dhash,
+                        width=record.width,
+                        height=record.height,
+                        chroma_histogram=record.chroma_histogram,
+                        created_at=datetime.fromisoformat(
+                            record.created_at.replace("Z", "+00:00")
+                        ),
                     )
                 )
-                .where(burst_members.c.asset_id != burst_clusters.c.representative_asset_id)
-            )
-            cleared_analysis_jobs = connection.execute(
-                jobs.delete().where(
-                    jobs.c.job_type == "ai-v1",
-                    jobs.c.status == "pending",
-                    jobs.c.asset_id.in_(non_representatives),
+            for cluster in snapshot.clusters:
+                connection.execute(
+                    insert(burst_clusters).values(
+                        id=str(cluster.cluster_id),
+                        representative_asset_id=str(cluster.representative_asset_id),
+                        policy_version=snapshot.policy_version,
+                        created_at=datetime.fromisoformat(
+                            snapshot.created_at.replace("Z", "+00:00")
+                        ),
+                    )
                 )
-            ).rowcount
-            cleared_semantic_stages = connection.execute(
-                ai_stage_jobs.delete().where(
-                    ai_stage_jobs.c.stage == "semantic",
-                    ai_stage_jobs.c.status == "pending",
-                    ai_stage_jobs.c.asset_id.in_(non_representatives),
+                connection.execute(
+                    insert(burst_members),
+                    [
+                        {
+                            "cluster_id": str(cluster.cluster_id),
+                            "asset_id": str(asset_id),
+                        }
+                        for asset_id in cluster.asset_ids
+                    ],
                 )
-            ).rowcount
+
+    def burst_projection(self) -> dict:
+        """Return normalized fingerprint and burst rows for compare/reconcile."""
+        with self.engine.connect() as connection:
+            fingerprint_rows = connection.execute(
+                select(image_fingerprints).order_by(
+                    image_fingerprints.c.asset_id,
+                    image_fingerprints.c.algorithm_version,
+                )
+            ).mappings().all()
+            cluster_rows = connection.execute(
+                select(burst_clusters).order_by(burst_clusters.c.id)
+            ).mappings().all()
+            member_rows = connection.execute(
+                select(burst_members).order_by(
+                    burst_members.c.cluster_id,
+                    burst_members.c.asset_id,
+                )
+            ).mappings().all()
         return {
-            "fingerprintedAssets": len(rows),
-            "clusters": clusters,
-            "members": members,
-            "semanticJobsCleared": (cleared_analysis_jobs or 0) + (cleared_semantic_stages or 0),
+            "fingerprints": [
+                {
+                    key: value
+                    for key, value in dict(row).items()
+                    if key != "created_at"
+                }
+                for row in fingerprint_rows
+            ],
+            "clusters": [
+                {
+                    key: value
+                    for key, value in dict(row).items()
+                    if key != "created_at"
+                }
+                for row in cluster_rows
+            ],
+            "members": [dict(row) for row in member_rows],
         }
 
     def get_fingerprint(self, asset_id: str, version: str) -> Fingerprint | None:
@@ -1598,8 +1605,6 @@ class Catalog:
     ) -> dict:
         """Atomically publish a run, cluster its faces, and finish its job."""
         from math import sqrt
-        from uuid import uuid4
-
         def unit(vector):
             length = sqrt(sum(value * value for value in vector)) or 1.0
             return [value / length for value in vector]
@@ -2329,7 +2334,7 @@ class Catalog:
     def ready_upload_batch_ids(self, limit: int = 100) -> list[str]:
         """Find accepting batches whose required files are all complete.
 
-        The sealing operation performs the authoritative locked recheck; this
+        The sealing operation performs the definitive locked recheck; this
         method is only a bounded discovery pass for reconciliation.
         """
         with self.engine.connect() as connection:
@@ -2694,9 +2699,37 @@ class Catalog:
             return {**dict(row), "files": {file["id"]: dict(file) for file in file_rows}}
 
     def finish_onboarding_job(
-        self, job: dict, result: dict | None = None, error: str | None = None
+        self, job: dict, result: dict | None = None, error: str | None = None, service=None
     ):
         ids = [job["primary_file_id"], *job["sidecar_file_ids"]]
+        if error is None:
+            # Upload completion used to append album membership inside this
+            # PostgreSQL-only transaction. Publish that user-visible mutation
+            # through the S3-first coordinator before recording job status.
+            with self.engine.connect() as connection:
+                album_id = connection.scalar(
+                    select(upload_batches.c.album_id).where(
+                        upload_batches.c.id == str(job["batch_id"])
+                    )
+                )
+            if album_id and service is not None:
+                from photo_server.state import mutate
+
+                album = self.get_album(str(album_id))
+                if album is None or album.deleted_at:
+                    raise LibraryError("Upload target album no longer exists or is hidden")
+                asset_id = UUID(result["assetId"])
+                if asset_id not in album.asset_ids:
+                    mutate(
+                        service,
+                        uuid5(UUID(str(job["id"])), "album-membership"),
+                        Mutation(
+                            action="album.patch",
+                            entity_id=UUID(str(album_id)),
+                            changes={"assetIds": [*map(str, album.asset_ids), str(asset_id)]},
+                            expected_revision=album.revision,
+                        ),
+                    )
         with self.engine.begin() as connection:
             if error:
                 connection.execute(
@@ -2721,15 +2754,6 @@ class Catalog:
                     .where(upload_files.c.id.in_(ids))
                     .values(status=outcome, asset_id=result["assetId"], error=None)
                 )
-                album_id = connection.scalar(
-                    select(upload_batches.c.album_id).where(
-                        upload_batches.c.id == str(job["batch_id"])
-                    )
-                )
-                if album_id:
-                    self._append_album_asset(
-                        connection, UUID(str(album_id)), UUID(result["assetId"]), UUID(job["id"])
-                    )
         self._refresh_upload_batch_status(job["batch_id"])
 
     def _append_album_asset(self, connection, album_id: UUID, asset_id: UUID, job_id: UUID):

@@ -1,4 +1,4 @@
-"""S3-first durable mutation coordinator (Phase 7).
+"""S3-authoritative durable mutation coordinator.
 
 This module deliberately only owns the durable manifest write.  PostgreSQL
 continues to own live projections and the existing catalog methods remain the
@@ -31,12 +31,17 @@ from photo_server.models import Album, Manifest, Mutation
 def _utc(value: str | None) -> str:
     if not value:
         return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-    return value.replace("+00:00", "Z")
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 class AuthoritativeMutationCoordinator:
     def __init__(self, service):
         self.service = service
+
+    def _library_id(self) -> UUID:
+        if self.service.library_id is None:
+            raise LibraryError("Canonical library identity is missing")
+        return self.service.library_id
 
     def _asset(self, current: Manifest, revision: int, operation_id: UUID, mutation: Mutation) -> AssetManifest:
         state = current.user_state
@@ -73,21 +78,61 @@ class AuthoritativeMutationCoordinator:
         )
 
     def _put(self, key: str, record) -> None:
-        # DualWritePublisher performs create-only PUT, full read-back, and
+        # CanonicalPublisher performs create-only PUT, full read-back, and
         # checksum verification.  No projection call occurs before this returns.
-        self.service.dual_write._put_immutable(key, encode(record), "application/json")
+        self.service.publisher._put_immutable(key, encode(record), "application/json")
         if self.service.storage.read_bytes(key) != encode(record):
             raise LibraryError(f"Verified immutable write changed: {key}")
 
-    def publish(self, operation_id: UUID, mutation: Mutation) -> None:
+    def _asset_projection(self, manifest: AssetManifest, mutation: Mutation) -> Manifest:
+        projection = self.service.publisher.projection_from_manifest(manifest)
+        return Manifest.model_validate({
+            **projection.model_dump(mode="json"),
+            "revision": manifest.revision,
+            "previous_revision": manifest.parent_revision,
+            "operation_id": manifest.operation_id,
+            "mutation": mutation.document() if manifest.revision > 1 else None,
+        })
+
+    def _album_projection(self, manifest: AlbumManifest, mutation: Mutation) -> Album:
+        return Album.model_validate({
+            "schemaVersion": 1,
+            "libraryId": str(manifest.library_id),
+            "albumId": str(manifest.album_id),
+            "revision": manifest.revision,
+            "previousRevision": manifest.parent_revision,
+            "operationId": str(manifest.operation_id),
+            "mutation": mutation.document(),
+            "name": manifest.name,
+            "description": manifest.description,
+            "assetIds": [str(asset_id) for asset_id in manifest.asset_ids],
+            "deletedAt": manifest.deleted_at,
+        })
+
+    def publish(self, operation_id: UUID, mutation: Mutation) -> Manifest | Album:
         catalog = self.service.catalog
         kind, action = mutation.action.split(".")
         if kind == "asset":
-            current = catalog.get(str(mutation.entity_id))
-            if current is None:
+            if catalog.get(str(mutation.entity_id)) is None:
                 raise FileNotFoundError("Entity not found")
-            if mutation.expected_revision is not None and current.revision != mutation.expected_revision:
+            canonical_heads = []
+            prefix = f"manifests/assets/{mutation.entity_id}/"
+            for key in self.service.storage.keys(prefix):
+                suffix = key.removeprefix(prefix).removesuffix(".json")
+                if suffix.isdigit():
+                    canonical_heads.append((int(suffix), key))
+            if not canonical_heads:
+                raise LibraryError(f"Canonical asset manifest is missing: {mutation.entity_id}")
+            _, head_key = max(canonical_heads)
+            canonical = decode_asset_manifest(self.service.storage.read_bytes(head_key))
+            if canonical.operation_id == operation_id:
+                return self._asset_projection(canonical, mutation)
+            current = self.service.publisher.projection_from_manifest(canonical)
+            revision_base = canonical.revision
+            if mutation.expected_revision is not None and revision_base != mutation.expected_revision:
                 raise LibraryError("Revision changed; reload before editing")
+            if current.deleted_at and action not in {"restore", "delete"}:
+                raise LibraryError("Unhide this item before editing")
             values = current.model_dump(mode="json")
             if action == "patch":
                 values["user_state"] = {**current.user_state.document(), **mutation.changes}
@@ -104,46 +149,113 @@ class AuthoritativeMutationCoordinator:
             elif action == "restore":
                 values["deleted_at"] = None
             else:
-                return
-            proposed = Manifest.model_validate({**values, "revision": current.revision + 1,
-                "previous_revision": current.revision, "operation_id": operation_id,
+                raise LibraryError("Invalid asset mutation")
+            proposed = Manifest.model_validate({**values, "revision": revision_base + 1,
+                "previous_revision": revision_base, "operation_id": operation_id,
                 "mutation": mutation.document()})
             manifest_key = f"manifests/assets/{proposed.asset_id}/{proposed.revision}.json"
-            if self.service.storage.head(manifest_key) is not None:
+            while self.service.storage.head(manifest_key) is not None:
                 stored = decode_asset_manifest(self.service.storage.read_bytes(manifest_key))
-                if stored.operation_id != operation_id:
+                if stored.operation_id == operation_id:
+                    if action == "delete":
+                        tombstone_key = f"tombstones/asset/{proposed.asset_id}/{proposed.revision}.json"
+                        if self.service.storage.head(tombstone_key) is None:
+                            tombstone = Tombstone(
+                                self._library_id(), "asset", proposed.asset_id, proposed.revision,
+                                proposed.revision - 1, operation_id,
+                                stored.deleted_at or stored.created_at, stored.created_at,
+                            )
+                            self._put(tombstone_key, tombstone)
+                    return self._asset_projection(stored, mutation)
+                # The projection may have been stale when the canonical head
+                # was first read. Advance from the object that won the
+                # immutable revision race and retry at the next revision.
+                converter = getattr(self.service.publisher, "projection_from_manifest", None)
+                if converter is None:
                     raise LibraryError("Immutable manifest revision conflicts with this operation")
-                if action == "delete":
-                    tombstone_key = f"tombstones/asset/{proposed.asset_id}/{proposed.revision}.json"
-                    if self.service.storage.head(tombstone_key) is None:
-                        tombstone = Tombstone(
-                            catalog.library_id(), "asset", proposed.asset_id, proposed.revision,
-                            proposed.revision - 1, operation_id,
-                            stored.deleted_at or stored.created_at, stored.created_at,
-                        )
-                        self._put(tombstone_key, tombstone)
-                return
+                current = converter(stored)
+                revision_base = stored.revision
+                values = current.model_dump(mode="json")
+                if action == "patch":
+                    values["user_state"] = {**current.user_state.document(), **mutation.changes}
+                    values["user_state"].pop("metadata", None)
+                    values["user_state"].pop("captureTime", None)
+                    if "metadata" in mutation.changes:
+                        values["metadata"] = mutation.changes["metadata"]
+                        values["capture_time"] = mutation.changes.get("captureTime")
+                elif action == "metadata":
+                    values["metadata"] = mutation.changes["metadata"]
+                    values["capture_time"] = mutation.changes.get("captureTime")
+                elif action == "delete":
+                    values["deleted_at"] = current.deleted_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
+                elif action == "restore":
+                    values["deleted_at"] = None
+                proposed = Manifest.model_validate({
+                    **values, "revision": revision_base + 1,
+                    "previous_revision": revision_base, "operation_id": operation_id,
+                    "mutation": mutation.document(),
+                })
+                manifest_key = f"manifests/assets/{proposed.asset_id}/{proposed.revision}.json"
             record = self._asset(proposed, proposed.revision, operation_id, mutation)
             self._put(manifest_key, record)
             if action == "delete":
-                tombstone = Tombstone(catalog.library_id(), "asset", proposed.asset_id,
-                    proposed.revision, current.revision, operation_id, record.deleted_at or record.created_at,
+                tombstone = Tombstone(self._library_id(), "asset", proposed.asset_id,
+                    proposed.revision, proposed.revision - 1, operation_id, record.deleted_at or record.created_at,
                     record.created_at)
                 self._put(f"tombstones/asset/{proposed.asset_id}/{proposed.revision}.json", tombstone)
+            return proposed
         elif kind == "album":
-            current = catalog.get_album(str(mutation.entity_id))
-            if mutation.expected_revision is not None and (current is None or current.revision != mutation.expected_revision):
-                raise LibraryError("Revision changed; reload before editing")
+            projected = catalog.get_album(str(mutation.entity_id))
+            prefix = f"manifests/albums/{mutation.entity_id}/"
+            canonical_heads = []
+            for key in self.service.storage.keys(prefix):
+                suffix = key.removeprefix(prefix).removesuffix(".json")
+                if suffix.isdigit():
+                    canonical_heads.append((int(suffix), key))
+            current = None
+            if canonical_heads:
+                _, head_key = max(canonical_heads)
+                head = decode_album_manifest(self.service.storage.read_bytes(head_key))
+                if head.operation_id == operation_id:
+                    return self._album_projection(head, mutation)
+                current = self._album_projection(
+                    head,
+                    Mutation(
+                        action="album.patch" if head.revision > 1 else "album.create",
+                        entity_id=head.album_id,
+                        changes={},
+                        expected_revision=head.parent_revision,
+                    ),
+                )
+            elif projected is not None:
+                raise LibraryError(f"Canonical album manifest is missing: {mutation.entity_id}")
             if current is None and action != "create":
                 raise FileNotFoundError("Entity not found")
+            if current is not None and action == "create":
+                raise LibraryError("Album already exists")
+            if mutation.expected_revision is not None and (
+                current is None or current.revision != mutation.expected_revision
+            ):
+                raise LibraryError("Revision changed; reload before editing")
+            if current is not None and current.deleted_at and action not in {"restore", "delete"}:
+                raise LibraryError("Unhide this item before editing")
             values = current.document() if current else {"name": "", "description": "", "assetIds": [], "deletedAt": None}
             values.update(mutation.changes)
             if action == "delete":
                 values["deletedAt"] = values.get("deletedAt") or datetime.now(UTC).isoformat().replace("+00:00", "Z")
             elif action == "restore":
                 values["deletedAt"] = None
+            elif action not in {"create", "patch"}:
+                raise LibraryError("Invalid album mutation")
+            existing_assets = set(current.asset_ids) if current else set()
+            for asset_id in values.get("assetIds", []):
+                asset = self.service.canonical_asset(asset_id)
+                if asset.deleted_at and UUID(str(asset_id)) not in existing_assets:
+                    raise LibraryError(f"Unhide asset before adding it to an album: {asset_id}")
             revision = current.revision + 1 if current else 1
-            record = self._album(current, catalog.library_id(), mutation.entity_id, revision, operation_id, values)
+            if self.service.library_id is None:
+                raise LibraryError("Canonical library identity is missing")
+            record = self._album(current, self.service.library_id, mutation.entity_id, revision, operation_id, values)
             manifest_key = f"manifests/albums/{record.album_id}/{record.revision}.json"
             if self.service.storage.head(manifest_key) is not None:
                 stored = decode_album_manifest(self.service.storage.read_bytes(manifest_key))
@@ -153,17 +265,18 @@ class AuthoritativeMutationCoordinator:
                     tombstone_key = f"tombstones/album/{record.album_id}/{record.revision}.json"
                     if self.service.storage.head(tombstone_key) is None:
                         tombstone = Tombstone(
-                            catalog.library_id(), "album", record.album_id, record.revision,
+                            self._library_id(), "album", record.album_id, record.revision,
                             record.revision - 1, operation_id,
                             stored.deleted_at or stored.created_at, stored.created_at,
                         )
                         self._put(tombstone_key, tombstone)
-                return
+                return self._album_projection(stored, mutation)
             self._put(manifest_key, record)
             if action == "delete":
-                tombstone = Tombstone(catalog.library_id(), "album", record.album_id, record.revision,
+                tombstone = Tombstone(self._library_id(), "album", record.album_id, record.revision,
                     record.parent_revision or 1, operation_id, record.deleted_at or record.created_at, record.created_at)
                 self._put(f"tombstones/album/{record.album_id}/{record.revision}.json", tombstone)
+            return self._album_projection(record, mutation)
 
     def publish_person_rename(self, operation_id: UUID, person_id: UUID, display_name: str) -> None:
         people = {UUID(item["personId"]): item for item in self.service.catalog.all_people()}
@@ -181,7 +294,7 @@ class AuthoritativeMutationCoordinator:
                 revisions.append(int(suffix))
         revision = max(revisions, default=0) + 1
         record = PersonManifest(
-            library_id=self.service.catalog.library_id(), person_id=person_id, revision=revision,
+            library_id=self._library_id(), person_id=person_id, revision=revision,
             parent_revision=revision - 1 if revision > 1 else None, operation_id=operation_id,
             created_at=current["createdAt"], display_name=display_name,
             face_ids=tuple(UUID(face_id) for face_id in current["faceIds"]), deleted_at=None,
@@ -205,7 +318,7 @@ class AuthoritativeMutationCoordinator:
         created_at = item["createdAt"]
         prefix = f"manifests/people/{person_id}/"
         record = PersonManifest(
-            library_id=self.service.catalog.library_id(), person_id=person_id,
+            library_id=self._library_id(), person_id=person_id,
             revision=revision, parent_revision=current_revision or None,
             operation_id=operation_id, created_at=created_at,
             display_name=item["displayName"] if display_name is None else display_name,
@@ -223,7 +336,7 @@ class AuthoritativeMutationCoordinator:
             if revision == 1:
                 raise LibraryError("A person tombstone requires a prior person revision")
             tombstone = Tombstone(
-                self.service.catalog.library_id(), "person", person_id, revision,
+                self._library_id(), "person", person_id, revision,
                 revision - 1, operation_id, deleted_at, created_at,
             )
             tombstone_key = f"tombstones/person/{person_id}/{revision}.json"
@@ -254,7 +367,7 @@ class AuthoritativeMutationCoordinator:
             face_ids = set(request["faceIds"])
             target_id = request.get("targetPersonId")
             if target_id is None:
-                target_id = str(uuid5(self.service.catalog.library_id(), f"face-operation:{operation_id}"))
+                target_id = str(uuid5(self._library_id(), f"face-operation:{operation_id}"))
                 target = {
                     "personId": target_id, "displayName": "", "faceIds": [],
                     "createdAt": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),

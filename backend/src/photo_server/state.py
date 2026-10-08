@@ -1,16 +1,19 @@
-"""Mutation entry points and projection compatibility.
+"""S3-authoritative mutation entry points and database projection updates."""
 
-S3 contains immutable media blobs. Structured library state is committed in one
-PostgreSQL transaction and is protected by PostgreSQL backups; it is not mirrored
-into per-asset or per-album S3 documents.
-"""
+from threading import RLock
 
 from photo_server.models import Album, Manifest, Mutation
+
+# S3 revision publication and its PostgreSQL projection must be serialized in
+# this process.  PostgreSQL's writer lock protects the projection transaction,
+# but cannot span the preceding immutable S3 write because that write uses a
+# separate storage client.  This lock closes that intra-process revision race.
+_MUTATION_LOCK = RLock()
 
 
 def import_identity(manifest: Manifest) -> dict:
     """Return the immutable portion of an asset record."""
-    return {
+    identity = {
         key: value
         for key, value in manifest.document().items()
         if key
@@ -22,6 +25,10 @@ def import_identity(manifest: Manifest) -> dict:
             "importedAt",
         }
     }
+    imported_at = identity["importedAt"]
+    if imported_at.endswith("+00:00"):
+        identity["importedAt"] = imported_at[:-6] + "Z"
+    return identity
 
 
 def mutation_result(snapshot: Manifest | Album) -> dict:
@@ -45,10 +52,50 @@ def mutate(service, operation_id, mutation: Mutation) -> dict:
 
             raise LibraryError("Operation ID was reused with a different request")
         return previous["result"]
+    kind, action = mutation.action.split(".")
+    if kind == "burst":
+        from photo_server.burst_authority import BurstAuthority
+
+        asset_id = mutation.changes.get(
+            "representativeAssetId" if action == "setRepresentative" else "assetId"
+        )
+        try:
+            result = BurstAuthority(service).mutate(
+                operation_id, action, str(mutation.entity_id), str(asset_id)
+            )
+            return service.catalog.record_burst_operation(operation_id, mutation, result)
+        except Exception as error:
+            service.publisher.record_reconciliation(
+                operation_id,
+                {
+                    "status": "canonical-written-projection-failed",
+                    "entityId": str(mutation.entity_id),
+                    "action": mutation.action,
+                    "error": str(error),
+                },
+            )
+            raise
     from photo_server.authoritative import AuthoritativeMutationCoordinator
 
-    AuthoritativeMutationCoordinator(service).publish(operation_id, mutation)
-    return service.catalog.commit_mutation(operation_id, mutation)
+    with _MUTATION_LOCK:
+        snapshot = AuthoritativeMutationCoordinator(service).publish(operation_id, mutation)
+        if mutation.action in {"asset.delete", "asset.restore"}:
+            from photo_server.burst_authority import BurstAuthority
+
+            BurstAuthority(service).synchronize(operation_id, str(mutation.entity_id))
+        try:
+            return service.catalog.commit_mutation(operation_id, mutation, snapshot)
+        except Exception as error:
+            service.publisher.record_reconciliation(
+                operation_id,
+                {
+                    "status": "canonical-written-projection-failed",
+                    "entityId": str(mutation.entity_id),
+                    "action": mutation.action,
+                    "error": str(error),
+                },
+            )
+            raise
 
 
 def mutate_face(service, operation_id, request: dict) -> dict:
@@ -62,5 +109,13 @@ def mutate_face(service, operation_id, request: dict) -> dict:
         return previous["result"]
     from photo_server.authoritative import AuthoritativeMutationCoordinator
 
-    AuthoritativeMutationCoordinator(service).publish_face_operation(operation_id, request)
-    return service.catalog.commit_face_operation(operation_id, request)
+    with _MUTATION_LOCK:
+        AuthoritativeMutationCoordinator(service).publish_face_operation(operation_id, request)
+        try:
+            return service.catalog.commit_face_operation(operation_id, request)
+        except Exception as error:
+            service.publisher.record_reconciliation(
+                operation_id,
+                {"status": "canonical-written-projection-failed", "faceOperation": request, "error": str(error)},
+            )
+            raise
