@@ -2,10 +2,17 @@
 
 ## Complete
 
-Phase 9 recovery checkpoint contracts and implementation are documented in
-[`in-progress/s3-authoritative-phase9.md`](in-progress/s3-authoritative-phase9.md)
-and the recovery checkpoint schemas. Checkpoint creation is resumable,
-immutable at completion, and independent of the production S3 destination.
+The S3-authoritative architecture, manifest contracts, backfill,
+reconciliation, mutation, retention, recovery, and authority-cutover work are
+complete implementation records under [`complete/`](complete/), including the
+Phase 10 cutover contract. The remaining work is tracked separately in the
+PostgreSQL-authority phaseout plan below.
+
+The S3-authoritative recovery checkpoint contracts and implementation are
+documented in [`complete/s3-authoritative-phase9.md`](complete/s3-authoritative-phase9.md)
+and the accompanying recovery checkpoint schemas. Checkpoint creation is
+resumable, immutable at completion, and independent of the production S3
+destination.
 
 The `complete/` directory contains delivered behavior, implementation records,
 and completed session briefs:
@@ -28,40 +35,21 @@ default to `on` remains an operational threshold decision.
 
 ## In progress
 
-The S3-authoritative Phase 1 contract is documented in
-[`s3-authoritative-phase1.md`](in-progress/s3-authoritative-phase1.md), with
-versioned schemas and examples alongside it.
-
-Phase 6 reconciliation is documented in
-[`s3-authoritative-phase6.md`](in-progress/s3-authoritative-phase6.md). It is
-maintenance-only: PostgreSQL remains authoritative for live reads and writes,
-and no authority cutover occurs. The disposable reconciliation integration
-suite is the required Phase 6 exit gate.
-
-Phase 7 S3-first mutations are documented in
-[`s3-authoritative-phase7.md`](in-progress/s3-authoritative-phase7.md).
-Phase 7 is complete: the mutation integration suite is the required exit gate;
-PostgreSQL remains authoritative for live reads and S3 is authoritative for
-immutable mutation history and recovery.
-
-Phase 8 object retention and dry-run garbage-collection policy is documented in
-[`s3-authoritative-phase8.md`](in-progress/s3-authoritative-phase8.md). It is
-opt-in and fail-closed; destructive deletion is disabled until restore testing
-is complete.
+The remaining work is documented in
+[`postgres-authority-phaseout.md`](in-progress/postgres-authority-phaseout.md).
+It covers migrating all runtime reads and writes to canonical S3 objects,
+running S3-authoritative mode, rebuilding PostgreSQL from S3, and finally
+removing the duplicate `originals/` photo objects.
 
 ## Planned
 
 The `planned/` directory contains the next unstarted operational sessions and
 the roadmap, including restore verification and storage-capacity safety.
 
-## Current architecture work
+## S3 authority cutover
 
-[`s3-authoritative-architecture-plan.md`](s3-authoritative-architecture-plan.md)
-stays at the top level as the current architecture pivot and primary active
-design document.
-# S3 authority cutover
-
-Phase 10 is documented in [s3-authoritative-phase10.md](in-progress/s3-authoritative-phase10.md).
-Use the deterministic cutover readiness report before setting
-`PHOTO_AUTHORITY_MODE=s3`; PostgreSQL remains a rebuildable projection and
-operational queue store.
+The completed architecture and Phase 10 cutover contract are archived under
+[`complete/`](complete/). Use the deterministic cutover readiness report before
+setting `PHOTO_AUTHORITY_MODE=s3`; the active storage-deduplication and
+compatibility-removal plan is
+[`postgres-authority-phaseout.md`](in-progress/postgres-authority-phaseout.md).

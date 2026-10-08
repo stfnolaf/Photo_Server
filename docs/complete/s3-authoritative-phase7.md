@@ -22,8 +22,8 @@ writes a new live revision; it never removes a tombstone. Queues, leases,
 heartbeats, and worker checkpoints are operational-only and are not manifests.
 
 The versioned manifest schemas and examples are in
-`docs/in-progress/s3-authoritative-schemas/` and
-`docs/in-progress/s3-authoritative-examples/`. The disposable suite is opt-in with
+`docs/complete/s3-authoritative-schemas/` and
+`docs/complete/s3-authoritative-examples/`. The disposable suite is opt-in with
 `PHOTO_RUN_PHASE7_MUTATION_INTEGRATION=1`. It creates a random Compose project,
 ports, database, bucket, and temporary directory; it never references the
 repository Compose file or its volumes. Cleanup runs `down` only against that

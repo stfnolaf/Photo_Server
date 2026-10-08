@@ -1,8 +1,8 @@
 # Photo Server
 
-This is a Python/FastAPI, PostgreSQL, and S3 photo library. PostgreSQL is the single source of truth for assets, extracted metadata, user metadata, albums, operation retries, tombstones, jobs, and the current analysis index. S3 holds immutable originals, imported XMP sidecars, versioned AI artifacts, upload staging objects, and scheduled PostgreSQL backups. A threaded media worker keeps uploads and previews responsive; a separate AI worker optionally dispatches to an OpenAI-compatible VLM and a standalone face-service without entering the ingestion critical path. The library is fully functional without either intelligence service, and their provider and compute location are configuration choices.
+This is a Python/FastAPI, PostgreSQL, and S3 photo library. S3 is the authoritative store for content-addressed media objects and immutable, revisioned library manifests. PostgreSQL is a rebuildable query projection and the durable operational store for queues, leases, and upload sessions. A threaded media worker keeps uploads and previews responsive; a separate AI worker optionally dispatches to an OpenAI-compatible VLM and a standalone face-service without entering the ingestion critical path. The library is fully functional without either intelligence service, and their provider and compute location are configuration choices.
 
-See the historical [Phase 1](docs/verification.md), [Phase 2](docs/phase-2-verification.md), and [Phase 3](docs/phase-3-verification.md) reports, plus the current [PostgreSQL-authority verification](docs/postgres-authority-verification.md).
+See the historical verification reports under [`docs/`](docs/) for implementation and acceptance records.
 
 ## Project structure
 
@@ -38,46 +38,33 @@ The first start downloads the Qwen3-VL 8B 4-bit model into the persistent `vllm-
 - Health, queue, and asset counts: **http://SERVER_IP:8000/health**
 - S3 endpoint: `PHOTO_S3_ENDPOINT` in `.env`; bucket `photo-library`, unsigned requests by default.
 - PostgreSQL: `localhost:55432`; credentials and database name come from `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` in `.env`.
-- PostgreSQL and preview caches use separate named Docker volumes. S3 holds originals, imported sidecars, staging objects, and hourly PostgreSQL backups under `backups/postgres/`.
+- PostgreSQL and preview caches use separate named Docker volumes. S3 holds content-addressed originals, imported sidecars, revisioned manifests, staging objects, and recovery checkpoints.
 
 The API and web frontend bind to all interfaces by default. V1 has no API authentication, so expose ports 8000 and 3000 only on a trusted network. Set `PHOTO_API_BIND=127.0.0.1` and/or `PHOTO_WEB_BIND=127.0.0.1` when a configured reverse proxy is the only entry point.
 
 `docker compose down` stops services while retaining the volumes. Avoid `down -v` unless intentionally discarding the local catalog and cache.
 
-### Upgrade an existing Phase 2 library
-
-Stop the old API and worker before starting the new version so that local-only writes cannot race migration:
-
-```bash
-docker compose stop api worker ai-worker backup
-docker compose build api worker ai-worker web backup
-docker compose up -d postgres
-docker compose run --rm --no-deps api photo-server migrate
-docker compose up -d api worker ai-worker web backup
-```
-
-The explicit `migrate` command applies PostgreSQL schema migrations before traffic resumes. Startup performs the same check automatically. Existing Phase 2 ratings/favorites are promoted into the PostgreSQL asset snapshot; no S3 state documents are created. Keep the existing PostgreSQL volume until a verified version-4 backup has completed because PostgreSQL is now authoritative.
-
 ### Database migrations
 
-PostgreSQL DDL and data backfills live in numbered SQL files under [`backend/src/photo_server/db_migrations`](backend/src/photo_server/db_migrations). The current sequence is:
+PostgreSQL projection and operational-store DDL lives in numbered SQL files under [`backend/src/photo_server/db_migrations`](backend/src/photo_server/db_migrations). The current sequence is:
 
 | Version | File | Purpose |
 |---:|---|---|
 | 000 | `000_migration_tracking.sql` | Bootstrap the migration ledger |
-| 001 | `001_initial_catalog.sql` | Initial asset, blob, job, and upload catalog |
-| 002 | `002_browsing.sql` | Browse fields, ratings/favorites, backfill, constraints, and indexes |
-| 003 | `003_durable_user_state.sql` | Albums, operation replay records, and asset tombstones |
-| 004 | `004_postgres_authority.sql` | Record PostgreSQL as the structured-state authority |
-| 005 | `005_ai_analysis.sql` | AI run artifacts, face embeddings/groups, current search index, and analysis queue |
+| 001 | `001_current_schema.sql` | Query projections, jobs, uploads, analysis indexes, and operation receipts |
+| 002 | `002_ai_stage_jobs.sql` | Per-stage AI queue state |
+| 003 | `003_semantic_stage_jobs.sql` | Seed semantic-analysis queue entries |
+| 004 | `004_upload_batch_albums.sql` | Optional upload-batch album destination |
+| 005 | `005_burst_chroma_histogram.sql` | Burst fingerprint chroma data |
+| 006 | `006_queue_timestamps.sql` | Queue timestamps and claim indexes |
 
-Every file is idempotent: table, column, constraint, and index creation is guarded, and the browsing backfill can run repeatedly. Normal operation still executes each version once. The `schema_migrations` table records its version, name, SHA-256 checksum, and application time; startup refuses gaps, checksum changes, version disagreement, a database from another library, or a database newer than the application. Add a new numbered file for every schema change instead of editing an applied file.
+Every file is idempotent. Normal operation still executes each version once. The `schema_migrations` table records its version, name, SHA-256 checksum, and application time; startup refuses gaps, checksum changes, version disagreement, a database from another library, or a database newer than the application. Add a new numbered file for every schema change instead of editing an applied file.
 
-The runner holds a PostgreSQL transaction-level advisory lock, applies all pending SQL and ledger updates in one transaction, and updates the compatibility field `library.schema_version`. API and worker processes can start together; one migrates while the other waits and then observes the completed version. New databases run 001 through the current version. Pre-ledger databases are adopted from their existing `library.schema_version`: versions already present are entered in the ledger using the canonical file checksums, then only newer migrations run.
+The runner holds a PostgreSQL transaction-level advisory lock, applies all pending SQL and ledger updates in one transaction, and updates `library.schema_version`. API and worker processes can start together; one migrates while the other waits and then observes the completed version.
 
 [`catalog.py`](backend/src/photo_server/catalog.py) still declares SQLAlchemy table mappings because application queries need column metadata. Those mappings no longer create or alter tables: `MetaData.create_all()` and inline DDL have been removed. The SQL files are the schema source of truth, while [`migrations.py`](backend/src/photo_server/migrations.py) only discovers, validates, locks, and executes them.
 
-All structured-state migrations happen in PostgreSQL. Application startup also promotes any legacy Phase 2 rating/favorite columns into the current PostgreSQL asset document.
+Canonical structured state is versioned through immutable S3 manifests. Database migrations only evolve the rebuildable projection and operational tables.
 
 ### Configuration
 
@@ -176,14 +163,14 @@ accepting -> queued -> processing -> complete
                                   \-> failed -> retry
 ```
 
-1. `POST /upload-batches` creates the authoritative PostgreSQL batch and file records.
+1. `POST /upload-batches` creates operational PostgreSQL batch and file records.
 2. Each required `PUT` streams through the API into an immutable multipart object under `incoming/`. Only `PHOTO_UPLOAD_WORKERS` transfers run at once; additional HTTP requests wait on an asynchronous semaphore, so they do not occupy worker threads.
 3. `POST /upload-batches/{id}/seal` creates PostgreSQL onboarding jobs.
-4. The worker thread pool claims jobs with PostgreSQL row locking and leases. Each job verifies the staged bytes, runs the reusable metadata processing stage, stores immutable originals, commits the asset to PostgreSQL, and removes its staged copy.
+4. The worker thread pool claims jobs with PostgreSQL row locking and leases. Each job verifies the staged bytes, runs metadata extraction, stores content-addressed objects, publishes the immutable asset manifest, updates the database projection, and removes its staged copy.
 5. The same worker pool runs explicitly queued processing stages and then generates previews. Processing can be safely queued again as extractors improve.
 6. Asset creation also adds an `ai-v1` job. The independent AI worker waits for a usable preview, then runs YuNet/AdaFace and Qwen sequentially. Upload completion never waits for this queue.
 
-PostgreSQL preserves queue state across service restarts. A staged or final object written immediately before a process failure is safely reused on retry because object keys are immutable and bytes are verified. Recovery after PostgreSQL loss uses a database backup; uploads newer than the restored backup may need to be resubmitted.
+PostgreSQL preserves queue state across service restarts. A staged or final object written immediately before a process failure is safely reused on retry because object keys are immutable and bytes are verified. Structured projections can be rebuilt from S3 after PostgreSQL loss; operational queue state can additionally be restored from a recovery checkpoint's database dump.
 
 Unsealed batches with no activity for `PHOTO_UPLOAD_ABANDON_SECONDS` are automatically removed from PostgreSQL and S3 staging. The web queue's **Dismiss** action performs the same cleanup immediately after active transfers stop. Sealed batches are never removed by this cleanup, including failed onboarding batches that remain available for retry.
 
@@ -259,11 +246,11 @@ Every metadata, album, trash, restore, or face-review request requires a client-
 
 Use `caption: ""`, `keywords: []`, or `location: null` to clear those fields. Album creation requires `name`; `assetIds` replaces the ordered member list in one revision. Delete/restore bodies need only `operationId`. An optional `expectedRevision` rejects edits based on stale state with HTTP 409. Browse trash using `/library/assets?deleted=true` and filter an album using `album_id=UUID`.
 
-A shared PostgreSQL advisory lock serializes metadata and album mutations. Each current snapshot and its operation-ID retry record are committed in one PostgreSQL transaction, so a failure cannot expose the state change without its retry result or vice versa.
+Metadata, album, fingerprint, burst-membership, and representative mutations publish verified immutable S3 records before updating the PostgreSQL query projection. Operation IDs make retries idempotent, and reconciliation can repair a projection write that failed after canonical publication.
 
 An already committed operation returns its original result even if newer revisions exist. Reusing its ID for a different request returns HTTP 409. Fetch current state separately after retry if other changes have happened. The web frontend stores pending requests in browser local storage, scoped to the library ID, and offers **Retry save** after failures or reloads.
 
-Asset and album snapshots, revision counters, and operation results live only in PostgreSQL. The application does not write per-asset or per-album state JSON to S3. Imported XMP files are retained unchanged as asset blobs; generated XMP remains future work.
+Asset, album, person, face, processing, fingerprint, burst, and tombstone state is represented by immutable S3 records. Each fingerprint records its algorithm version, perceptual hashes, dimensions, and chroma histogram. Revisioned burst snapshots preserve exact cluster IDs, memberships, explicit member removals, and user-selected representatives, so `rebuild-from-s3` restores burst presentation without reclustering or creating operational jobs. PostgreSQL holds the current query-friendly projection. Imported XMP files are retained unchanged as content-addressed asset blobs; generated XMP remains future work.
 
 A minimal one-file sequence is:
 
@@ -333,7 +320,7 @@ curl --fail-with-body -X POST http://SERVER_IP:8000/processing \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-Export reads PostgreSQL and verifies every downloaded original:
+Export reads the current database projection and verifies every downloaded canonical S3 object:
 
 ```bash
 mkdir -p .runtime/export
@@ -341,7 +328,7 @@ docker compose run --rm --no-deps \
   -v "$PWD/.runtime/export:/export" api photo-server export /export
 ```
 
-Export writes active originals to `<asset-id>/<original-filename>` plus a portable `manifest.json`, including current metadata, into an empty destination. `library-state.json` preserves album definitions, ordering, and trashed asset metadata. Add `--include-trash` to also download trashed originals. Export requires PostgreSQL because it is the source of truth, and it retains imported XMP files.
+Export writes active originals to `<asset-id>/<original-filename>` plus a portable `manifest.json`, including current metadata, into an empty destination. `library-state.json` preserves album definitions, ordering, and trashed asset metadata. Add `--include-trash` to also download trashed originals. The online export path uses PostgreSQL for efficient queries and verifies content against S3; a missing projection can be rebuilt from S3 first.
 
 ## Workers
 
@@ -406,6 +393,8 @@ docker compose run --rm --no-deps \
   api python -m pytest -q tests -p no:cacheprovider
 ```
 
+`./run_all_tests.sh` enables every disposable acceptance group, including mutation, reconciliation, garbage-collection, and recovery tests that create their own isolated Compose projects from the host.
+
 The tests create random `photo-test-*` buckets and `photo_test_*` databases and clean up only those resources. They exercise multipart HTTP upload, RAW companion selection, PostgreSQL queues, immutable object writes, duplicate handling, corruption detection, database-backed export, cache reconstruction, atomic mutation rollback/retry, concurrent changes, metadata refresh, album ordering, and tombstones.
 
 `openapi/openapi.json` is a checked-in artifact: it is a projection of `create_app()` generated by `scripts/dump_openapi.py` (no services needed), and `run_all_tests.sh` fails if it drifts from the code (`scripts/check_openapi.py`). After changing any request or response shape, run `scripts/dump_openapi.py`, review the spec diff, and commit both in the same change. Wire bytes, not just shape, are covered by the golden contract tests in `backend/tests/test_api_contract.py` (fixtures in `backend/tests/fixtures/api_golden/`): a new request section records its fixture on first run and verifies it on every later run. If a phase intentionally changes a wire format, re-record that section as a new fixture file and note it in [docs/openapi-codegen-plan.md](docs/openapi-codegen-plan.md).
@@ -418,9 +407,9 @@ The same spec drives the checked-in web client (`frontend/web/src/api/generated`
 - V1 has no API authentication or TLS termination; keep it on a trusted LAN or place it behind a configured reverse proxy.
 - Derivative responses remain private to browsers by default. `PHOTO_PUBLIC_DERIVATIVE_CACHE=true` adds one-year public/CDN caching and must only be used when the deployment intentionally treats derivative URLs as public.
 - Completed files and queue state survive service restarts. An individual client-to-API PUT is streamed and must restart from byte zero if its network connection fails.
-- PostgreSQL is the only authoritative structured-state store. Its scheduled backups share the configured S3 failure domain unless that S3 data is independently replicated.
-- Originals, imported XMP files, and completed AI run artifacts are immutable S3 blobs. Face naming/manual correction, photo editing, generated XMP, and semantic vector search remain future work.
+- S3 is authoritative for structured library state and content-addressed media. PostgreSQL is a rebuildable projection plus the operational queue/session store.
+- Originals, imported XMP files, canonical manifests, and completed AI run artifacts are immutable S3 objects. Face naming/manual correction, photo editing, generated XMP, and semantic vector search remain future work.
 - No automatic source-folder watcher or mass migration exists. The network client enumerates only paths explicitly provided by the user.
 - One application database and one API process per library remain the supported deployment.
-- No automatic garbage collection or original deletion is implemented.
-- PostgreSQL backup and guarded restore are implemented and exercised. Continuous WAL archiving and an independent backup of SeaweedFS/NAS remain operational follow-up work.
+- Garbage collection is fail-closed and currently reports candidates without deleting them.
+- Immutable S3 recovery checkpoints, projection rebuilds, and guarded PostgreSQL dump restore are implemented and exercised. Independent replication of the S3 authority remains an operational requirement.
