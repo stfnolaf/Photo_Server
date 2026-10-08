@@ -19,14 +19,6 @@ def main():
     )
     rebuild.add_argument("--checkpoint-id", default="default")
     rebuild.add_argument("--no-resume", action="store_true", help="Ignore the saved scan checkpoint")
-    backfill = commands.add_parser(
-        "backfill-to-s3", aliases=["backfill-s3"],
-        help="Export the PostgreSQL canonical projection into immutable S3 manifests",
-    )
-    backfill.add_argument("--checkpoint-id", default="backfill")
-    backfill.add_argument("--no-resume", action="store_true")
-    backfill.add_argument("--dry-run", action="store_true")
-    backfill.add_argument("--stop-after", type=int)
     compare = commands.add_parser(
         "compare-s3", help="Rebuild a comparison PostgreSQL projection and compare it with the source"
     )
@@ -82,23 +74,13 @@ def main():
         action="store_true",
         help="Download and hash every blob, in addition to checking its size",
     )
-    commands.add_parser(
-        "authority-status", help="Show the persisted S3/PostgreSQL authority status"
-    )
-    readiness = commands.add_parser(
-        "cutover-readiness", help="Produce the deterministic Phase 10 cutover readiness report"
-    )
-    readiness.add_argument("--checkpoint-id", default="phase10-readiness")
-    commands.add_parser("cutover-activate", help="Activate S3 authority after a clean readiness report")
-    rollback = commands.add_parser("cutover-rollback", help="Return to PostgreSQL projection authority")
-    rollback.add_argument("--reason", default="cutover rollback requested")
     commands.add_parser("list", help="List up to 100 indexed assets")
     commands.add_parser(
         "recluster-bursts",
         help="Rebuild all display burst memberships using the current thresholds",
     )
     refresh = commands.add_parser(
-        "refresh-metadata", help="Queue metadata reprocessing from immutable originals"
+        "refresh-metadata", help="Queue metadata reprocessing from canonical objects"
     )
     refresh.add_argument(
         "--asset", type=UUID, action="append", help="Asset to process; repeat for many"
@@ -153,14 +135,17 @@ def main():
     try:
         if args.command == "rebuild-from-s3":
             from photo_server.catalog import Catalog
-            from photo_server.rebuild import rebuild_from_s3
+            from photo_server.rebuild import discover_library_id, rebuild_from_s3
             from photo_server.storage import Storage
 
             storage = Storage(settings)
-            marker = storage.get_json("library.json")
-            library_id = marker.get("libraryId")
+            marker = storage.get_json("library.json") if storage.head("library.json") else None
+            library_id = marker.get("libraryId") if marker else None
             if not library_id:
-                raise ValueError("S3 library marker is missing libraryId")
+                discovered = discover_library_id(storage)
+                library_id = str(discovered) if discovered else None
+            if not library_id:
+                raise ValueError("S3 library identity is missing from the marker and manifests")
             catalog = Catalog(settings.database_url, settings)
             catalog.initialize(library_id)
             result = rebuild_from_s3(
@@ -168,31 +153,6 @@ def main():
                 catalog,
                 checkpoint_id=args.checkpoint_id,
                 resume=not args.no_resume,
-            )
-        elif args.command in {"authority-status", "cutover-readiness", "cutover-activate", "cutover-rollback"}:
-            service = Service(settings)
-            if args.command == "authority-status":
-                result = service.authority_status()
-            elif args.command == "cutover-readiness":
-                result = service.cutover_readiness(checkpoint_id=args.checkpoint_id)
-            elif args.command == "cutover-activate":
-                result = service.activate_s3_authority()
-            else:
-                result = service.rollback_s3_authority(args.reason)
-        elif args.command in {"backfill-to-s3", "backfill-s3"}:
-            from photo_server.backfill import backfill_postgres_to_s3
-            from photo_server.catalog import Catalog
-            from photo_server.storage import Storage
-
-            catalog = Catalog(settings.database_url, settings)
-            storage = Storage(settings)
-            result = backfill_postgres_to_s3(
-                catalog,
-                storage,
-                checkpoint_id=args.checkpoint_id,
-                resume=not args.no_resume,
-                dry_run=args.dry_run,
-                stop_after=args.stop_after,
             )
         elif args.command == "compare-s3":
             from photo_server.catalog import Catalog
@@ -312,7 +272,7 @@ def main():
             elif args.command == "list":
                 result = service.catalog.list_assets()
             elif args.command == "recluster-bursts":
-                result = service.catalog.recluster_bursts()
+                result = service.recluster_bursts()
             elif args.command == "refresh-metadata":
                 result = service.queue_processing(
                     args.asset,

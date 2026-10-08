@@ -506,88 +506,6 @@
         "title": "AssetDocOutList",
         "type": "array"
       },
-      "AuthorityStatusOut": {
-        "additionalProperties": false,
-        "properties": {
-          "authorityMode": {
-            "enum": [
-              "postgres",
-              "s3"
-            ],
-            "title": "Authoritymode",
-            "type": "string"
-          },
-          "failureReason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Failurereason"
-          },
-          "lastVerifiedRecoveryCheckpoint": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lastverifiedrecoverycheckpoint"
-          },
-          "projectionFreshness": {
-            "enum": [
-              "unknown",
-              "fresh",
-              "stale"
-            ],
-            "title": "Projectionfreshness",
-            "type": "string"
-          },
-          "readiness": {
-            "enum": [
-              "unknown",
-              "ready",
-              "not-ready",
-              "rollback"
-            ],
-            "title": "Readiness",
-            "type": "string"
-          },
-          "reconciliation": {
-            "title": "Reconciliation",
-            "type": "string"
-          },
-          "schemaVersion": {
-            "title": "Schemaversion",
-            "type": "integer"
-          },
-          "updatedAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updatedat"
-          }
-        },
-        "required": [
-          "schemaVersion",
-          "authorityMode",
-          "readiness",
-          "projectionFreshness",
-          "reconciliation"
-        ],
-        "title": "AuthorityStatusOut",
-        "type": "object"
-      },
       "BackupDestinationOut": {
         "additionalProperties": false,
         "properties": {
@@ -1141,55 +1059,6 @@
           "mutation"
         ],
         "title": "CurrentAssetDocOut",
-        "type": "object"
-      },
-      "CutoverReadinessOut": {
-        "additionalProperties": false,
-        "properties": {
-          "authorityMode": {
-            "enum": [
-              "postgres",
-              "s3"
-            ],
-            "title": "Authoritymode",
-            "type": "string"
-          },
-          "checkpointId": {
-            "title": "Checkpointid",
-            "type": "string"
-          },
-          "issues": {
-            "additionalProperties": true,
-            "title": "Issues",
-            "type": "object"
-          },
-          "reconciliation": {
-            "additionalProperties": true,
-            "title": "Reconciliation",
-            "type": "object"
-          },
-          "schemaVersion": {
-            "title": "Schemaversion",
-            "type": "integer"
-          },
-          "status": {
-            "enum": [
-              "ready",
-              "not-ready"
-            ],
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "schemaVersion",
-          "status",
-          "authorityMode",
-          "checkpointId",
-          "issues",
-          "reconciliation"
-        ],
-        "title": "CutoverReadinessOut",
         "type": "object"
       },
       "DependencyOut": {
@@ -4574,58 +4443,6 @@
           }
         },
         "summary": "Current Session"
-      }
-    },
-    "/authority/readiness": {
-      "get": {
-        "operationId": "getAuthorityReadiness",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CutoverReadinessOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "bearerToken": []
-          },
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Authority Readiness"
-      }
-    },
-    "/authority/status": {
-      "get": {
-        "operationId": "getAuthorityStatus",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthorityStatusOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "bearerToken": []
-          },
-          {
-            "sessionCookie": []
-          }
-        ],
-        "summary": "Authority Status"
       }
     },
     "/faces/move": {

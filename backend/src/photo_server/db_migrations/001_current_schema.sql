@@ -1,9 +1,7 @@
 CREATE TABLE IF NOT EXISTS library (
     singleton INTEGER PRIMARY KEY,
     library_id VARCHAR NOT NULL,
-    schema_version INTEGER NOT NULL,
-    state_authority VARCHAR NOT NULL DEFAULT 'postgres',
-    CONSTRAINT ck_library_state_authority CHECK (state_authority = 'postgres')
+    schema_version INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS assets (

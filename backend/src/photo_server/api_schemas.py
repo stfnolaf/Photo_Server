@@ -583,26 +583,6 @@ class HealthOut(QueueCountsOut):
     workers: list[WorkerHeartbeatOut]
 
 
-class AuthorityStatusOut(ResponseModel):
-    schema_version: StrictInt
-    authority_mode: Literal["postgres", "s3"]
-    readiness: Literal["unknown", "ready", "not-ready", "rollback"]
-    projection_freshness: Literal["unknown", "fresh", "stale"]
-    reconciliation: StrictStr
-    last_verified_recovery_checkpoint: StrictStr | None = None
-    failure_reason: StrictStr | None = None
-    updated_at: StrictStr | None = None
-
-
-class CutoverReadinessOut(ResponseModel):
-    schema_version: StrictInt
-    status: Literal["ready", "not-ready"]
-    authority_mode: Literal["postgres", "s3"]
-    checkpoint_id: StrictStr
-    issues: dict[str, Any]
-    reconciliation: dict[str, Any]
-
-
 class HealthFailureOut(ResponseModel):
     status: Literal["unavailable"]
     database: DependencyOut
