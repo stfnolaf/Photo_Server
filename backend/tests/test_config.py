@@ -24,6 +24,16 @@ def test_database_password_is_required_without_url_override(monkeypatch):
         Settings(_env_file=None, s3_endpoint="http://localhost:9000")
 
 
+def test_reconciliation_monitor_interval_has_safe_bounds():
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            s3_endpoint="http://localhost:9000",
+            database_url="postgresql+psycopg://test@localhost/test",
+            reconciliation_monitor_interval_seconds=59,
+        )
+
+
 def test_database_password_is_encoded_and_hidden(monkeypatch):
     clear_credentials(monkeypatch)
     password = "unit-test@:/$ password"

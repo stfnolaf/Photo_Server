@@ -17,6 +17,7 @@ x-backend: &backend
     PHOTO_UPLOAD_WORKERS: ${PHOTO_UPLOAD_WORKERS:-4}
     PHOTO_UPLOAD_ABANDON_SECONDS: ${PHOTO_UPLOAD_ABANDON_SECONDS:-86400}
     PHOTO_UPLOAD_CLEANUP_INTERVAL: ${PHOTO_UPLOAD_CLEANUP_INTERVAL:-60}
+    PHOTO_RECONCILIATION_MONITOR_INTERVAL: ${PHOTO_RECONCILIATION_MONITOR_INTERVAL:-3600}
     PHOTO_WORKER_THREADS: ${PHOTO_WORKER_THREADS:-4}
     # Display-only burst grouping thresholds. Both perceptual hashes must be
     # within their configured distances for a frame to join a burst.

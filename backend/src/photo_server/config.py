@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     upload_cleanup_interval_seconds: int = Field(
         default=60, ge=10, le=86400, validation_alias="PHOTO_UPLOAD_CLEANUP_INTERVAL"
     )
+    reconciliation_monitor_interval_seconds: int = Field(
+        default=3600, ge=60, le=7 * 86400, validation_alias="PHOTO_RECONCILIATION_MONITOR_INTERVAL"
+    )
     worker_threads: int = Field(default=4, ge=1, le=32)
     worker_heartbeat_interval_seconds: int = Field(default=15, ge=5, le=300)
     worker_stale_seconds: int = Field(default=60, ge=15, le=3600)

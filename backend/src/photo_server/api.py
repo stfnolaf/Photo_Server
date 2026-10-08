@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Annotated, Literal
 from urllib.parse import quote
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -65,6 +65,7 @@ from photo_server.heartbeat import read_heartbeat
 from photo_server.metadata import technical_fields
 from photo_server.metrics import Metrics, safe_metrics
 from photo_server.models import Mutation
+from photo_server.reconcile import reconcile_s3_to_postgres
 from photo_server.service import Service
 from photo_server.state import mutate, mutate_face
 from photo_server.uploads import (
@@ -85,6 +86,57 @@ from photo_server.worker import cache_paths
 # served per process lifetime; a per-request DB UPDATE would be wasteful.
 _preview_touches: dict[str, float] = {}
 _PREVIEW_TOUCH_COOLDOWN = 30.0
+
+
+def _run_reconciliation_monitor(service: Service) -> None:
+    """Run a fresh, read-only reconciliation pass and log actionable drift."""
+    checkpoint_id = f"monitor-{uuid4().hex}"
+    try:
+        report = reconcile_s3_to_postgres(
+            service.storage,
+            service.catalog,
+            checkpoint_id=checkpoint_id,
+            resume=False,
+            dry_run=True,
+            report_only=True,
+        )
+        counts = report.get("counts", {})
+        drift_count = sum(
+            int(counts.get(category, 0) or 0)
+            for category in (
+                "missing",
+                "divergent",
+                "orphaned",
+                "unresolved",
+                "conflicting",
+                "malformed",
+                "failed",
+            )
+        )
+        if report.get("status") != "complete":
+            log_event(
+                "reconciliation_monitor_failed",
+                stage="reconciliation_monitor",
+                checkpoint_id=checkpoint_id,
+                status=report.get("status"),
+                drift_count=drift_count,
+            )
+        elif drift_count:
+            log_event(
+                "reconciliation_monitor_drift",
+                stage="reconciliation_monitor",
+                checkpoint_id=checkpoint_id,
+                status=report.get("status"),
+                drift_count=drift_count,
+                counts=counts,
+            )
+    except Exception as error:
+        log_event(
+            "reconciliation_monitor_failed",
+            stage="reconciliation_monitor",
+            checkpoint_id=checkpoint_id,
+            error_class=type(error).__name__,
+        )
 
 
 def _metric_queue_snapshot(service: Service) -> dict[str, dict[str, int]]:
@@ -265,6 +317,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     log_event("maintenance_failed", stage="maintenance", error_class=type(error).__name__)
 
         maintenance_task = asyncio.create_task(maintenance())
+
+        async def reconciliation_monitor():
+            while True:
+                await asyncio.sleep(service.settings.reconciliation_monitor_interval_seconds)
+                await asyncio.to_thread(_run_reconciliation_monitor, service)
+
+        reconciliation_monitor_task = asyncio.create_task(reconciliation_monitor())
         app.state.service = service
         app.state.upload_gate = upload_gate
         app.state.metrics = metrics
@@ -272,7 +331,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             maintenance_task.cancel()
-            await asyncio.gather(maintenance_task, return_exceptions=True)
+            reconciliation_monitor_task.cancel()
+            await asyncio.gather(
+                maintenance_task,
+                reconciliation_monitor_task,
+                return_exceptions=True,
+            )
             service.catalog.engine.dispose()
 
     app = FastAPI(

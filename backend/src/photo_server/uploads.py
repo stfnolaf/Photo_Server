@@ -10,6 +10,7 @@ from uuid import UUID, uuid4, uuid5
 from botocore.exceptions import ClientError
 
 from photo_server.config import LibraryError
+from photo_server.manifests import decode_asset_manifest
 from photo_server.models import Blob, Manifest, Mutation
 from photo_server.processing import extract_metadata
 from photo_server.selection import plan_names, role
@@ -541,6 +542,38 @@ def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> di
                 status = "duplicate"
                 replayed = False
             else:
+                # A prior attempt may have completed the canonical S3 import
+                # and failed while applying PostgreSQL. Reuse that immutable
+                # revision and its timestamps instead of rebuilding a
+                # different manifest that would conflict on the same S3 key.
+                canonical_key = f"manifests/assets/{asset_id}/1.json"
+                if service.storage.head(canonical_key) is not None:
+                    canonical = decode_asset_manifest(service.storage.read_bytes(canonical_key))
+                    canonical_fingerprints = [
+                        {"name": blob.original_filename, "sha256": blob.sha256, "size": blob.size_bytes}
+                        for blob in canonical.blobs
+                    ]
+                    if canonical.operation_id != operation_id:
+                        raise LibraryError("Immutable onboarding manifest conflicts with this job")
+                    if canonical_fingerprints != fingerprints:
+                        raise LibraryError("Onboarding job was reused with changed file content")
+                    manifest = service.publisher.projection_from_manifest(canonical)
+                    for path, digest, size in files:
+                        service.publisher.publish_object(path, digest, size)
+                    try:
+                        service.catalog.apply(manifest)
+                    except Exception as error:
+                        service.publisher.record_reconciliation(
+                            operation_id,
+                            {
+                                "status": "canonical-written-projection-failed",
+                                "assetId": str(asset_id),
+                                "error": str(error),
+                            },
+                        )
+                        raise
+                    return {"status": "imported", "assetId": str(asset_id), "replayed": True}
+
                 info, mime = extract_metadata(service, files[0][0])
                 imported_blobs = []
                 for index, (path, digest, size) in enumerate(files):
@@ -569,7 +602,18 @@ def _commit_staged(service, job: dict, files: list[tuple[Path, str, int]]) -> di
                 canonical = service.publisher.manifest_from_projection(manifest)
                 service.publisher.publish_manifest(canonical)
                 manifest = service.publisher.projection_from_manifest(canonical)
-                service.catalog.apply(manifest)
+                try:
+                    service.catalog.apply(manifest)
+                except Exception as error:
+                    service.publisher.record_reconciliation(
+                        operation_id,
+                        {
+                            "status": "canonical-written-projection-failed",
+                            "assetId": str(asset_id),
+                            "error": str(error),
+                        },
+                    )
+                    raise
                 status = "imported"
                 replayed = False
     return {"status": status, "assetId": str(manifest.asset_id), "replayed": replayed}

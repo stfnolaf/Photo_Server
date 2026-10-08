@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 
 import photo_server.api as api_module
-from photo_server.api import create_app
+from photo_server.api import _run_reconciliation_monitor, create_app
 from photo_server.app_logging import log_event
 from photo_server.config import Settings
 
@@ -155,3 +155,52 @@ def test_structured_logs_redact_secrets(caplog):
     assert record["image_bytes"] == "[REDACTED]"
     assert "secret-key" not in caplog.text
     assert "pixels" not in caplog.text
+
+
+def test_reconciliation_monitor_uses_fresh_read_only_checkpoint_and_logs_drift(monkeypatch, caplog):
+    settings = Settings(
+        s3_endpoint="http://127.0.0.1:9",
+        database_url="postgresql+psycopg://photo:photo@127.0.0.1:5432/photo",
+    )
+    service = _Service(settings)
+    calls = []
+
+    def reconcile(storage, catalog, **kwargs):
+        calls.append((storage, catalog, kwargs))
+        return {
+            "status": "complete",
+            "counts": {"missing": 2, "divergent": 1},
+        }
+
+    monkeypatch.setattr(api_module, "reconcile_s3_to_postgres", reconcile)
+    with caplog.at_level(logging.INFO, logger="photo_server"):
+        _run_reconciliation_monitor(service)
+
+    assert len(calls) == 1
+    assert calls[0][0] is service.storage
+    assert calls[0][1] is service.catalog
+    assert calls[0][2]["resume"] is False
+    assert calls[0][2]["dry_run"] is True
+    assert calls[0][2]["report_only"] is True
+    assert calls[0][2]["checkpoint_id"].startswith("monitor-")
+    record = json.loads(caplog.records[-1].message)
+    assert record["event"] == "reconciliation_monitor_drift"
+    assert record["drift_count"] == 3
+
+
+def test_reconciliation_monitor_logs_failures(monkeypatch, caplog):
+    settings = Settings(
+        s3_endpoint="http://127.0.0.1:9",
+        database_url="postgresql+psycopg://photo:photo@127.0.0.1:5432/photo",
+    )
+    service = _Service(settings)
+    monkeypatch.setattr(
+        api_module,
+        "reconcile_s3_to_postgres",
+        lambda *args, **kwargs: {"status": "failed", "counts": {"failed": 1}},
+    )
+    with caplog.at_level(logging.INFO, logger="photo_server"):
+        _run_reconciliation_monitor(service)
+    record = json.loads(caplog.records[-1].message)
+    assert record["event"] == "reconciliation_monitor_failed"
+    assert record["status"] == "failed"

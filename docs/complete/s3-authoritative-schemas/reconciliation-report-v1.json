@@ -3,9 +3,9 @@
   "$id": "https://photo-server.local/schemas/reconciliation-report-v1.json",
   "title": "Photo reconciliation report v1",
   "type": "object",
-  "required": ["status", "dryRun", "checkpoint", "scanned", "matched", "missing", "divergent", "orphaned", "unresolved", "conflicting", "malformed", "skipped", "repaired", "failed"],
+  "required": ["status", "dryRun", "checkpoint", "scanned", "matched", "missing", "divergent", "orphaned", "unresolved", "conflicting", "malformed", "skipped", "repaired", "failed", "namespaceChanged"],
   "properties": {
-    "status": {"enum": ["complete", "paused", "failed"]},
+    "status": {"enum": ["complete", "paused", "failed", "drift_remaining"]},
     "dryRun": {"type": "boolean"},
     "applyRequested": {"type": "boolean"},
     "checkpoint": {"type": ["string", "null"]},
@@ -19,6 +19,7 @@
     "malformed": {"type": "array"},
     "skipped": {"type": "integer", "minimum": 0},
     "repaired": {"type": "integer", "minimum": 0},
-    "failed": {"type": "array"}
+    "failed": {"type": "array"},
+    "namespaceChanged": {"type": "boolean"}
   }
 }

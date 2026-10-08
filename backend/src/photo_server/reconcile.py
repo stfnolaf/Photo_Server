@@ -64,6 +64,7 @@ class ReconciliationReport:
     duplicate_revisions: list[dict[str, str]] = field(default_factory=list)
     multiple_valid_heads: list[dict[str, str]] = field(default_factory=list)
     unresolved_references: list[dict[str, str]] = field(default_factory=list)
+    namespace_changed: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +83,7 @@ class ReconciliationReport:
             "skipped": self.skipped,
             "repaired": self.repaired,
             "failed": self.failed,
+            "namespaceChanged": self.namespace_changed,
             "counts": {
                 "scanned": self.scanned,
                 "matched": self.matched,
@@ -94,6 +96,7 @@ class ReconciliationReport:
                 "skipped": self.skipped,
                 "repaired": self.repaired,
                 "failed": len(self.failed),
+                "namespaceChanged": int(self.namespace_changed),
             },
             "authority": "s3",
             "queuesAndLeases": "untouched",
@@ -165,18 +168,18 @@ def _album_compare(value: Any) -> Any:
 
 def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: bool, stop_after: int | None):
     checkpoint_key = f"indexes/checkpoints/reconciliation-{checkpoint_id}.json"
-    cursor = None
     if resume and storage.head(checkpoint_key) is not None and not report.dry_run:
-        checkpoint = storage.get_json(checkpoint_key)
-        if checkpoint.get("complete"):
-            return {}, set(), set(), checkpoint_key, True
-        cursor = checkpoint.get("lastKey")
+        storage.get_json(checkpoint_key)
+        # A checkpoint is only a durable progress record.  It must never turn
+        # a later invocation into a no-op: the database may have drifted after
+        # the checkpoint was completed, and a resumed scan must rebuild the
+        # complete in-memory S3 view before comparing it with PostgreSQL.
+        # ``lastKey`` is retained for operator visibility and compatibility,
+        # but is deliberately not used as a lower bound.
     keys = sorted(key for prefix, _ in MANIFEST_PREFIXES for key in storage.keys(prefix))
     records: dict[tuple[str, str], list[tuple[str, Any]]] = {}
     referenced: set[str] = set()
     for key in keys:
-        if cursor and key <= cursor:
-            continue
         identity = _key_identity(key)
         report.scanned += 1
         if identity is None:
@@ -225,6 +228,18 @@ def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: boo
                 return records, referenced, set(), checkpoint_key, False
         except Exception as error:  # malformed/corrupt remote records are reportable
             _issue(report.failed, "scan", key, str(error))
+    # S3 has no transaction spanning the list/read operations above.  Re-list
+    # the namespace before comparing projections so a scan cannot claim a
+    # clean, complete result after a concurrent manifest was added or removed.
+    final_keys = sorted(key for prefix, _ in MANIFEST_PREFIXES for key in storage.keys(prefix))
+    if final_keys != keys:
+        report.namespace_changed = True
+        _issue(
+            report.failed,
+            "namespace",
+            final_keys[-1] if final_keys else "manifests/",
+            "S3 manifest namespace changed during reconciliation",
+        )
     return records, referenced, set(keys), checkpoint_key, False
 
 
@@ -585,8 +600,32 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
                         report.repaired += 1
     else:
         report.status = "complete"
+
+    # ``complete`` means that the S3 view and the PostgreSQL projection agree
+    # (or that every reported absence was repaired in this invocation).  A
+    # report-only/dry-run invocation cannot repair anything, and apply is
+    # intentionally conservative: divergent/orphaned rows and any drift that
+    # exceeds the number of rows repaired remain visible to the operator.
+    drift_count = len(report.missing) + len(report.divergent) + len(report.orphaned)
+    if report.status == "complete" and (
+        report.divergent
+        or report.orphaned
+        or drift_count > report.repaired
+    ):
+        report.status = "drift_remaining"
     if not dry_run:
-        _checkpoint(storage, checkpoint_key, {"schemaVersion": 1, "complete": True, "lastKey": None}, False)
+        _checkpoint(
+            storage,
+            checkpoint_key,
+            {
+                "schemaVersion": 2,
+                "complete": report.status == "complete",
+                "lastKey": None,
+                "highWatermark": report.checkpoint,
+                "namespaceChanged": report.namespace_changed,
+            },
+            False,
+        )
     return report.as_dict()
 
 
