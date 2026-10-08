@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Callable
 
@@ -21,6 +22,8 @@ from photo_server.manifests import ManifestCodecError, canonical_json, decode
 
 CHECKPOINT_SCHEMA_VERSION = 1
 TOOL_VERSION = "recovery-v1"
+S3_FORMAT_VERSION = 1
+APPLICATION_VERSION = "0.6.0"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CANONICAL_PREFIXES = (
     ("library-state/", "burst"),
@@ -37,6 +40,50 @@ CANONICAL_PREFIXES = (
 
 class RecoveryError(RuntimeError):
     """A checkpoint operation failed closed."""
+
+
+def _compatibility_metadata(manifest_versions: list[int], value: dict[str, Any] | None = None) -> dict[str, Any]:
+    if value is not None:
+        result = dict(value)
+    else:
+        try:
+            from photo_server.migrations import available_migrations
+
+            migration_head = max(item.version for item in available_migrations())
+        except (ImportError, ValueError):
+            migration_head = 0
+        result = {
+            "applicationVersion": os.environ.get("PHOTO_RELEASE_VERSION", APPLICATION_VERSION),
+            "gitCommit": os.environ.get("PHOTO_GIT_COMMIT", "unrecorded"),
+            "imageDigest": os.environ.get("PHOTO_IMAGE_DIGEST", "unrecorded"),
+            "dependencyLockSha256": os.environ.get("PHOTO_DEPENDENCY_LOCK_SHA256", "unrecorded"),
+            "s3FormatVersion": S3_FORMAT_VERSION,
+            "manifestSchemaVersions": sorted(set(manifest_versions)),
+            "minimumReaderVersion": os.environ.get("PHOTO_MIN_RECOVERY_READER_VERSION", APPLICATION_VERSION),
+            "authorityMode": "s3",
+            "projectionMigrationHead": migration_head,
+        }
+    if set(result) != {
+        "applicationVersion", "gitCommit", "imageDigest", "dependencyLockSha256",
+        "s3FormatVersion", "manifestSchemaVersions", "minimumReaderVersion",
+        "authorityMode", "projectionMigrationHead",
+    }:
+        raise RecoveryError("invalid recovery compatibility metadata")
+    if (
+        not all(isinstance(result[key], str) and result[key] for key in (
+            "applicationVersion", "gitCommit", "imageDigest", "dependencyLockSha256",
+            "minimumReaderVersion", "authorityMode",
+        ))
+        or result["authorityMode"] != "s3"
+        or result["s3FormatVersion"] != S3_FORMAT_VERSION
+        or not isinstance(result["manifestSchemaVersions"], list)
+        or not result["manifestSchemaVersions"]
+        or any(isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in result["manifestSchemaVersions"])
+        or not isinstance(result["projectionMigrationHead"], int)
+        or result["projectionMigrationHead"] < 0
+    ):
+        raise RecoveryError("invalid recovery compatibility metadata")
+    return result
 
 
 def _utc(value: str | None = None) -> str:
@@ -112,6 +159,7 @@ class RecoveryCheckpoint:
     manifest_revisions: tuple[dict[str, Any], ...]
     objects: tuple[dict[str, Any], ...]
     postgres_dump: dict[str, Any] | None
+    compatibility: dict[str, Any] = field(default_factory=dict)
     schema_versions: tuple[int, ...] = (1,)
     tool_version: str = TOOL_VERSION
     schema_version: int = CHECKPOINT_SCHEMA_VERSION
@@ -124,6 +172,7 @@ class RecoveryCheckpoint:
             "source": {"bucket": self.source_bucket, "endpoint": self.source_endpoint},
             "schemaVersions": list(self.schema_versions),
             "toolVersion": self.tool_version,
+            "compatibility": self.compatibility,
             "manifestRevisions": list(self.manifest_revisions),
             "objects": list(self.objects),
             "postgresDump": self.postgres_dump,
@@ -132,7 +181,7 @@ class RecoveryCheckpoint:
 
 def encode_checkpoint(value: RecoveryCheckpoint | dict[str, Any]) -> bytes:
     payload = value.to_dict() if isinstance(value, RecoveryCheckpoint) else value
-    required = {"schemaVersion", "checkpointId", "checkpointTimestamp", "source", "schemaVersions", "toolVersion", "manifestRevisions", "objects", "postgresDump"}
+    required = {"schemaVersion", "checkpointId", "checkpointTimestamp", "source", "schemaVersions", "toolVersion", "compatibility", "manifestRevisions", "objects", "postgresDump"}
     if set(payload) != required:
         raise RecoveryError("checkpoint has unknown or missing fields")
     if payload["schemaVersion"] != CHECKPOINT_SCHEMA_VERSION or not isinstance(payload["checkpointId"], str) or not payload["checkpointId"]:
@@ -143,6 +192,10 @@ def encode_checkpoint(value: RecoveryCheckpoint | dict[str, Any]) -> bytes:
         raise RecoveryError("invalid checkpoint inventory")
     if not isinstance(payload["checkpointTimestamp"], str) or not isinstance(payload["toolVersion"], str):
         raise RecoveryError("invalid checkpoint metadata")
+    compatibility = payload["compatibility"]
+    if not isinstance(compatibility, dict):
+        raise RecoveryError("invalid recovery compatibility metadata")
+    _compatibility_metadata([], compatibility)
     if not isinstance(payload["schemaVersions"], list) or any(
         isinstance(item, bool) or not isinstance(item, int) or item < 1
         for item in payload["schemaVersions"]
@@ -203,6 +256,7 @@ def decode_checkpoint(body: bytes | str) -> RecoveryCheckpoint:
         manifest_revisions=tuple(value["manifestRevisions"]),
         objects=tuple(value["objects"]),
         postgres_dump=value["postgresDump"],
+        compatibility=value["compatibility"],
         schema_versions=tuple(value["schemaVersions"]),
         tool_version=value["toolVersion"],
         schema_version=value["schemaVersion"],
@@ -270,6 +324,7 @@ def create_recovery_checkpoint(
     resume: bool = True,
     stop_after: int | None = None,
     checkpoint_timestamp: str | None = None,
+    compatibility: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create or resume one deterministic checkpoint and return its report."""
     final_key = f"{checkpoint_prefix.rstrip('/')}/{checkpoint_id}.json"
@@ -303,6 +358,7 @@ def create_recovery_checkpoint(
         checkpoint = RecoveryCheckpoint(
             checkpoint_id, timestamp, getattr(source, "bucket", ""), source_endpoint,
             tuple(manifests), tuple(objects), dump_info,
+            _compatibility_metadata([item["schemaVersion"] for item in manifests], compatibility),
         )
         encoded = encode_checkpoint(checkpoint)
         _put_immutable(destination, final_key, encoded, "application/json")

@@ -2,15 +2,17 @@
 
 ## Current position
 
-The core library is already in strong shape. It has durable PostgreSQL-backed
-state, immutable originals, resumable uploads, queue leasing and retry logic,
-RAW-first ingestion, preview caching and eviction, optional AI services, face
-review, albums, trash/restore, exports, migrations, OpenAPI checks, and broad
-backend integration coverage.
+The core library is already in strong shape. It has canonical S3 state,
+content-addressed photo objects, rebuildable PostgreSQL projections, resumable
+uploads, queue leasing and retry logic, RAW-first ingestion, preview caching
+and eviction, optional AI services, face review, albums, trash/restore,
+exports, migrations, OpenAPI checks, and broad backend integration coverage.
 
-Recent work has focused on derivative delivery and preview-cache behavior. The
-next phase should therefore emphasize operational safety and daily workflow
-quality rather than another isolated optimization.
+The S3-authority transition, canonical reads and writes, projection rebuild,
+reconciliation, recovery checkpoints, and originals retirement are implemented.
+The next phase should close the remaining operational contract around S3
+snapshot recovery, software/data compatibility, capacity reporting, and
+day-to-day workflow quality.
 
 ## Recommended priority
 
@@ -20,21 +22,20 @@ quality rather than another isolated optimization.
 4. Measurement-driven performance work
 5. Larger product expansions such as video
 
-If the server will remain strictly on a trusted LAN, authentication can be
-deferred, but independent backups, observability, storage monitoring, and
+If the server will remain strictly on a trusted LAN, authentication can remain
+optional, but canonical-data recovery, observability, storage monitoring, and
 recovery testing should still come first.
 
 ## Milestone 1: Production hardening
 
 ### Authentication and request protection
 
-The current V1 boundary supports one client/user and has no API authentication
-or TLS termination. Make the deployment safe for anything beyond a trusted
-LAN.
+Authentication is implemented as an opt-in single-user session boundary, but
+TLS termination, browser hardening, and deployment guidance remain operational
+responsibilities for anything beyond a trusted LAN.
 
-- Add a single-user authentication path, initially suitable for a reverse
-  proxy or a signed browser session.
-- Protect originals, previews, uploads, mutations, health details, and API
+- Harden the existing single-user authentication path for reverse-proxy use.
+- Protect canonical objects, previews, uploads, mutations, health details, and API
   documentation appropriately.
 - Add authorization boundaries so future multi-user support does not require
   rewriting every route.
@@ -49,37 +50,43 @@ Completion criteria:
 - Authentication behavior is covered by API tests and documented in the
   deployment guide.
 
-### Independent backup and disaster recovery
+### Canonical storage recovery and compatibility
 
-PostgreSQL backups are implemented and verified, but the scheduled database
-backups currently share the S3/SeaweedFS failure domain with the originals.
+PostgreSQL backups are implemented and useful as an optional fast-recovery
+artifact. They are not the authority for user-visible state. Canonical S3 data
+is protected by ZFS snapshots and offline backups. Session 5’s compatibility
+contract and disposable S3-first recovery exercise are complete; remaining
+work is deployment-specific snapshot scheduling and recording production
+RPO/RTO values.
 
-- Add a second backup destination, NAS snapshot, or off-site replication.
-- Track backup freshness and failure state in health output.
-- Add an automated restore verification job against a disposable database.
-- Test catalog restore, object verification, and export after recovery.
-- Document measured recovery point and recovery time objectives.
-- Evaluate continuous WAL archiving if an hourly recovery point is not enough.
+- Record production snapshot cadence and measured restore/rebuild timings using
+  the completed Session 5 procedure.
+- Document what operational queue state is intentionally lost.
+- Keep PostgreSQL dumps, if retained, checksum-verified and clearly labeled as
+  an acceleration path rather than the durable source of truth.
 
 Completion criteria:
 
-- A database backup exists outside the primary object-storage failure domain.
-- Restore verification runs automatically and produces an actionable result.
-- A documented recovery exercise succeeds from the recorded backup artifacts.
+- A canonical S3 snapshot or offline copy has an explicit software/data
+  compatibility record.
+- A documented recovery exercise rebuilds PostgreSQL and verifies the library
+  from that canonical copy.
+- RPO/RTO and intentionally non-durable operational state are recorded.
 
 ### Observability and operations
 
-The existing health endpoint is useful, but production operation needs trends,
-correlation, and alertable conditions.
+The existing health endpoint, structured logging, queue metrics, storage
+readiness, backup status, and worker observability provide a foundation.
+Production operation still needs trends, correlation, and alertable conditions.
 
 - Emit structured logs with asset ID, batch ID, job ID, operation ID, and stage.
-- Add metrics for:
+- Extend metrics and dashboards for:
   - upload throughput and failures;
   - onboarding, preview, and AI queue depth and age;
   - job retries, leases, and terminal failures;
   - preview-cache hits, misses, bytes, evictions, and regeneration latency;
   - AI stage latency, reuse rate, and provider errors;
-  - backup age and verification status.
+  - canonical snapshot age, recovery-contract status, and optional backup age.
 - Separate liveness from readiness checks.
 - Add alerts or a documented operator checklist for stale workers, growing
   queues, failed backups, low disk space, and unavailable storage.
@@ -93,17 +100,18 @@ Completion criteria:
 
 ### Storage lifecycle and capacity safety
 
-The current system intentionally avoids automatic garbage collection and
-original deletion. Add safe lifecycle tooling before enabling destructive
-cleanup.
+Session 6 is the remaining storage-operations work. The system already has
+canonical-object verification, fail-closed report-only garbage collection,
+abandoned-upload cleanup, and preview-cache eviction.
 
-- Implement report-only scans for orphaned objects, missing objects, stale
-  staging uploads, and unreferenced preview directories.
-- Surface storage usage by originals, staging, previews, backups, and AI
-  artifacts.
-- Add low-disk-space warnings and configurable operational thresholds.
-- Add an explicitly confirmed cleanup operation with a dry-run report.
-- Preserve tombstones and audit information for destructive actions.
+- Implement the unified report in
+  [`06-storage-capacity.md`](06-storage-capacity.md).
+- Account for canonical objects, manifests, processing artifacts, staging,
+  recovery checkpoints, backups, previews, and local disk usage separately.
+- Add low-disk-space, staging-growth, cache, and backup-age warnings.
+- Keep any future deletion limited to explicitly scoped, explainable,
+  recoverable candidates; never treat canonical objects as reclaimable merely
+  because PostgreSQL does not reference them.
 
 Completion criteria:
 
@@ -278,16 +286,16 @@ Required design work would include:
 
 ### Short term
 
-1. Add structured logging and queue/backup/storage metrics.
-2. Add report-only orphan and capacity scans.
-3. Add independent backup storage and automated restore verification.
-4. Add authentication if the service will leave the trusted LAN.
+1. Add report-only namespace accounting and capacity scans.
+2. Finish alertable operational metrics and recovery/status surfaces.
+3. Record production snapshot RPO/RTO using the completed recovery procedure.
+4. Harden authentication if the service will leave the trusted LAN.
 
 ### Medium term
 
 1. Build bulk selection and batch actions.
 2. Implement generated XMP export.
-3. Add UI health, queue, and recovery surfaces.
+3. Add UI health, queue, storage, and recovery surfaces.
 4. Add frontend component and browser smoke coverage.
 
 ### Longer term
@@ -304,9 +312,11 @@ when:
 
 - access is authenticated whenever the service is not isolated on a trusted
   network;
-- originals and database backups survive loss of any single storage system;
-- restore has been exercised and documented;
-- queue, worker, storage, cache, and backup failures are observable;
+- canonical S3 data survives loss of any single storage system through tested
+  snapshots or offline copies;
+- S3-first restore and PostgreSQL projection rebuild have been exercised and
+  documented against a known-compatible software release;
+- queue, worker, storage, cache, and recovery-contract failures are observable;
 - storage growth and cleanup are operationally manageable;
 - the main frontend workflows have regression coverage;
 - bulk curation and metadata export are available;

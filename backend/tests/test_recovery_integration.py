@@ -272,12 +272,12 @@ def test_disposable_checkpoint_resume_restore_and_rebuild(disposable_backends):
     rebuilt.initialize(str(source.library_id))
     report = rebuild_from_s3(restored_storage, rebuilt.catalog, checkpoint_id="restored", resume=False)
     assert report["status"] == "complete", json.dumps(report, indent=2, sort_keys=True)
-    assert _operational_snapshot(rebuilt.catalog) == {
-        "jobs": [],
-        "ai_stage_jobs": [],
-        "onboarding_jobs": [],
-        "upload_batches": [],
-    }
+    assert report["queuesRestored"] == {"assets": 3, "fingerprintPending": 1, "aiPending": 3}
+    rebuilt_operational = _operational_snapshot(rebuilt.catalog)
+    assert len(rebuilt_operational["jobs"]) == 6
+    assert len(rebuilt_operational["ai_stage_jobs"]) == 6
+    assert rebuilt_operational["onboarding_jobs"] == []
+    assert rebuilt_operational["upload_batches"] == []
     comparison = compare_projections(source.catalog, rebuilt.catalog)
     if not comparison["match"]:
         comparison["sourceAssets"] = [item.document() for item in source.catalog.all_assets()]

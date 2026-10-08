@@ -1,5 +1,9 @@
 # PostgreSQL-authority phaseout and S3 storage deduplication
 
+> Historical execution records below preserve the configuration and commands
+> used at each phase. The superseding completion record at the end reflects
+> the current source tree and is the authoritative final status.
+
 ## Goal
 
 Make S3 the sole authority for photo bytes and user-visible library state.
@@ -1017,3 +1021,27 @@ git diff --check                                                       PASS
 The focused non-opt-in run skips the disposable test by design; the explicit
 opt-in run executed it successfully. Phase 7 is ready for a separate,
 explicit teardown decision. PostgreSQL has not been torn down.
+
+## Phase 7 superseding completion record — 2026-10-08 (UTC)
+
+Status: **PASS — authority phaseout and compatibility teardown complete.**
+
+The earlier readiness record above is historical and is superseded by commit
+`7b8523b` (`remove retired compatibility mechanisms after the S3 authority
+cutover`) and the current source tree:
+
+- PostgreSQL-authoritative mode and its configuration have been removed.
+- Runtime reads and writes no longer use `originals/` fallback or compatibility
+  copies; canonical bytes are `objects/<sha256>` referenced by S3 manifests.
+- Canonical-read, mutation, upload-retry, rebuild, reconciliation, and
+  recovery tests cover operation with S3 as the authority.
+- PostgreSQL remains the rebuildable query projection and operational queue
+  store; database deletion was never part of this phaseout.
+- Recovery checkpoints now record the software/data compatibility contract and
+  reject unsupported future S3 format versions.
+- The disposable S3 restore and fresh PostgreSQL rebuild exercise passed; the
+  measured fixture RTO was approximately 16 seconds.
+
+The phaseout acceptance criteria are satisfied. Deployment-specific snapshot
+RPO/RTO values remain an operational policy recorded with the Session 5
+snapshot schedule.

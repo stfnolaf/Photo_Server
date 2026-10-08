@@ -7,6 +7,7 @@ from pathlib import Path
 
 from photo_server.manifests import canonical_json
 from photo_server.recovery import (
+    RecoveryError,
     create_recovery_checkpoint,
     decode_checkpoint,
     restore_recovery_checkpoint,
@@ -89,7 +90,45 @@ def test_checkpoint_copies_all_manifest_kinds_deduplicates_objects_and_is_repeat
     checkpoint = decode_checkpoint(destination.read_bytes("indexes/recovery-checkpoints/nightly.json"))
     assert {item["kind"] for item in checkpoint.manifest_revisions} == {"asset", "album", "person", "tombstone"}
     assert len(checkpoint.objects) == 1
+    assert checkpoint.compatibility == {
+        "applicationVersion": "0.6.0",
+        "gitCommit": "unrecorded",
+        "imageDigest": "unrecorded",
+        "dependencyLockSha256": "unrecorded",
+        "s3FormatVersion": 1,
+        "manifestSchemaVersions": [1],
+        "minimumReaderVersion": "0.6.0",
+        "authorityMode": "s3",
+        "projectionMigrationHead": 6,
+    }
     assert verify_recovery_checkpoint(destination, checkpoint=checkpoint)["status"] == "complete"
+
+
+def test_checkpoint_records_explicit_software_identity_and_rejects_future_format():
+    source = _source()
+    destination = MemoryStorage(bucket="backup")
+    compatibility = {
+        "applicationVersion": "0.6.0",
+        "gitCommit": "abc123",
+        "imageDigest": "sha256:" + "a" * 64,
+        "dependencyLockSha256": "b" * 64,
+        "s3FormatVersion": 1,
+        "manifestSchemaVersions": [1],
+        "minimumReaderVersion": "0.6.0",
+        "authorityMode": "s3",
+        "projectionMigrationHead": 6,
+    }
+    result = create_recovery_checkpoint(source, destination, "versioned", compatibility=compatibility)
+    assert result["status"] == "complete", result
+    checkpoint_key = "indexes/recovery-checkpoints/versioned.json"
+    payload = json.loads(destination.read_bytes(checkpoint_key))
+    payload["compatibility"]["s3FormatVersion"] = 2
+    try:
+        decode_checkpoint(canonical_json(payload))
+    except RecoveryError:
+        pass
+    else:
+        raise AssertionError("future S3 format must be rejected")
 
 
 def test_malformed_source_and_destination_corruption_fail_closed():

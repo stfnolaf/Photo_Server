@@ -3,10 +3,10 @@
 ## Complete
 
 The S3-authoritative architecture, manifest contracts, backfill,
-reconciliation, mutation, retention, recovery, and authority-cutover work are
-complete implementation records under [`complete/`](complete/), including the
-Phase 10 cutover contract. The remaining work is tracked separately in the
-PostgreSQL-authority phaseout plan below.
+reconciliation, mutation, retention, recovery, authority cutover, and AI
+analysis publication work are complete implementation records under
+[`complete/`](complete/), including the Phase 10 cutover contract. The
+remaining work is tracked in [`planned/`](planned/).
 
 The S3-authoritative recovery checkpoint contracts and implementation are
 documented in [`complete/s3-authoritative-phase9.md`](complete/s3-authoritative-phase9.md)
@@ -26,6 +26,9 @@ and completed session briefs:
 - preview-cache eviction
 - semantic-reuse rollout policy and observability
 - sessions 1–4: health/logging, metrics, authentication, and independent backups
+- session 5: S3 recovery verification and compatibility contract
+- PostgreSQL authority phaseout and originals retirement
+- AI analysis publication to the S3-authoritative plane
 
 The AI-service plan's final face-scanner consolidation is a separate follow-up
 in the sibling `face-scanner` repository. The preview plan's face-crop cache is
@@ -35,21 +38,18 @@ default to `on` remains an operational threshold decision.
 
 ## In progress
 
-The remaining work is documented in
-[`postgres-authority-phaseout.md`](in-progress/postgres-authority-phaseout.md).
-It covers migrating all runtime reads and writes to canonical S3 objects,
-running S3-authoritative mode, rebuilding PostgreSQL from S3, and finally
-removing the duplicate `originals/` photo objects.
+The `in-progress/` directory is currently empty. The completed phaseout record
+is [`postgres-authority-phaseout.md`](complete/postgres-authority-phaseout.md).
 
 ## Planned
 
 The `planned/` directory contains the next unstarted operational sessions and
-the roadmap, including restore verification and storage-capacity safety.
+the roadmap, including storage-capacity safety and later operational work.
 
 ## S3 authority cutover
 
-The completed architecture and Phase 10 cutover contract are archived under
-[`complete/`](complete/). Use the deterministic cutover readiness report before
-setting `PHOTO_AUTHORITY_MODE=s3`; the active storage-deduplication and
-compatibility-removal plan is
-[`postgres-authority-phaseout.md`](in-progress/postgres-authority-phaseout.md).
+The completed architecture, Phase 10 cutover contract, and final phaseout
+record are archived under [`complete/`](complete/). The old
+`PHOTO_AUTHORITY_MODE` compatibility switch has been removed; use the current
+authority-status and recovery controls when operating or rebuilding the
+library.
