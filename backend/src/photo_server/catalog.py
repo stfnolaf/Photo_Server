@@ -357,6 +357,104 @@ class Catalog:
         with self.engine.begin() as connection:
             self._apply(connection, manifest, enqueue_jobs=False)
 
+    def restore_work_queues(
+        self,
+        asset_ids: list[str],
+        fingerprint_asset_ids: set[str],
+        completed_ai_asset_ids: set[str],
+    ) -> dict[str, int]:
+        """Restore only derivable work after an S3 projection rebuild.
+
+        Queue rows are operational state, so they are not canonical records
+        and are not rebuilt from history.  A fresh database still needs a
+        deterministic work frontier, however: canonical fingerprints and AI
+        runs are terminal ``ready`` stages, while assets without those
+        records are safe to retry as ``pending``.  Preview generation remains
+        lazy because previews are disposable cache entries.
+
+        Upload/onboarding jobs, leases, attempts, and idempotency operations
+        are intentionally not synthesized here; S3 does not contain enough
+        information to reconstruct those request workflows.
+        """
+        fingerprint_job = "fingerprint-v1"
+        ai_job = "ai-v1"
+        with self.engine.begin() as connection:
+            for asset_id in sorted(asset_ids):
+                fingerprint_status = (
+                    "ready" if asset_id in fingerprint_asset_ids else "pending"
+                )
+                ai_status = "ready" if asset_id in completed_ai_asset_ids else "pending"
+                connection.execute(
+                    insert(jobs)
+                    .values(
+                        asset_id=asset_id,
+                        job_type=fingerprint_job,
+                        status=fingerprint_status,
+                        attempts=0,
+                        lease_until=None,
+                        error=None,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[jobs.c.asset_id, jobs.c.job_type],
+                        set_={
+                            "status": fingerprint_status,
+                            "attempts": 0,
+                            "lease_until": None,
+                            "error": None,
+                        },
+                    )
+                )
+                connection.execute(
+                    insert(jobs)
+                    .values(
+                        asset_id=asset_id,
+                        job_type=ai_job,
+                        status=ai_status,
+                        attempts=0,
+                        lease_until=None,
+                        error=None,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[jobs.c.asset_id, jobs.c.job_type],
+                        set_={
+                            "status": ai_status,
+                            "attempts": 0,
+                            "lease_until": None,
+                            "error": None,
+                        },
+                    )
+                )
+                for stage in ("face", "semantic"):
+                    connection.execute(
+                        insert(ai_stage_jobs)
+                        .values(
+                            asset_id=asset_id,
+                            stage=stage,
+                            status=ai_status,
+                            attempts=0,
+                            lease_until=None,
+                            error=None,
+                        )
+                        .on_conflict_do_update(
+                            index_elements=[ai_stage_jobs.c.asset_id, ai_stage_jobs.c.stage],
+                            set_={
+                                "status": ai_status,
+                                "attempts": 0,
+                                "lease_until": None,
+                                "error": None,
+                            },
+                        )
+                    )
+        return {
+            "assets": len(asset_ids),
+            "fingerprintPending": sum(
+                asset_id not in fingerprint_asset_ids for asset_id in asset_ids
+            ),
+            "aiPending": sum(
+                asset_id not in completed_ai_asset_ids for asset_id in asset_ids
+            ),
+        }
+
     def _apply(self, connection, manifest: Manifest, *, enqueue_jobs: bool = True):
         """Apply one canonical asset snapshot to the query projection."""
         existing = connection.execute(

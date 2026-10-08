@@ -84,6 +84,7 @@ class RebuildReport:
     projected_burst_clusters: int = 0
     tombstones: int = 0
     checkpoint: str | None = None
+    queues_restored: dict[str, int] | None = None
     malformed_manifests: list[dict[str, str]] = field(default_factory=list)
     checksum_mismatches: list[dict[str, str]] = field(default_factory=list)
     missing_objects: list[dict[str, str]] = field(default_factory=list)
@@ -110,6 +111,7 @@ class RebuildReport:
             "projectedBurstClusters": self.projected_burst_clusters,
             "tombstones": self.tombstones,
             "checkpoint": self.checkpoint,
+            "queuesRestored": self.queues_restored,
         }
         for name in (
             "malformed_manifests",
@@ -864,6 +866,28 @@ def rebuild_from_s3(
             catalog.apply_burst_projection(selected_fingerprints, selected_burst)
             report.projected_fingerprints = len(selected_fingerprints)
             report.projected_burst_clusters = len(selected_burst.clusters)
+    if hasattr(catalog, "restore_work_queues"):
+        asset_ids_for_queue = sorted(str(asset.asset_id) for asset in current_assets.values())
+        fingerprint_asset_ids = {str(record.asset_id) for record in selected_fingerprints}
+        latest_ai: dict[str, ProcessingArtifact] = {}
+        for run in selected_runs:
+            if run.processing_type != "photo-ai":
+                continue
+            asset = current_assets.get(str(run.asset_id))
+            if asset is None or run.input_sha256 != asset.primary.sha256:
+                continue
+            key = str(run.asset_id)
+            previous = latest_ai.get(key)
+            if previous is None or (run.created_at, str(run.artifact_id)) > (
+                previous.created_at,
+                str(previous.artifact_id),
+            ):
+                latest_ai[key] = run
+        report.queues_restored = catalog.restore_work_queues(
+            asset_ids_for_queue,
+            fingerprint_asset_ids,
+            set(latest_ai),
+        )
     _write_checkpoint(
         storage, checkpoint_key, {"schemaVersion": 1, "lastKey": None, "complete": True}
     )
