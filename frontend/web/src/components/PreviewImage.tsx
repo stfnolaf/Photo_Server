@@ -111,7 +111,11 @@ export function PreviewImage({
       return () => controller.abort();
     }
     setLoadState("loading");
-    if (status === "ready") {
+    // A ready job can still have an absent cache file: preview files are
+    // disposable and may have been evicted since the catalog was projected.
+    // Probe the endpoint after the first direct image attempt so a 202 can
+    // regenerate the derivative instead of being treated as a decode error.
+    if (status === "ready" && attempt === 0) {
       setImageKey((value) => value + 1);
       return () => controller.abort();
     }
@@ -129,14 +133,14 @@ export function PreviewImage({
   }, [active, attempt, src, status]);
 
   const handleImageError = () => {
-    // A ready derivative can be loaded directly, preserving the browser's
-    // decoded-image and HTTP caches. Only probe after an image error when the
-    // catalog said the derivative was not ready; a ready response that fails
-    // to decode is a real image failure, not a polling state.
-    if (status === "ready") {
+    // Preserve the browser's decoded-image and HTTP caches on the first try.
+    // If a ready derivative was evicted, the follow-up probe sees 202 and
+    // waits for regeneration; a second decode failure is treated as real.
+    if (status === "ready" && attempt > 0) {
       setLoadState("failed");
       return;
     }
+    setLoadState("loading");
     setAttempt((value) => value + 1);
   };
 

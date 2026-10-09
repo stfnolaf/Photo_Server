@@ -150,17 +150,6 @@ def test_ai_settings_unconfigured_by_default(monkeypatch):
     assert settings.ai_model == "unsloth/Qwen3-VL-8B-Instruct-bnb-4bit"
 
 
-def test_secondary_backup_destinations_are_mutually_exclusive():
-    with pytest.raises(ValidationError, match="only one secondary backup destination"):
-        Settings(
-            _env_file=None,
-            s3_endpoint="http://localhost:9000",
-            database_url="postgresql+psycopg://test@localhost/test",
-            postgres_backup_secondary_endpoint="http://backup.example",
-            postgres_backup_secondary_path="/mnt/backups",
-        )
-
-
 def test_ai_endpoint_settings_come_from_environment(monkeypatch, tmp_path):
     clear_credentials(monkeypatch)
     env = tmp_path / ".env"

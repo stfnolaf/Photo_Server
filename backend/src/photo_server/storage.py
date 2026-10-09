@@ -148,6 +148,18 @@ class Storage:
             for entry in page.get("Contents") or []:
                 yield entry["Key"]
 
+    def objects(self, prefix: str = ""):
+        """Yield bounded metadata from listing; never downloads object bodies."""
+        for page in self.client.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=prefix
+        ):
+            for entry in page.get("Contents") or []:
+                yield {
+                    "key": entry["Key"],
+                    "sizeBytes": int(entry.get("Size", 0)),
+                    "lastModified": entry.get("LastModified"),
+                }
+
     def delete(self, key: str):
         self.client.delete_object(Bucket=self.bucket, Key=key)
 

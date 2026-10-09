@@ -33,7 +33,23 @@ pillow_heif.register_heif_opener()
 # particular, a newly-created cache directory has no preview_cache row until
 # generation completes, so the orphan sweep must not inspect it mid-write.
 _PREVIEW_CACHE_LOCK = threading.RLock()
+_PREVIEW_ASSET_LOCKS_LOCK = threading.Lock()
+_PREVIEW_ASSET_LOCKS: dict[str, threading.Lock] = {}
+_PREVIEW_ACTIVE_ASSETS: set[str] = set()
 _metrics = Metrics()
+
+
+def _preview_asset_lock(asset_id: str) -> threading.Lock:
+    """Return the process-local lock for one asset's preview set.
+
+    Preview generation is independent across assets. Keeping this lock
+    per-asset prevents duplicate generation without serializing every S3
+    download and JPEG encode behind one global lock.
+    """
+    with _PREVIEW_ASSET_LOCKS_LOCK:
+        return _PREVIEW_ASSET_LOCKS.setdefault(asset_id, threading.Lock())
+
+
 def cache_paths(service: Service, manifest: Manifest) -> dict[str, Path]:
     directory = (
         service.settings.data_dir
@@ -89,7 +105,11 @@ def _generate(service: Service, manifest: Manifest) -> bool:
             if not image.getexif().get(274) and manifest.metadata.get("Orientation"):
                 image.getexif()[274] = int(manifest.metadata["Orientation"])
             oriented = ImageOps.exif_transpose(image).convert("RGB")
-            for kind, path in targets.items():
+            # The library grid only needs the small derivative. Publish it
+            # first so a thumbnail request can return while the larger
+            # viewer preview is still being encoded.
+            for kind in ("thumbnail", "preview"):
+                path = targets[kind]
                 path.parent.mkdir(parents=True, exist_ok=True)
                 resized = oriented.copy()
                 edge = 2560 if kind == "preview" else 256
@@ -115,17 +135,18 @@ def _generate(service: Service, manifest: Manifest) -> bool:
 
 
 def generate(service: Service, manifest: Manifest) -> bool:
-    """Generate a preview while excluding cache cleanup from the write.
-
-    The lock is process-local because the preview workers and eviction loop
-    run in the same worker process.  Writes remain atomic via ``os.replace``;
-    the lock closes the separate race where the orphan sweep removes the
-    directory before the cache row is recorded.
-    """
+    """Generate one asset's preview without serializing other assets."""
     started = time.perf_counter()
     try:
-        with _PREVIEW_CACHE_LOCK:
-            return _generate(service, manifest)
+        asset_id = str(manifest.asset_id)
+        with _preview_asset_lock(asset_id):
+            with _PREVIEW_CACHE_LOCK:
+                _PREVIEW_ACTIVE_ASSETS.add(asset_id)
+            try:
+                return _generate(service, manifest)
+            finally:
+                with _PREVIEW_CACHE_LOCK:
+                    _PREVIEW_ACTIVE_ASSETS.discard(asset_id)
     finally:
         safe_metrics(
             _metrics,
@@ -212,7 +233,7 @@ def sweep_orphaned_preview_dirs(service: Service) -> list[str]:
             )
             if match is None:
                 continue
-            if match.group("asset_id") in known:
+            if match.group("asset_id") in known or match.group("asset_id") in _PREVIEW_ACTIVE_ASSETS:
                 continue
             shutil.rmtree(entry, ignore_errors=True)
             if not entry.exists():
@@ -272,23 +293,29 @@ def evict_previews(service: Service) -> dict:
 
 def cache_dir_deleted(service: Service, asset_id: str) -> bool:
     """Delete one asset's files from its current cache directory, idempotently."""
-    with _PREVIEW_CACHE_LOCK:
-        if service.catalog.get(asset_id) is None:
-            return False
-        manifest = service.canonical_asset(asset_id)
-        targets = cache_paths(service, manifest)
-        for path in targets.values():
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                return False
+    with _preview_asset_lock(asset_id):
+        with _PREVIEW_CACHE_LOCK:
+            return _cache_dir_deleted(service, asset_id)
+
+
+def _cache_dir_deleted(service: Service, asset_id: str) -> bool:
+    """Delete one asset's files while its per-asset lock is held."""
+    if service.catalog.get(asset_id) is None:
+        return False
+    manifest = service.canonical_asset(asset_id)
+    targets = cache_paths(service, manifest)
+    for path in targets.values():
         try:
-            targets["preview"].parent.rmdir()
-        except OSError:
+            path.unlink()
+        except FileNotFoundError:
             pass
-        return True
+        except OSError:
+            return False
+    try:
+        targets["preview"].parent.rmdir()
+    except OSError:
+        pass
+    return True
 
 
 def _run_onboarding_once(service: Service) -> dict | None:

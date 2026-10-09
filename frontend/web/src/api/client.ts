@@ -61,6 +61,47 @@ import type {
   UploadQueueStatus,
 } from "./types";
 
+export type StorageNamespace = { bytes: number; objects: number; oldest: string | null };
+export type StorageReport = {
+  schemaVersion: number;
+  asOf: string;
+  status: "ok" | "warning" | "hard" | "unavailable";
+  readOnly: boolean;
+  s3: {
+    totalBytes: number;
+    totalObjects: number;
+    namespaces: Record<string, StorageNamespace>;
+    manifestRevisionCount?: number;
+    manifestRevisionsByKind?: Record<string, number>;
+    processingArtifacts?: { bytes: number; objects: number; currentBytes: number | null; historicalBytes: number; currentStatus: string; legacyAnalysisBytes?: number; legacyAnalysisObjects?: number; stageCacheBytes?: number; stageCacheObjects?: number; stageCacheRebuildable?: boolean };
+  };
+  integrity: {
+    missingReferences: Array<{ key: string; referencing: string[] }>;
+    malformedManifests: Array<{ key: string; error: string }>;
+    unsupportedManifests: Array<{ key: string; error: string }>;
+    divergentOrOrphanedRecords: Array<{ key: string; reason: string }>;
+    retentionReview: Array<{ namespace: string; key: string; sizeBytes: number; ageSeconds: number; referencing: string[]; retentionRule: string; recoveryImpact: string }>;
+  };
+  local: {
+    status: string;
+    errors: Array<{ scope: string; errorClass: string }>;
+    filesystem: { path?: string; totalBytes?: number; usedBytes?: number; freeBytes?: number; warningThresholdBytes?: number; hardThresholdBytes?: number };
+    previewCache: { fileCount: number; directoryCount: number; fileBytes: number; rowCount: number | null; accountedBytes: number | null; orphanedDirectories: string[]; configuredLimitBytes: number; status: string };
+    temporaryDirectories: Array<{ path: string; exists: boolean }>;
+  };
+  errors: Array<{ scope: string; errorClass: string }>;
+};
+
+export type StartupStatus = {
+  state: "starting" | "recovering" | "rebuilding" | "reconciling" | "ready" | "failed";
+  phase: string;
+  scanned: number;
+  total: number;
+  percent: number;
+  currentKey?: string | null;
+  error?: string;
+};
+
 const API_ROOT: string = import.meta.env.VITE_API_ROOT ?? "/api";
 
 /**
@@ -152,6 +193,12 @@ export const api = {
     return response.json() as Promise<{ authenticated: boolean }>;
   },
 
+  startupStatus: async (signal?: AbortSignal): Promise<StartupStatus> => {
+    const response = await fetch(apiUrl("/startup/status"), { credentials: "include", signal });
+    if (!response.ok) throw new ApiError("Unable to read startup status.", response.status);
+    return response.json() as Promise<StartupStatus>;
+  },
+
   login: async (password: string): Promise<void> => {
     const response = await fetch(apiUrl("/auth/login"), {
       method: "POST",
@@ -172,6 +219,13 @@ export const api = {
 
   health: (signal?: AbortSignal) =>
     call<Health>(() => getHealth({ client, signal })),
+
+  storageReport: (signal?: AbortSignal) =>
+    fetch(apiUrl("/storage/report"), { credentials: "include", signal }).then(async (response) => {
+      const data = await response.json().catch(() => undefined);
+      if (!response.ok) throw normalizeApiError(data, response);
+      return data as StorageReport;
+    }),
 
   albums: (deleted = false, signal?: AbortSignal) =>
     call<Album[]>(() =>

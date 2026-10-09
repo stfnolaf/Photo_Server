@@ -266,32 +266,6 @@ export type AnalysisStatusOut = {
 export type AssetDocOutList = Array<CurrentAssetDocOut>;
 
 /**
- * BackupDestinationOut
- */
-export type BackupDestinationOut = {
-    /**
-     * At
-     */
-    at?: string | null;
-    /**
-     * Errorclass
-     */
-    errorClass?: string | null;
-    /**
-     * Key
-     */
-    key?: string | null;
-    /**
-     * Status
-     */
-    status: 'success' | 'failed' | 'unavailable' | 'not-configured';
-    /**
-     * Verified
-     */
-    verified?: boolean | null;
-};
-
-/**
  * BatchAbandonedOut
  *
  * DELETE /upload-batches/{id}: the unsealed batch and its staged objects
@@ -727,9 +701,7 @@ export type HealthFailureOut = {
  * HealthOut
  *
  * GET /health: the endpoint's merged shape — fixed "ok", the library id,
- * asset/blob counts, every queue count, the upload-gate statistics, and the
- * latest PostgreSQL backup marker in the media bucket (null until the first
- * backup).
+ * asset/blob counts, every queue count, and the upload-gate statistics.
  */
 export type HealthOut = {
     /**
@@ -785,20 +757,6 @@ export type HealthOut = {
      * Onboardingrunning
      */
     onboardingRunning: number;
-    /**
-     * Postgresbackupat
-     */
-    postgresBackupAt?: string | null;
-    /**
-     * Postgresbackupkey
-     */
-    postgresBackupKey?: string | null;
-    /**
-     * Postgresbackupoverall
-     */
-    postgresBackupOverall?: 'healthy' | 'degraded' | 'unavailable' | null;
-    postgresBackupPrimary?: BackupDestinationOut | null;
-    postgresBackupSecondary?: BackupDestinationOut | null;
     /**
      * Previewfailed
      */
@@ -1422,6 +1380,54 @@ export type SessionOut = {
      * Authenticated
      */
     authenticated: boolean;
+};
+
+/**
+ * StorageReportOut
+ *
+ * Open envelope for the read-only technical storage report.
+ */
+export type StorageReportOut = {
+    /**
+     * Asof
+     */
+    asOf: string;
+    /**
+     * Errors
+     */
+    errors: Array<{
+        [key: string]: unknown;
+    }>;
+    /**
+     * Integrity
+     */
+    integrity: {
+        [key: string]: unknown;
+    };
+    /**
+     * Local
+     */
+    local: {
+        [key: string]: unknown;
+    };
+    /**
+     * Readonly
+     */
+    readOnly: boolean;
+    /**
+     * S3
+     */
+    s3: {
+        [key: string]: unknown;
+    };
+    /**
+     * Schemaversion
+     */
+    schemaVersion: number;
+    /**
+     * Status
+     */
+    status: 'ok' | 'warning' | 'hard' | 'unavailable';
 };
 
 /**
@@ -2943,6 +2949,22 @@ export type GetReadinessResponses = {
 };
 
 export type GetReadinessResponse = GetReadinessResponses[keyof GetReadinessResponses];
+
+export type GetStorageReportData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/storage/report';
+};
+
+export type GetStorageReportResponses = {
+    /**
+     * Successful Response
+     */
+    200: StorageReportOut;
+};
+
+export type GetStorageReportResponse = GetStorageReportResponses[keyof GetStorageReportResponses];
 
 export type ListUploadBatchesData = {
     body?: never;

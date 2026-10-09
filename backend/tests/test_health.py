@@ -84,10 +84,6 @@ class _Service:
     def initialize(self):
         return {}
 
-    def backup_status(self):
-        return {"postgresBackupKey": None, "postgresBackupAt": None}
-
-
 def _client(monkeypatch, *, database_broken=False, storage_broken=False):
     settings = Settings(
         s3_endpoint="http://127.0.0.1:9",

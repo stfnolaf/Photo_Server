@@ -8,6 +8,12 @@ from typing import Any
 _SECRET = re.compile(r"(?i)(password|token|api[_-]?key|secret|signature|signed[_-]?url)")
 _SECRET_VALUE = re.compile(r"(?i)(password|token|api[_-]?key|secret|signature)\s*[=:]|https?://[^\s?]+\?")
 _LOGGER = logging.getLogger("photo_server")
+_LOGGER.setLevel(logging.INFO)
+if not _LOGGER.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _LOGGER.addHandler(_handler)
+    _LOGGER.propagate = False
 
 
 def _safe(value: Any) -> Any:

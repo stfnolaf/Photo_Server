@@ -36,8 +36,6 @@ x-backend: &backend
     # Keep shared derivative caching off unless a trusted deployment makes
     # image URLs intentionally public at its CDN boundary.
     PHOTO_PUBLIC_DERIVATIVE_CACHE: ${PHOTO_PUBLIC_DERIVATIVE_CACHE:-false}
-    PHOTO_POSTGRES_BACKUP_PREFIX: ${PHOTO_POSTGRES_BACKUP_PREFIX:-backups/postgres}
-    PHOTO_POSTGRES_BACKUP_STATUS_PATH: ${PHOTO_POSTGRES_BACKUP_STATUS_PATH:-/var/lib/photo-backup/status.json}
     PHOTO_UPLOAD_PART_BYTES: ${PHOTO_UPLOAD_PART_BYTES:-8388608}
     PHOTO_CORS_ORIGINS: ${PHOTO_CORS_ORIGINS:-}
     PHOTO_AUTH_ENABLED: ${PHOTO_AUTH_ENABLED:-false}
@@ -72,7 +70,6 @@ x-backend: &backend
     AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
   volumes:
     - app-data:/data
-    - backup-status:/var/lib/photo-backup:ro
   depends_on:
     postgres:
       condition: service_healthy
@@ -125,60 +122,46 @@ services:
       interval: 10s
       timeout: 10s
       retries: 30
-  backup:
-    build: ./ops/postgres-backup
-    restart: unless-stopped
-    environment:
-      PGHOST: postgres
-      PGPORT: 5432
-      PGUSER: ${POSTGRES_USER:-photo}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      PGDATABASE: ${POSTGRES_DB:-photo}
-      PHOTO_S3_ENDPOINT: ${PHOTO_S3_ENDPOINT:?Set PHOTO_S3_ENDPOINT in .env}
-      PHOTO_S3_BUCKET: ${PHOTO_S3_BUCKET:-photo-library}
-      PHOTO_S3_ANONYMOUS: ${PHOTO_S3_ANONYMOUS:-true}
-      PHOTO_POSTGRES_BACKUP_PREFIX: ${PHOTO_POSTGRES_BACKUP_PREFIX:-backups/postgres}
-      PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS: ${PHOTO_POSTGRES_BACKUP_INTERVAL_SECONDS:-3600}
-      PHOTO_POSTGRES_BACKUP_RETENTION: ${PHOTO_POSTGRES_BACKUP_RETENTION:-168}
-      PHOTO_POSTGRES_BACKUP_STATUS_PATH: ${PHOTO_POSTGRES_BACKUP_STATUS_PATH:-/var/lib/photo-backup/status.json}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_ENDPOINT: ${PHOTO_POSTGRES_BACKUP_SECONDARY_ENDPOINT:-}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_BUCKET: ${PHOTO_POSTGRES_BACKUP_SECONDARY_BUCKET:-postgres-backups}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_PATH: ${PHOTO_POSTGRES_BACKUP_SECONDARY_PATH:-}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_RETENTION: ${PHOTO_POSTGRES_BACKUP_SECONDARY_RETENTION:-168}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_REQUIRED: ${PHOTO_POSTGRES_BACKUP_SECONDARY_REQUIRED:-false}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_ANONYMOUS: ${PHOTO_POSTGRES_BACKUP_SECONDARY_ANONYMOUS:-false}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_ACCESS_KEY_ID: ${PHOTO_POSTGRES_BACKUP_SECONDARY_ACCESS_KEY_ID:-}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_SECRET_ACCESS_KEY: ${PHOTO_POSTGRES_BACKUP_SECONDARY_SECRET_ACCESS_KEY:-}
-      PHOTO_POSTGRES_BACKUP_SECONDARY_SESSION_TOKEN: ${PHOTO_POSTGRES_BACKUP_SECONDARY_SESSION_TOKEN:-}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-    volumes:
-      - backup-status:/var/lib/photo-backup
-      # For a filesystem/NAS secondary, mount it explicitly and set the path.
-      # - /srv/postgres-backups:/secondary-backups
-    depends_on:
-      postgres:
-        condition: service_healthy
   api:
     <<: *backend
     ports:
       - "${PHOTO_API_BIND:-0.0.0.0}:${PHOTO_API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 60
   worker:
     <<: *backend
     command: ["photo-server", "worker", "--mode", "onboarding"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     environment:
       <<: *backend-environment
       PHOTO_WORKER_THREADS: ${PHOTO_ONBOARDING_WORKERS:-4}
   processing-worker:
     <<: *backend
     command: ["photo-server", "worker", "--mode", "processing"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     environment:
       <<: *backend-environment
       PHOTO_WORKER_THREADS: ${PHOTO_PROCESSING_WORKERS:-2}
   preview-worker:
     <<: *backend
     command: ["photo-server", "worker", "--mode", "preview"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     environment:
       <<: *backend-environment
       PHOTO_WORKER_THREADS: ${PHOTO_PREVIEW_WORKERS:-2}
@@ -214,15 +197,19 @@ services:
     # any face model; it is a plain HTTP client for the two AI services.
     <<: *backend
     command: ["photo-server", "ai-worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
   web:
     build: ./frontend/web
     ports:
       - "${PHOTO_WEB_BIND:-0.0.0.0}:${PHOTO_WEB_PORT:-3000}:80"
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 volumes:
-  backup-status:
   postgres-data:
   app-data:
   vllm-cache:

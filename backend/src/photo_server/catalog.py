@@ -357,6 +357,11 @@ class Catalog:
         with self.engine.begin() as connection:
             self._apply(connection, manifest, enqueue_jobs=False)
 
+    def apply_projection_batch(self, manifests: list[Manifest]):
+        with self.engine.begin() as connection:
+            for manifest in manifests:
+                self._apply(connection, manifest, enqueue_jobs=False)
+
     def restore_work_queues(
         self,
         asset_ids: list[str],
@@ -1076,6 +1081,11 @@ class Catalog:
         """Project one album snapshot; used by the offline S3 rebuild."""
         with self.engine.begin() as connection:
             self._apply_album(connection, album)
+
+    def apply_album_batch(self, albums: list[Album]):
+        with self.engine.begin() as connection:
+            for album in albums:
+                self._apply_album(connection, album)
 
     def claim_job(self) -> str | None:
         with self.engine.begin() as connection:
@@ -2434,6 +2444,20 @@ class Catalog:
                 ).select_from(preview_cache)
             )
         return int(value or 0)
+
+    def preview_cache_inventory(self) -> list[dict]:
+        """Return the projection rows used to compare DB accounting to files."""
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    preview_cache.c.asset_id,
+                    (
+                        func.coalesce(preview_cache.c.preview_bytes, 0)
+                        + func.coalesce(preview_cache.c.thumbnail_bytes, 0)
+                    ).label("bytes"),
+                ).select_from(preview_cache)
+            )
+            return [{"asset_id": row.asset_id, "bytes": int(row.bytes or 0)} for row in rows]
 
     def create_upload_batch(self, batch_id: UUID, files: list[dict], album_id: UUID | None = None):
         now = int(time())

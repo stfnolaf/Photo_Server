@@ -11,8 +11,9 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
+from photo_server.app_logging import log_event
 from photo_server.catalog import Catalog, analysis_runs, faces, people
 from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.manifests import (
@@ -235,7 +236,13 @@ def _operation_document(record: Any) -> dict[str, Any]:
 
 
 def _verify_object(
-    storage: Any, key: str, size: int | None, digest: str, report: RebuildReport
+    storage: Any,
+    key: str,
+    size: int | None,
+    digest: str,
+    report: RebuildReport,
+    *,
+    verify_checksum: bool = True,
 ) -> bool:
     report.objects_checked += 1
     head = storage.head(key)
@@ -252,6 +259,8 @@ def _verify_object(
             }
         )
         return False
+    if not verify_checksum:
+        return True
     data = storage.read_bytes(key)
     actual = hashlib.sha256(data).hexdigest()
     if (size is not None and len(data) != size) or actual != digest:
@@ -435,6 +444,8 @@ def rebuild_from_s3(
     checkpoint_id: str = "default",
     resume: bool = True,
     stop_after: int | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+    verify_object_checksums: bool = True,
 ) -> dict[str, Any]:
     """Scan and project S3 records; ``stop_after`` is a test/maintenance pause hook.
 
@@ -463,8 +474,30 @@ def rebuild_from_s3(
             return report.as_dict()
 
     keys = sorted(key for prefix, _ in MANIFEST_PREFIXES for key in storage.keys(prefix))
+    log_event(
+        "s3_rebuild_scan_started",
+        stage="rebuild",
+        checkpoint_id=checkpoint_id,
+        manifest_keys=len(keys),
+    )
+    if progress:
+        progress(
+            {
+                "phase": "scan",
+                "scanned": 0,
+                "total": len(keys),
+                "percent": 0.0,
+                "currentKey": None,
+            }
+        )
     records: dict[tuple[str, str], list[tuple[str, Any]]] = {}
     operation_records: dict[tuple[str, str, str], tuple[str, bytes]] = {}
+    expected_library = None
+    if hasattr(catalog, "library_id"):
+        try:
+            expected_library = str(catalog.library_id())
+        except Exception:
+            expected_library = None
     for key in keys:
         identity = _key_identity(key)
         if identity is None:
@@ -474,14 +507,30 @@ def rebuild_from_s3(
         codec_kind = "processing-artifact" if kind == "processing" else kind
         report.scanned += 1
         record = _decode_record(storage, key, codec_kind, report)
+        if report.scanned == 1 or report.scanned % 100 == 0:
+            log_event(
+                "s3_rebuild_scan_progress",
+                stage="rebuild",
+                checkpoint_id=checkpoint_id,
+                scanned=report.scanned,
+                total=len(keys),
+                percent=round(report.scanned / len(keys) * 100, 1) if keys else 100.0,
+                current_key=key,
+                validated=report.validated,
+                records=len(records),
+            )
+            if progress:
+                progress(
+                    {
+                        "phase": "scan",
+                        "scanned": report.scanned,
+                        "total": len(keys),
+                        "percent": round(report.scanned / len(keys) * 100, 1) if keys else 100.0,
+                        "currentKey": key,
+                    }
+                )
         if record is None:
             continue
-        expected_library = None
-        if hasattr(catalog, "library_id"):
-            try:
-                expected_library = str(catalog.library_id())
-            except Exception:
-                expected_library = None
         record_library = getattr(record, "library_id", None)
         if expected_library and record_library and str(record_library) != expected_library:
             report.library_mismatches.append(
@@ -500,12 +549,14 @@ def rebuild_from_s3(
                     record.result_object.size_bytes,
                     record.result_object.sha256,
                     report,
+                    verify_checksum=verify_object_checksums,
                 )
                 records.setdefault((actual_kind, entity_id), []).append((key, record))
             else:
                 records.setdefault((actual_kind, entity_id), []).append((key, record))
             report.checkpoint = key
-            _write_checkpoint(storage, checkpoint_key, {"schemaVersion": 1, "lastKey": key})
+            if report.scanned % 100 == 0:
+                _write_checkpoint(storage, checkpoint_key, {"schemaVersion": 1, "lastKey": key})
             if stop_after is not None and report.scanned >= stop_after:
                 return report.as_dict() | {"status": "paused"}
             continue
@@ -519,10 +570,22 @@ def rebuild_from_s3(
             continue
         if isinstance(record, AssetManifest):
             for blob in record.blobs:
-                _verify_object(storage, blob.object_key, blob.size_bytes, blob.sha256, report)
+                _verify_object(
+                    storage,
+                    blob.object_key,
+                    blob.size_bytes,
+                    blob.sha256,
+                    report,
+                    verify_checksum=verify_object_checksums,
+                )
             for reference in record.processing:
                 _verify_object(
-                    storage, reference.artifact_key, None, reference.artifact_sha256, report
+                    storage,
+                    reference.artifact_key,
+                    None,
+                    reference.artifact_sha256,
+                    report,
+                    verify_checksum=verify_object_checksums,
                 )
         record_kind, record_id = (
             ("tombstone", f"{actual_kind}:{entity_id}")
@@ -539,11 +602,28 @@ def rebuild_from_s3(
         operation_records[(operation_id, record_kind, record_id)] = operation_identity
         records.setdefault((record_kind, record_id), []).append((key, record))
         report.checkpoint = key
-        _write_checkpoint(storage, checkpoint_key, {"schemaVersion": 1, "lastKey": key})
+        if report.scanned % 100 == 0:
+            _write_checkpoint(storage, checkpoint_key, {"schemaVersion": 1, "lastKey": key})
         if stop_after is not None and report.scanned >= stop_after:
             return report.as_dict() | {"status": "paused"}
 
     selected: dict[tuple[str, str], Any] = {}
+    log_event(
+        "s3_rebuild_projection_started",
+        stage="rebuild",
+        checkpoint_id=checkpoint_id,
+        scanned=report.scanned,
+        records=len(records),
+    )
+    if progress:
+        progress(
+            {
+                "phase": "projection",
+                "scanned": report.scanned,
+                "total": len(keys),
+                "percent": 99.0,
+            }
+        )
     for (kind, entity_id), values in sorted(records.items()):
         if kind in {"face", "processing", "fingerprint"}:
             continue
@@ -771,6 +851,7 @@ def rebuild_from_s3(
     by_asset = sorted(latest_assets.values(), key=lambda x: str(x.asset_id))
     by_album = sorted(latest_albums.values(), key=lambda x: str(x.album_id))
     with catalog.writer():
+        projections = []
         for record in by_asset:
             previous = next(
                 (
@@ -779,12 +860,14 @@ def rebuild_from_s3(
                 ),
                 None,
             )
-            projection = _asset_projection(record, previous=previous)
-            if hasattr(catalog, "apply_projection"):
+            projections.append(_asset_projection(record, previous=previous))
+        if hasattr(catalog, "apply_projection_batch"):
+            catalog.apply_projection_batch(projections)
+        else:
+            for projection in projections:
                 catalog.apply_projection(projection)
-            else:
-                catalog.apply(projection)
-            report.projected_assets += 1
+        report.projected_assets = len(projections)
+        albums = []
         for record in by_album:
             previous = next(
                 (
@@ -793,8 +876,13 @@ def rebuild_from_s3(
                 ),
                 None,
             )
-            catalog.apply_album(_album_projection(record, previous=previous))
-            report.projected_albums += 1
+            albums.append(_album_projection(record, previous=previous))
+        if hasattr(catalog, "apply_album_batch"):
+            catalog.apply_album_batch(albums)
+        else:
+            for album in albums:
+                catalog.apply_album(album)
+        report.projected_albums = len(albums)
         # Processing artifacts and faces are durable-derived state.  Queue and
         # lease tables are intentionally not touched by rebuild.
         if hasattr(catalog, "engine"):
@@ -891,7 +979,17 @@ def rebuild_from_s3(
     _write_checkpoint(
         storage, checkpoint_key, {"schemaVersion": 1, "lastKey": None, "complete": True}
     )
-    return report.as_dict()
+    result = report.as_dict()
+    log_event(
+        "s3_rebuild_complete",
+        stage="rebuild",
+        checkpoint_id=checkpoint_id,
+        status=result.get("status"),
+        scanned=result.get("scanned", 0),
+        projected_assets=result.get("projectedAssets", 0),
+        projected_albums=result.get("projectedAlbums", 0),
+    )
+    return result
 
 
 def compare_projections(expected: Catalog, actual: Catalog) -> dict[str, Any]:

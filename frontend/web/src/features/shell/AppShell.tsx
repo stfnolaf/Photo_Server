@@ -34,6 +34,7 @@ export function AppShell({
   const toggleLeft = useLayoutStore((state) => state.toggleLeftPanel);
   const isPhoto = location.pathname.startsWith("/photo/");
   const isPeople = location.pathname === "/people";
+  const isStorage = location.pathname === "/storage";
 
   const refresh = async () => {
     await queryClient.invalidateQueries();
@@ -74,8 +75,9 @@ export function AppShell({
             </button>
           )}
           <div className="module-switcher" aria-label="Workspace">
-            <Link to={{ pathname: "/", search: writeFilters(filters).toString() }} className={!isPhoto && !isPeople ? "is-active" : ""}>Library</Link>
+            <Link to={{ pathname: "/", search: writeFilters(filters).toString() }} className={!isPhoto && !isPeople && !isStorage ? "is-active" : ""}>Library</Link>
             <Link to="/people" className={isPeople ? "is-active" : ""}>People</Link>
+            <Link to="/storage" className={isStorage ? "is-active" : ""}>Storage</Link>
             <span className={isPhoto ? "is-active" : ""}>Photo</span>
           </div>
         </div>
@@ -99,6 +101,7 @@ export function AppShell({
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "all", albumId: null }).toString() })}>Library</button>
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "favorites", albumId: null }).toString() })}>Favorites</button>
         <button onClick={() => navigate("/people")}>People</button>
+        <button onClick={() => navigate("/storage")}>Storage</button>
         <button onClick={() => navigate({ pathname: "/", search: writeFilters({ ...filters, view: "hidden", albumId: null }).toString() })}>Hidden</button>
       </nav>
     </div>

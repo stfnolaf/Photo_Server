@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import insert, select
 
+from photo_server.app_logging import log_event
 from photo_server.catalog import analysis_runs, faces, people
 from photo_server.fingerprints import BURST_HASH_VERSION
 from photo_server.manifests import (
@@ -166,7 +167,14 @@ def _album_compare(value: Any) -> Any:
     return result
 
 
-def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: bool, stop_after: int | None):
+def _scan(
+    storage,
+    report: ReconciliationReport,
+    checkpoint_id: str,
+    resume: bool,
+    stop_after: int | None,
+    verify_object_checksums: bool = True,
+):
     checkpoint_key = f"indexes/checkpoints/reconciliation-{checkpoint_id}.json"
     if resume and storage.head(checkpoint_key) is not None and not report.dry_run:
         storage.get_json(checkpoint_key)
@@ -177,11 +185,31 @@ def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: boo
         # ``lastKey`` is retained for operator visibility and compatibility,
         # but is deliberately not used as a lower bound.
     keys = sorted(key for prefix, _ in MANIFEST_PREFIXES for key in storage.keys(prefix))
+    log_event(
+        "s3_reconciliation_scan_started",
+        stage="reconciliation",
+        checkpoint_id=checkpoint_id,
+        manifest_keys=len(keys),
+        dry_run=report.dry_run,
+        apply=report.apply_requested,
+    )
     records: dict[tuple[str, str], list[tuple[str, Any]]] = {}
     referenced: set[str] = set()
     for key in keys:
         identity = _key_identity(key)
         report.scanned += 1
+        if report.scanned == 1 or report.scanned % 100 == 0:
+            log_event(
+                "s3_reconciliation_scan_progress",
+                stage="reconciliation",
+                checkpoint_id=checkpoint_id,
+                scanned=report.scanned,
+                total=len(keys),
+                percent=round(report.scanned / len(keys) * 100, 1) if keys else 100.0,
+                current_key=key,
+                validated=report.validated,
+                records=len(records),
+            )
         if identity is None:
             _issue(report.malformed, "manifest-key", key, "key does not match canonical layout")
             continue
@@ -213,14 +241,28 @@ def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: boo
             if isinstance(record, AssetManifest):
                 for blob in record.blobs:
                     referenced.add(blob.object_key)
-                    _verify_object(storage, blob.object_key, blob.size_bytes, blob.sha256, report)
+                    _verify_object(
+                        storage,
+                        blob.object_key,
+                        blob.size_bytes,
+                        blob.sha256,
+                        report,
+                        verify_checksum=verify_object_checksums,
+                    )
                 for ref in record.processing:
                     referenced.add(ref.artifact_key)
                     if storage.head(ref.artifact_key) is None:
                         _issue(report.unresolved, "processing", ref.artifact_key, "asset references missing artifact object")
             elif isinstance(record, ProcessingArtifact):
                 referenced.add(record.result_object.object_key)
-                _verify_object(storage, record.result_object.object_key, record.result_object.size_bytes, record.result_object.sha256, report)
+                _verify_object(
+                    storage,
+                    record.result_object.object_key,
+                    record.result_object.size_bytes,
+                    record.result_object.sha256,
+                    report,
+                    verify_checksum=verify_object_checksums,
+                )
             report.checkpoint = key
             _checkpoint(storage, checkpoint_key, {"schemaVersion": 1, "lastKey": key}, report.dry_run)
             if stop_after is not None and report.scanned >= stop_after:
@@ -243,9 +285,18 @@ def _scan(storage, report: ReconciliationReport, checkpoint_id: str, resume: boo
     return records, referenced, set(keys), checkpoint_key, False
 
 
-def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default", resume: bool = True,
-                             dry_run: bool = True, apply: bool = False, report_only: bool = False,
-                             stop_after: int | None = None) -> dict[str, Any]:
+def reconcile_s3_to_postgres(
+    storage,
+    catalog,
+    *,
+    checkpoint_id: str = "default",
+    resume: bool = True,
+    dry_run: bool = True,
+    apply: bool = False,
+    report_only: bool = False,
+    stop_after: int | None = None,
+    verify_object_checksums: bool = True,
+) -> dict[str, Any]:
     """Reconcile immutable S3 state with the durable PostgreSQL projection."""
     report = ReconciliationReport(dry_run=dry_run, apply_requested=apply and not report_only)
     if apply and report_only:
@@ -255,7 +306,7 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
     if dry_run:
         resume = False  # dry-run must never consume or write a mutable checkpoint
     records, referenced, keys, checkpoint_key, already_complete = _scan(
-        storage, report, checkpoint_id, resume, stop_after
+        storage, report, checkpoint_id, resume, stop_after, verify_object_checksums
     )
     if report.status == "paused":
         return report.as_dict()
@@ -626,7 +677,19 @@ def reconcile_s3_to_postgres(storage, catalog, *, checkpoint_id: str = "default"
             },
             False,
         )
-    return report.as_dict()
+    result = report.as_dict()
+    log_event(
+        "s3_reconciliation_complete",
+        stage="reconciliation",
+        checkpoint_id=checkpoint_id,
+        status=result.get("status"),
+        scanned=result.get("scanned", 0),
+        repaired=result.get("repaired", 0),
+        missing=len(result.get("missing", [])),
+        divergent=len(result.get("divergent", [])),
+        orphaned=len(result.get("orphaned", [])),
+    )
+    return result
 
 
 reconcile = reconcile_s3_to_postgres

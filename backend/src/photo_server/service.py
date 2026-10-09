@@ -1,5 +1,4 @@
 import hashlib
-import json
 import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -7,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4, uuid5
 
+from photo_server.app_logging import log_event
 from photo_server.canonical import CanonicalPublisher
 from photo_server.catalog import Catalog
 from photo_server.config import LibraryError, Settings
@@ -55,9 +55,14 @@ class Service:
 
         return BurstAuthority(self).refresh(uuid4(), clear_exclusions=True)
 
-    def initialize(self, recover_uploads: bool = True) -> dict:
+    def initialize(self, recover_uploads: bool = True, rebuild_projection: bool = True) -> dict:
+        rebuild_report = None
+        log_event("service_initialization_started", stage="startup")
         with self.catalog.writer():
+            log_event("service_database_lock_acquired", stage="startup")
+            log_event("service_storage_initialization_started", stage="startup")
             self.storage.ensure_bucket()
+            log_event("service_storage_initialization_complete", stage="startup")
             marker = (
                 self.storage.get_json("library.json")
                 if self.storage.head("library.json") is not None
@@ -81,7 +86,18 @@ class Service:
                 else:
                     proposed_id = uuid4()
             self.library_id = proposed_id
+            log_event(
+                "service_database_migration_started",
+                stage="startup",
+                library_id=self.library_id,
+            )
             database_migrations = self.catalog.initialize(str(self.library_id))
+            log_event(
+                "service_database_migration_complete",
+                stage="startup",
+                library_id=self.library_id,
+                migrations=database_migrations,
+            )
             self.library_id = self.catalog.library_id()
             if marker and UUID(marker["libraryId"]) != self.library_id:
                 raise LibraryError("The database projection and canonical S3 library belong to different libraries")
@@ -93,12 +109,35 @@ class Service:
                     canonical_json({"schemaVersion": 1, "libraryId": str(self.library_id)}),
                     "application/json",
                 )
+            if rebuild_projection and self.catalog.projection_is_empty():
+                from photo_server.rebuild import rebuild_from_s3
+
+                log_event("service_projection_rebuild_started", stage="startup")
+                rebuild_report = rebuild_from_s3(
+                    self.storage,
+                    self.catalog,
+                    checkpoint_id="startup-rebuild",
+                    resume=False,
+                )
+                if rebuild_report.get("status") != "complete":
+                    raise LibraryError(
+                        "Automatic PostgreSQL rebuild from S3 failed: "
+                        + str(rebuild_report.get("errors") or rebuild_report)
+                    )
+                log_event(
+                    "postgres_projection_rebuilt",
+                    stage="startup",
+                    projected_assets=rebuild_report.get("projectedAssets", 0),
+                    projected_albums=rebuild_report.get("projectedAlbums", 0),
+                )
         interrupted = self.catalog.resume_interrupted_uploads() if recover_uploads else 0
         return {
             "libraryId": str(self.library_id),
             "bucket": self.storage.bucket,
             "databaseMigrations": database_migrations,
             "interruptedUploadsReset": interrupted,
+            "projectionRebuilt": rebuild_report is not None,
+            "rebuildReport": rebuild_report,
         }
 
     def plan(self, paths: list[str]) -> dict:
@@ -165,85 +204,6 @@ class Service:
             "blobsChecked": checked,
             "verification": "sha256" if full else "size",
             "errors": errors,
-        }
-
-    def backup_status(self) -> dict:
-        status_path = self.settings.postgres_backup_status_path
-        try:
-            status = json.loads(status_path.read_text())
-        except (FileNotFoundError, OSError, ValueError):
-            status = None
-        if isinstance(status, dict):
-            primary = self._backup_destination_status(status.get("primary"))
-            secondary = self._backup_destination_status(status.get("secondary"))
-            overall = status.get("overallStatus")
-            if primary is not None and secondary is not None and overall in {
-                "healthy", "degraded", "unavailable"
-            }:
-                return {
-                    "postgresBackupKey": primary.get("key"),
-                    "postgresBackupAt": primary.get("at"),
-                    "postgresBackupPrimary": primary,
-                    "postgresBackupSecondary": secondary,
-                    "postgresBackupOverall": overall,
-                }
-
-        return self._backup_status_from_primary_storage()
-
-    @staticmethod
-    def _backup_destination_status(value: object) -> dict | None:
-        if not isinstance(value, dict) or value.get("status") not in {
-            "success", "failed", "unavailable", "not-configured"
-        }:
-            return None
-        result = {"status": value["status"]}
-        for field in ("key", "at", "errorClass"):
-            if field in value:
-                if not isinstance(value[field], str):
-                    return None
-                result[field] = value[field]
-        if "verified" in value:
-            if not isinstance(value["verified"], bool):
-                return None
-            result["verified"] = value["verified"]
-        return result
-
-    def _backup_status_from_primary_storage(self) -> dict:
-        secondary_configured = bool(
-            self.settings.postgres_backup_secondary_endpoint
-            or self.settings.postgres_backup_secondary_path
-        )
-        keys = list(self.storage.keys(self.settings.postgres_backup_prefix.rstrip("/") + "/"))
-        if not keys:
-            return {
-                "postgresBackupKey": None,
-                "postgresBackupAt": None,
-                "postgresBackupPrimary": {"status": "unavailable"},
-                "postgresBackupSecondary": {
-                    "status": "unavailable" if secondary_configured else "not-configured"
-                },
-                "postgresBackupOverall": "unavailable",
-            }
-        key = max(keys)
-        head = self.storage.head(key)
-        modified = head.get("LastModified") if head else None
-        return {
-            "postgresBackupKey": key,
-            "postgresBackupAt": modified.isoformat() if modified else None,
-            "postgresBackupPrimary": {
-                "status": "success" if modified else "unavailable",
-                "key": key,
-                "at": modified.isoformat() if modified else None,
-                "verified": True,
-            },
-            "postgresBackupSecondary": {
-                "status": "unavailable" if secondary_configured else "not-configured"
-            },
-            "postgresBackupOverall": (
-                "healthy"
-                if modified and not (secondary_configured and self.settings.postgres_backup_secondary_required)
-                else "degraded" if modified else "unavailable"
-            ),
         }
 
     def queue_processing(

@@ -130,6 +130,14 @@ def main():
         "cache-rebuild-index",
         help="Backfill preview_cache rows for cached preview sets that predate tracking",
     )
+    storage_report = commands.add_parser(
+        "storage-report", help="Read-only S3, local derived-storage, and capacity report"
+    )
+    storage_report.add_argument("--format", choices=("json", "text"), default="json")
+    storage = commands.add_parser("storage", help="Storage administration")
+    storage_commands = storage.add_subparsers(dest="storage_command", required=True)
+    storage_report_nested = storage_commands.add_parser("report", help=storage_report.description)
+    storage_report_nested.add_argument("--format", choices=("json", "text"), default="json")
     args = parser.parse_args()
     settings = Settings()
     try:
@@ -260,10 +268,26 @@ def main():
                             result = dump_result
         elif args.command == "export":
             result = export_library(settings, args.destination, args.include_trash)
+        elif args.command == "storage-report" or (
+            args.command == "storage" and args.storage_command == "report"
+        ):
+            from photo_server.catalog import Catalog
+            from photo_server.storage import Storage
+            from photo_server.storage_report import format_storage_report
+            from photo_server.storage_report import storage_report as make_report
+
+            # Reporting must not create buckets, migrations, markers, or
+            # cleanup checkpoints.
+            catalog = Catalog(settings.database_url, settings)
+            result = make_report(Storage(settings), settings, catalog)
+            if args.format == "text":
+                print(format_storage_report(result))
+                return
         else:
             service = Service(settings)
             initialized = service.initialize(
-                recover_uploads=args.command not in {"worker", "ai-worker", "migrate", "cache-rebuild-index"}
+                recover_uploads=args.command not in {"worker", "ai-worker", "migrate", "cache-rebuild-index"},
+                rebuild_projection=args.command not in {"worker", "ai-worker"},
             )
             if args.command in {"init", "migrate"}:
                 result = initialized

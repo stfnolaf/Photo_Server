@@ -506,70 +506,6 @@
         "title": "AssetDocOutList",
         "type": "array"
       },
-      "BackupDestinationOut": {
-        "additionalProperties": false,
-        "properties": {
-          "at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "At"
-          },
-          "errorClass": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Errorclass"
-          },
-          "key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Key"
-          },
-          "status": {
-            "enum": [
-              "success",
-              "failed",
-              "unavailable",
-              "not-configured"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "verified": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Verified"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "title": "BackupDestinationOut",
-        "type": "object"
-      },
       "BatchAbandonedOut": {
         "additionalProperties": false,
         "description": "DELETE /upload-batches/{id}: the unsealed batch and its staged objects\nare gone.",
@@ -1244,7 +1180,7 @@
       },
       "HealthOut": {
         "additionalProperties": false,
-        "description": "GET /health: the endpoint's merged shape \u2014 fixed \"ok\", the library id,\nasset/blob counts, every queue count, the upload-gate statistics, and the\nlatest PostgreSQL backup marker in the media bucket (null until the first\nbackup).",
+        "description": "GET /health: the endpoint's merged shape \u2014 fixed \"ok\", the library id,\nasset/blob counts, every queue count, and the upload-gate statistics.",
         "properties": {
           "aiFaceConfigured": {
             "title": "Aifaceconfigured",
@@ -1301,64 +1237,6 @@
           "onboardingRunning": {
             "title": "Onboardingrunning",
             "type": "integer"
-          },
-          "postgresBackupAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Postgresbackupat"
-          },
-          "postgresBackupKey": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Postgresbackupkey"
-          },
-          "postgresBackupOverall": {
-            "anyOf": [
-              {
-                "enum": [
-                  "healthy",
-                  "degraded",
-                  "unavailable"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Postgresbackupoverall"
-          },
-          "postgresBackupPrimary": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BackupDestinationOut"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "postgresBackupSecondary": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BackupDestinationOut"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "previewFailed": {
             "title": "Previewfailed",
@@ -2367,6 +2245,69 @@
           "authenticated"
         ],
         "title": "SessionOut",
+        "type": "object"
+      },
+      "StorageReportOut": {
+        "additionalProperties": false,
+        "description": "Open envelope for the read-only technical storage report.",
+        "properties": {
+          "asOf": {
+            "title": "Asof",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "integrity": {
+            "additionalProperties": true,
+            "title": "Integrity",
+            "type": "object"
+          },
+          "local": {
+            "additionalProperties": true,
+            "title": "Local",
+            "type": "object"
+          },
+          "readOnly": {
+            "title": "Readonly",
+            "type": "boolean"
+          },
+          "s3": {
+            "additionalProperties": true,
+            "title": "S3",
+            "type": "object"
+          },
+          "schemaVersion": {
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "warning",
+              "hard",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "asOf",
+          "status",
+          "readOnly",
+          "s3",
+          "integrity",
+          "local",
+          "errors"
+        ],
+        "title": "StorageReportOut",
         "type": "object"
       },
       "UploadBatchOut": {
@@ -5258,6 +5199,33 @@
           }
         ],
         "summary": "Readyz"
+      }
+    },
+    "/storage/report": {
+      "get": {
+        "description": "Read-only technical storage and capacity report.",
+        "operationId": "getStorageReport",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "summary": "Storage Report Endpoint"
       }
     },
     "/upload-batches": {

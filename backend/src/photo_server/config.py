@@ -44,19 +44,16 @@ class Settings(BaseSettings):
     worker_threads: int = Field(default=4, ge=1, le=32)
     worker_heartbeat_interval_seconds: int = Field(default=15, ge=5, le=300)
     worker_stale_seconds: int = Field(default=60, ge=15, le=3600)
-    postgres_backup_prefix: str = "backups/postgres"
-    postgres_backup_status_path: Path = Path("/var/lib/photo-backup/status.json")
-    postgres_backup_secondary_endpoint: str = ""
-    postgres_backup_secondary_path: str = ""
-    postgres_backup_secondary_bucket: str = "postgres-backups"
-    postgres_backup_secondary_retention: int = Field(default=168, ge=1)
-    postgres_backup_secondary_required: bool = False
-    postgres_backup_secondary_anonymous: bool = False
-    postgres_backup_secondary_access_key_id: SecretStr | None = Field(default=None, repr=False)
-    postgres_backup_secondary_secret_access_key: SecretStr | None = Field(default=None, repr=False)
-    postgres_backup_secondary_session_token: SecretStr | None = Field(default=None, repr=False)
     recovery_checkpoint_prefix: str = "indexes/recovery-checkpoints"
     recovery_progress_prefix: str = "indexes/checkpoints"
+    # Storage accounting is deliberately advisory.  The hard free-space
+    # threshold is only consumed by upload admission; warnings never block.
+    storage_free_space_warning_bytes: int = Field(default=10 * 1024**3, ge=0)
+    storage_free_space_hard_bytes: int = Field(default=2 * 1024**3, ge=0)
+    storage_preview_cache_warning_bytes: int = Field(default=0, ge=0)
+    storage_staging_warning_bytes: int = Field(default=0, ge=0)
+    storage_backup_max_age_seconds: int = Field(default=7 * 24 * 3600, ge=0)
+    storage_endpoint_quota_warning_ratio: float = Field(default=0.9, ge=0, le=1)
     upload_part_bytes: int = Field(
         default=8 * 1024 * 1024,
         ge=5 * 1024 * 1024,
@@ -179,11 +176,9 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def validate_backup_destinations(self):
-        if self.postgres_backup_secondary_endpoint and self.postgres_backup_secondary_path:
-            raise ValueError(
-                "Configure only one secondary backup destination: endpoint or path"
-            )
+    def validate_storage_thresholds(self):
+        if self.storage_free_space_hard_bytes > self.storage_free_space_warning_bytes:
+            raise ValueError("PHOTO_STORAGE_FREE_SPACE_HARD_BYTES cannot exceed warning threshold")
         return self
 
 

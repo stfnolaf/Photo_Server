@@ -414,8 +414,6 @@
         "onboardingFailed": 0,
         "onboardingPending": 0,
         "onboardingRunning": 0,
-        "postgresBackupAt": null,
-        "postgresBackupKey": null,
         "previewFailed": 0,
         "previewPending": 3,
         "previewRunning": 0,

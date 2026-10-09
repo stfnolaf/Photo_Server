@@ -49,6 +49,7 @@ from photo_server.api_schemas import (
     ReadinessFailureOut,
     ReadinessOut,
     SessionOut,
+    StorageReportOut,
     UploadBatchOut,
     UploadBatchRequest,
     UploadFileReceipt,
@@ -68,6 +69,8 @@ from photo_server.models import Mutation
 from photo_server.reconcile import reconcile_s3_to_postgres
 from photo_server.service import Service
 from photo_server.state import mutate, mutate_face
+from photo_server.storage_report import local_capacity_state
+from photo_server.storage_report import storage_report as make_storage_report
 from photo_server.uploads import (
     UploadGate,
     abandon_batch,
@@ -137,6 +140,66 @@ def _run_reconciliation_monitor(service: Service) -> None:
             checkpoint_id=checkpoint_id,
             error_class=type(error).__name__,
         )
+
+
+def _run_startup_reconciliation(service: Service) -> dict:
+    """Repair safe projection gaps before the API begins serving requests."""
+    with service.catalog.writer():
+        return reconcile_s3_to_postgres(
+            service.storage,
+            service.catalog,
+            checkpoint_id="startup-reconciliation",
+            resume=False,
+            dry_run=False,
+            apply=True,
+        )
+
+
+def _run_startup_recovery(service: Service, status: dict[str, object]) -> None:
+    """Rebuild/reconcile in the background while liveness stays available."""
+    try:
+        if service.catalog.projection_is_empty():
+            from photo_server.rebuild import rebuild_from_s3
+
+            status.update({"state": "rebuilding", "phase": "rebuild"})
+            report = rebuild_from_s3(
+                service.storage,
+                service.catalog,
+                    checkpoint_id="startup-rebuild",
+                    resume=False,
+                    progress=lambda update: status.update(update),
+                    verify_object_checksums=False,
+            )
+            if report.get("status") != "complete":
+                raise LibraryError(
+                    "Automatic PostgreSQL rebuild from S3 failed: "
+                    + str(report.get("errors") or report)
+                )
+        status.update({"state": "reconciling", "phase": "reconciliation", "percent": 100.0})
+        reconciliation = reconcile_s3_to_postgres(
+            service.storage,
+            service.catalog,
+            checkpoint_id="startup-reconciliation",
+            resume=False,
+            dry_run=False,
+            apply=True,
+            verify_object_checksums=False,
+        )
+        if reconciliation.get("status") not in {"complete", "drift_remaining"}:
+            raise LibraryError(
+                "Startup S3 reconciliation failed: "
+                + str(reconciliation.get("failed") or reconciliation)
+            )
+        status.update({"state": "ready", "phase": "complete", "percent": 100.0})
+        log_event(
+            "startup_recovery_complete",
+            stage="startup",
+            status=reconciliation.get("status"),
+            repaired=reconciliation.get("repaired", 0),
+        )
+    except Exception as error:
+        status.update({"state": "failed", "phase": "failed", "error": str(error)})
+        log_event("startup_recovery_failed", stage="startup", error_class=type(error).__name__)
 
 
 def _metric_queue_snapshot(service: Service) -> dict[str, dict[str, int]]:
@@ -300,10 +363,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     service = Service(settings or Settings())
     upload_gate = UploadGate(service.settings.upload_workers)
     metrics = Metrics()
+    startup_status: dict[str, object] = {
+        "state": "starting",
+        "phase": "initializing",
+        "scanned": 0,
+        "total": 0,
+        "percent": 0.0,
+    }
 
     @asynccontextmanager
     async def lifespan(app):
-        service.initialize()
+        service.initialize(rebuild_projection=False)
+        startup_status.update({"state": "recovering", "phase": "queued"})
+        recovery_task = asyncio.create_task(asyncio.to_thread(_run_startup_recovery, service, startup_status))
         await asyncio.to_thread(reconcile_ready_upload_batches, service)
 
         async def maintenance():
@@ -332,9 +404,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             maintenance_task.cancel()
             reconciliation_monitor_task.cancel()
+            recovery_task.cancel()
             await asyncio.gather(
                 maintenance_task,
                 reconciliation_monitor_task,
+                recovery_task,
                 return_exceptions=True,
             )
             service.catalog.engine.dispose()
@@ -369,13 +443,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_credentials=True,
         )
 
-    public_paths = {"/livez", "/auth/login", "/auth/session", "/auth/logout"}
+    public_paths = {"/livez", "/auth/login", "/auth/session", "/auth/logout", "/startup/status"}
 
     @app.middleware("http")
     async def protect_requests(request: Request, call_next):
+        path = request.url.path
+        if path not in {"/livez", "/health", "/startup/status", *public_paths} and startup_status["state"] != "ready":
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Library recovery is still in progress", "startup": startup_status},
+            )
         if not service.settings.auth_enabled or request.method == "OPTIONS":
             return await call_next(request)
-        path = request.url.path
         if path in public_paths:
             if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not origin_allowed(request, origins):
                 return JSONResponse(status_code=403, content={"detail": "Unsafe cross-origin request"})
@@ -405,6 +484,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def root():
         return RedirectResponse("/docs")
+
+    @app.get("/startup/status", include_in_schema=False)
+    def startup_status_endpoint():
+        return dict(startup_status)
 
     @app.post("/auth/login", response_model=SessionOut, operation_id="login")
     def login(body: LoginRequest, request: Request, response: Response):
@@ -489,19 +572,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ai_probe_cache["semantic"] = semantic_probe.result()
                 ai_probe_cache["face"] = face_probe.result()
             ai_probe_cache["ts"] = now
-        backup = service.backup_status() if storage["status"] == "ready" else {
-            "postgresBackupKey": None, "postgresBackupAt": None,
-            "postgresBackupPrimary": {"status": "unavailable"},
-            "postgresBackupSecondary": {"status": "unavailable"},
-            "postgresBackupOverall": "unavailable",
-        }
+        capacity = local_capacity_state(service.settings)
+        if capacity != "ok":
+            log_event("storage_capacity_warning", capacity_status=capacity)
         return {
-            "status": "degraded" if storage["status"] != "ready" or backup.get("postgresBackupOverall", "healthy") != "healthy" else "ok",
+            "status": "degraded" if storage["status"] != "ready" or capacity != "ok" else "ok",
             "libraryId": str(service.library_id),
             **service.catalog.counts(),
             **service.catalog.queue_counts(),
             **upload_gate.status(),
-            **backup,
             "aiSemanticConfigured": bool(service.settings.ai_base_url),
             "aiSemanticReachable": ai_probe_cache["semantic"],
             "aiFaceConfigured": bool(service.settings.face_service_url),
@@ -513,6 +592,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for worker_type in ("worker", "ai-worker")
             ],
         }
+
+    @app.get("/storage/report", response_model=StorageReportOut, operation_id="getStorageReport")
+    def storage_report_endpoint():
+        """Read-only technical storage and capacity report."""
+        return make_storage_report(service.storage, service.settings, service.catalog)
 
     @app.get("/metrics", include_in_schema=False)
     def prometheus_metrics(request: Request):
@@ -534,18 +618,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for queue, value in oldest.items():
                 safe_metrics(metrics, "set", "photo_queue_oldest_job_age_seconds", value, {"queue": queue})
             safe_metrics(metrics, "set", "photo_preview_cache_bytes", service.catalog.preview_cache_total_bytes())
-            try:
-                backup = service.backup_status()
-            except Exception:
-                safe_metrics(metrics, "inc", "photo_backup_failures")
-                backup = {}
-            backup_at = backup.get("postgresBackupAt")
-            if backup_at:
-                from datetime import UTC, datetime
-
-                safe_metrics(metrics, "set", "photo_backup_age_seconds", max(0, (datetime.now(UTC) - datetime.fromisoformat(backup_at)).total_seconds()))
-            else:
-                safe_metrics(metrics, "set", "photo_backup_age_seconds", -1)
         except Exception:
             # Scraping must never make the API or its primary database path fail.
             safe_metrics(metrics, "inc", "photo_metrics_collection_failures")
@@ -558,6 +630,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_id="createUploadBatch",
     )
     def start_upload_batch(body: UploadBatchRequest):
+        capacity = local_capacity_state(service.settings)
+        if capacity == "hard":
+            log_event("upload_admission_blocked", reason="local_free_space_hard_threshold")
+            raise HTTPException(
+                507, "Uploads are paused: local storage is below the hard capacity threshold"
+            )
         result = create_batch(
             service,
             [file.model_dump(by_alias=True, exclude_none=True) for file in body.files],
