@@ -290,6 +290,14 @@ def _probe_face(settings: Settings) -> bool:
         return False
 
 
+def _face_box_xywh(value):
+    """Normalize stored face boxes for thumbnail cropping."""
+    if isinstance(value, dict) and {"x", "y", "width", "height"}.issubset(value):
+        return tuple(float(value[key]) for key in ("x", "y", "width", "height"))
+    x, y, width, height = (float(item) for item in value)
+    return x, y, width, height
+
+
 class ProcessingRequest(BaseModel):
     """Select processing stages and either explicit assets or the active library."""
 
@@ -932,13 +940,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         safe_metrics(metrics, "inc", "photo_preview_cache_hits", labels={"kind": "face_thumbnail"})
-        etag = derivative_etag(f"face-thumbnail-{face_id}", manifest.primary.sha256)
+        etag = derivative_etag(f"face-thumbnail-v2-{face_id}", manifest.primary.sha256)
         headers = {**derivative_cache_headers(service.settings), "ETag": etag}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
         with Image.open(path) as source:
             image = source.convert("RGB")
-            x, y, width, height = [float(value) for value in face["bounding_box"]]
+            x, y, width, height = _face_box_xywh(face["bounding_box"])
             center_x, center_y = x + width / 2, y + height / 2
             side = max(width, height) * 1.45
             left = max(0.0, center_x - side / 2)

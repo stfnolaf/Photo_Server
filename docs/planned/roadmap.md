@@ -100,12 +100,12 @@ Completion criteria:
 
 ### Storage lifecycle and capacity safety
 
-Session 6 is the remaining storage-operations work. The system already has
+Session 6 completed the storage-operations work. The system now has
 canonical-object verification, fail-closed report-only garbage collection,
 abandoned-upload cleanup, and preview-cache eviction.
 
-- Implement the unified report in
-  [`06-storage-capacity.md`](06-storage-capacity.md).
+- Maintain the unified report documented in
+  [`06-storage-capacity.md`](../complete/06-storage-capacity.md).
 - Account for canonical objects, manifests, processing artifacts, staging,
   recovery checkpoints, backups, previews, and local disk usage separately.
 - Add low-disk-space, staging-growth, cache, and backup-age warnings.

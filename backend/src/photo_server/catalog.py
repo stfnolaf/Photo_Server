@@ -40,6 +40,24 @@ def _parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
+def _public_face_box(value):
+    """Return the API's box shape while accepting legacy stored shapes."""
+    if isinstance(value, dict) and {"x", "y", "width", "height"}.issubset(value):
+        return [
+            float(value["x"]),
+            float(value["y"]),
+            float(value["width"]),
+            float(value["height"]),
+        ]
+    return value
+
+
+# A face group is useful in the People workspace only once it is supported by
+# several photos.  Count distinct assets below, rather than face detections,
+# so multiple detections of the same person in one photo do not qualify.
+MIN_PERSON_GROUP_PHOTOS = 5
+
+
 schema = MetaData()
 library = Table(
     "library",
@@ -2007,7 +2025,7 @@ class Catalog:
             "faces": [
                 {
                     "faceIndex": row["face_index"],
-                    "box": row["bounding_box"],
+                    "box": _public_face_box(row["bounding_box"]),
                     "confidence": row["confidence"],
                     "personId": row["person_id"],
                     "personName": row["display_name"] or None,
@@ -2035,7 +2053,7 @@ class Catalog:
                 SELECT count(*)::integer AS face_count,
                        count(DISTINCT cf.asset_id)::integer AS photo_count
                 FROM current_faces cf WHERE cf.person_id = p.id
-            ) stats ON stats.face_count > 0
+            ) stats ON stats.face_count > 0 AND stats.photo_count >= :min_group_photos
             LEFT JOIN LATERAL (
                 SELECT jsonb_agg(jsonb_build_object(
                     'faceId', sample.id,
@@ -2043,7 +2061,7 @@ class Catalog:
                     'originalFilename', sample.original_filename,
                     'box', sample.bounding_box,
                     'confidence', sample.confidence,
-                    'thumbnailUrl', '/faces/' || sample.id || '/thumbnail?v=face-thumbnail-v1-' || sample.id
+                    'thumbnailUrl', '/faces/' || sample.id || '/thumbnail?v=face-thumbnail-v2-' || sample.id
                 ) ORDER BY sample.confidence DESC) AS items
                 FROM (
                     SELECT cf.* FROM current_faces cf
@@ -2062,7 +2080,12 @@ class Catalog:
         with self.engine.connect() as connection:
             rows = list(
                 connection.execute(
-                    statement, {"query": query.strip(), "pattern": pattern}
+                    statement,
+                    {
+                        "query": query.strip(),
+                        "pattern": pattern,
+                        "min_group_photos": MIN_PERSON_GROUP_PHOTOS,
+                    },
                 ).mappings()
             )
         page = rows[offset : offset + limit]
@@ -2073,7 +2096,10 @@ class Catalog:
                     "displayName": row["display_name"],
                     "faceCount": row["face_count"],
                     "photoCount": row["photo_count"],
-                    "sampleFaces": row["samples"],
+                    "sampleFaces": [
+                        {**sample, "box": _public_face_box(sample["box"])}
+                        for sample in row["samples"]
+                    ],
                 }
                 for row in page
             ],
@@ -2132,9 +2158,9 @@ class Catalog:
                     "faceId": row["id"],
                     "assetId": row["asset_id"],
                     "originalFilename": row["original_filename"],
-                    "box": row["bounding_box"],
+                    "box": _public_face_box(row["bounding_box"]),
                     "confidence": row["confidence"],
-                    "thumbnailUrl": f"/faces/{row['id']}/thumbnail?v=face-thumbnail-v1-{row['id']}",
+                    "thumbnailUrl": f"/faces/{row['id']}/thumbnail?v=face-thumbnail-v2-{row['id']}",
                 }
                 for row in rows
             ],

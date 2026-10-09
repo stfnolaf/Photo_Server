@@ -1,5 +1,7 @@
 # Session 6: Storage accounting, retention, and capacity safety
 
+Status: Complete.
+
 Work in `/home/stephen/dev/photo_server`.
 
 Implement read-only storage accounting and capacity warnings across the
