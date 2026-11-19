@@ -274,7 +274,7 @@ def test_disposable_checkpoint_resume_restore_and_rebuild(disposable_backends):
     assert report["status"] == "complete", json.dumps(report, indent=2, sort_keys=True)
     assert report["queuesRestored"] == {"assets": 3, "fingerprintPending": 1, "aiPending": 3}
     rebuilt_operational = _operational_snapshot(rebuilt.catalog)
-    assert len(rebuilt_operational["jobs"]) == 6
+    assert len(rebuilt_operational["jobs"]) == 9
     assert len(rebuilt_operational["ai_stage_jobs"]) == 6
     assert rebuilt_operational["onboarding_jobs"] == []
     assert rebuilt_operational["upload_batches"] == []

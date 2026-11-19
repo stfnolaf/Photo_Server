@@ -447,6 +447,28 @@ class Catalog:
                         },
                     )
                 )
+                # Preview generation is lazy for assets with no downstream
+                # work, but it is a prerequisite for every pending
+                # fingerprint/AI job.  Rebuild recovery must restore that
+                # prerequisite too, otherwise the workers can see the
+                # pending jobs but can never claim them.
+                needs_preview = (
+                    asset_id not in fingerprint_asset_ids
+                    or asset_id not in completed_ai_asset_ids
+                )
+                if needs_preview:
+                    connection.execute(
+                        insert(jobs)
+                        .values(
+                            asset_id=asset_id,
+                            job_type="preview-v1",
+                            status="pending",
+                            attempts=0,
+                            lease_until=None,
+                            error=None,
+                        )
+                        .on_conflict_do_nothing()
+                    )
                 for stage in ("face", "semantic"):
                     connection.execute(
                         insert(ai_stage_jobs)
